@@ -1,0 +1,74 @@
+[package]
+name = "dobo"
+version = "1.0.0"
+description = "Dobo by Sookera: to-dos & idea board"
+authors = ["Sookera"]
+license = "GPL-3.0-only"
+repository = "https://github.com/sookera/dobo"
+edition = "2024"
+
+[lib]
+# The `_lib` suffix keeps the lib name from clashing with the bin name on Windows.
+name = "dobo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Link previews: fetches a page's title and picture (small, no async runtime).
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
+# Dobo's own updates: each release is signed (Ed25519) and checked (SHA-256, size) before use.
+ed25519-dalek = "2"
+sha2 = "0.10"
+base64 = "0.22"
+# Version numbers compared the standard way ("1.0.0-beta" comes before "1.0.0").
+semver = "1"
+# The usual data folder before Tauri starts (updates, Setup's choices): Tauri's own app_data_dir
+# is dirs' data folder + the identifier.
+dirs = "6"
+
+[target.'cfg(windows)'.dependencies]
+# Start with Windows written by `--install-choices` without the app running: the very entry
+# tauri-plugin-autostart makes (it uses this crate).
+auto-launch = "0.6"
+# Update notes sealed for this Windows user (DPAPI), DLLs from System32 only, the single-instance
+# lock: the same calls as Pako's updates (Sookera's reference).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading"] }
+windows = { version = "0.62", features = [
+    "Data_Xml_Dom",
+    "UI_Notifications",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_Ole",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_Globalization",
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+notify-rust = "4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

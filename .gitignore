@@ -1,0 +1,27 @@
+node_modules/
+# The page Vite builds (bundled into Dobo.exe), and the release files (scripts/release.ps1).
+/build/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+
+# Development builds keep their notes here (src-tauri/src/paths.rs).
+/data/
+
+# Private working files: never part of the source repository. (docs/help and docs/screenshots
+# are public: the release builds help.zip from docs/help.)
+/PLAN.md
+/design/
+/docs/website/
+/HANDOFF.md
+/.claude/
+
+# Secrets (an update signing key, local settings): never commit.
+.env
+.env.*
+signing/
+
+# Local build settings (they hold this PC's paths).
+src-tauri/.cargo/

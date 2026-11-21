@@ -1,0 +1,2391 @@
+; ${APP_NAME} Setup's own window (user-approved design, 2026-11-18): one wide window that follows
+; Windows' light or dark look. Left: five feature slides that slide on by themselves every 4.5 s
+; (they wait while the mouse is on them; the dots and arrows flip them, and a click stops them).
+; Right: ${APP_NAME}'s logo and every option at once (folder, desktop shortcut, start with Windows, the
+; browser connection), one Install button and the terms line. Then the same window shows the
+; progress, then "Open ${APP_NAME}". Over an installed ${APP_NAME} it is "Update ${APP_NAME}" (folder locked). The
+; uninstaller has the matching look, smaller.
+;
+; Included by hooks.nsh; the functions are put in by installer.nsi ("!insertmacro
+; APP_UI_FUNCTIONS", where Tauri's defines exist). The pictures are made by
+; scripts/installer-art.mjs (art/), drawn at twice the size and scaled here to the screen.
+; Silent (/S) and passive (/P) installs never show any of this.
+
+!define APP_ART "${__FILEDIR__}\art"
+
+!ifndef SS_NOTIFY
+  !define SS_NOTIFY 0x100
+!endif
+!define APP_SS_CENTER 0x1
+!define APP_SS_RIGHT 0x2
+!define APP_SS_BITMAP 0xE
+!define APP_SS_NOPREFIX 0x80
+!define APP_SS_PATHELLIPSIS 0x8000
+!define APP_SS_ENDELLIPSIS 0x4000
+!define APP_LABEL 0x50000080 ; WS_CHILD | WS_VISIBLE | SS_NOPREFIX
+!define APP_PIC 0x5000010E ; WS_CHILD | WS_VISIBLE | SS_BITMAP | SS_NOTIFY
+; A picture the mouse goes through (no SS_NOTIFY), hidden at first: the progress page's Close,
+; over Windows' own Cancel button.
+!define APP_PIC_PASS 0x4000000E
+; The keyboard's and screen readers' stand-ins (AppProxy): WS_CHILD | WS_VISIBLE |
+; WS_CLIPSIBLINGS | WS_TABSTOP, a push button or a check box.
+!define APP_PUSH 0x54010000
+!define APP_CHECK 0x54010002
+!define APP_HIDDEN_LABEL 0x40000080
+
+; The slides' pictures are read before anything else (solid compression).
+ReserveFile "${APP_ART}\*.jpg"
+ReserveFile "${APP_ART}\*.png"
+
+Var AppDpi
+Var AppLook          ; d(ark) or l(ight)
+Var AppCBg
+Var AppCText
+Var AppCRa
+Var AppFBody         ; 13 px
+Var AppFSmall        ; 12 px
+Var AppFTiny         ; 11 px
+Var AppFTitle        ; 17 px semibold
+Var AppX
+Var AppY
+Var AppW
+Var AppH
+Var AppDialog
+Var AppGdip
+; slides
+Var AppS1
+Var AppS2
+Var AppS3
+Var AppS4
+Var AppS5
+Var AppSlide         ; 1..${APP_SLIDES}
+Var AppAuto          ; 1 = moves on by itself
+Var AppIdleT0        ; when the slide last changed or the mouse was last on it (ms)
+Var AppCur0          ; where the mouse was when the slides showed ("x,y")
+Var AppMouseSeen     ; 1 = the mouse has moved since then (only then does it hold the slides)
+Var AppSlideCtl
+Var AppFailName      ; the file AppCanWrite couldn't write
+; [APP] The slide change: the new slide comes in sideways while it fades in over the one that
+; showed, which moves off the other way (AppSlideDraw). Each step is drawn into $AppOut and put
+; on the screen in one go (never through the picture control's own painting, which showed a white
+; flash while Windows was busy); $AppFrame keeps the last step for the control's own repaints.
+Var AppFrame
+Var AppFrom
+Var AppTo
+Var AppOut
+Var AppMix
+Var AppDcF           ; picks up a picture shared with a control, for one copy at a time
+Var AppDcFrom
+Var AppDcTo
+Var AppDcOut
+Var AppDcMix
+Var AppDir           ; 1 = the next slide (comes from the right), -1 = the previous one
+Var AppIntro         ; 1 = the first slide still has to come in (once, when Setup's window shows)
+Var AppFadeT0
+Var AppSW            ; the slide's size, the moving part's height and how far it moves, on screen
+Var AppSH
+Var AppSTop
+Var AppShift
+; pictures and buttons
+Var AppBmpLogo
+Var AppBmpOn
+Var AppBmpOff
+Var AppBmpField
+Var AppB1Ctl
+Var AppB1N
+Var AppB1H
+Var AppB1X
+Var AppB1Now         ; n, h or x
+Var AppB2Ctl
+Var AppB2N
+Var AppB2H
+Var AppB2Now
+; the options
+Var AppMode          ; install, update (older installed), same, older (newer installed)
+Var AppOldVersion
+Var AppCmp
+Var AppR6
+Var AppUiChoice      ; read by PageLeaveReinstall instead of its old radio buttons
+Var AppDesktop
+Var AppStart
+Var AppBrowsers
+Var AppSwDesk
+Var AppSwStart
+Var AppSwBrow
+Var AppPathCtl
+Var AppNoteCtl
+Var AppHeld          ; 1 = Install can't be clicked (the folder won't do)
+Var AppRunning       ; 1 = ${APP_NAME} is open (said in the window)
+Var AppAgreedClose   ; 1 = ${APP_NAME} may be closed without asking again (it was said)
+Var AppPassiveKeep
+Var AppPassiveOrig
+Var AppOpen          ; done page: 1 = start ${APP_NAME} on the way out
+Var AppFolderMsg
+Var AppOldDir        ; where the installed ${APP_NAME} is (not "install")
+Var AppCanMove       ; 1 = the installed ${APP_NAME}'s folder won't do: Change moves ${APP_NAME}
+Var AppMoved         ; 1 = ${APP_NAME} goes to another folder than the installed one's
+Var AppChangeCtl
+; The keyboard's and screen readers' stand-ins (AppProxy) for what is drawn as pictures.
+Var AppPxChange
+Var AppPxB1
+Var AppPxB2
+Var AppPxDesk
+Var AppPxStart
+Var AppPxBrow
+; [APP] Uninstaller: 1 = "Also delete Private mode's files" (never in a silent or passive run).
+Var AppDeletePrivate
+; The focus ring (4 thin lines), shown around what the keyboard is on.
+Var AppRing1
+Var AppRing2
+Var AppRing3
+Var AppRing4
+Var AppRingOn
+; The progress page: 1 = ${APP_NAME}'s look shows it; its Close (shown only when something went wrong).
+Var AppInFiles
+Var AppFailBtn
+Var AppFailPic
+Var AppFailBmp
+Var AppChoicesOk     ; 0 = ${APP_EXE} couldn't take the window's choices (said when done)
+; Arguments and result of the helper functions below.
+Var AppA1
+Var AppA2
+Var AppA3
+Var AppRet
+
+; ---------- scaled sizes ----------
+; Every size in this file is in pixels at 100 % (96 dpi); these make them the screen's.
+!macro AppScale OUT VAL
+  IntOp ${OUT} ${VAL} * $AppDpi
+  IntOp ${OUT} ${OUT} + 48
+  IntOp ${OUT} ${OUT} / 96
+!macroend
+
+; Draws the slide in SRC into DC, moved sideways by X (the strip it leaves gets the background),
+; and the dots and arrows under it where they are.
+!macro AppShifted DC SRC X
+  System::Call "gdi32::BitBlt(p ${DC}, i ${X}, i 0, i $AppSW, i $AppSTop, p ${SRC}, i 0, i 0, i 0x00CC0020)"
+  ${If} ${X} < 0
+    IntOp $6 $AppSW + ${X}
+    IntOp $5 0 - ${X}
+    System::Call "gdi32::PatBlt(p ${DC}, i r6, i 0, i r5, i $AppSTop, i 0x00F00021)"
+  ${ElseIf} ${X} > 0
+    System::Call "gdi32::PatBlt(p ${DC}, i 0, i 0, i ${X}, i $AppSTop, i 0x00F00021)"
+  ${EndIf}
+  IntOp $5 $AppSH - $AppSTop
+  System::Call "gdi32::BitBlt(p ${DC}, i 0, i $AppSTop, i $AppSW, i r5, p ${SRC}, i 0, i $AppSTop, i 0x00CC0020)"
+!macroend
+
+; A control on the current nsDialogs page: VAR = its handle.
+!macro AppCtl VAR CLASS STYLE X Y W H TEXT
+  !insertmacro AppScale $AppX ${X}
+  !insertmacro AppScale $AppY ${Y}
+  !insertmacro AppScale $AppW ${W}
+  !insertmacro AppScale $AppH ${H}
+  nsDialogs::CreateControl ${CLASS} ${STYLE} 0 $AppX $AppY $AppW $AppH "${TEXT}"
+  Pop ${VAR}
+!macroend
+
+; A control on a page that isn't nsDialogs' (the progress pages): PARENT is that page.
+!macro AppRaw VAR PARENT CLASS STYLE X Y W H TEXT
+  !insertmacro AppScale $AppX ${X}
+  !insertmacro AppScale $AppY ${Y}
+  !insertmacro AppScale $AppW ${W}
+  !insertmacro AppScale $AppH ${H}
+  ; (Texts go to System::Call in a register: a comma in one would split its arguments.)
+  Push $R9
+  StrCpy $R9 "${TEXT}"
+  System::Call 'user32::CreateWindowExW(i 0, w "${CLASS}", w R9, i ${STYLE}, i $AppX, i $AppY, i $AppW, i $AppH, p ${PARENT}, p 0, p 0, p 0) p .s'
+  Exch
+  Pop $R9
+  Pop ${VAR}
+!macroend
+
+; A label: FONT, text colour, background colour.
+!macro AppLabel VAR X Y W H STYLE FONT FG BG TEXT
+  !insertmacro AppCtl ${VAR} STATIC ${STYLE} ${X} ${Y} ${W} ${H} "${TEXT}"
+  SendMessage ${VAR} ${WM_SETFONT} ${FONT} 1
+  !insertmacro AppColors ${VAR} ${FG} ${BG}
+!macroend
+
+; ${APP_NAME}'s colours, by name, in the look Setup uses. SetCtlColors takes its colours when Setup is
+; built, so each look's are written out here (the same as scripts/installer-art.mjs).
+!define APP_D_BG 0x14171b
+!define APP_D_PANE 0x0f1114
+!define APP_D_TEXT 0xe9eaee
+!define APP_D_MUT 0x8b919c
+!define APP_D_LN 0x262a31
+!define APP_D_RA 0x1b1f24
+!define APP_D_WARN 0xff7a7b
+; [APP] An accent of its own for the dark look (APP_ACCENT_DARK in app.nsh), for an app whose
+; colour is too dark to read there (Dobo: ink on paper). Else the same in both.
+!ifdef APP_ACCENT_DARK
+!define APP_D_ACCENT ${APP_ACCENT_DARK}
+!else
+!define APP_D_ACCENT ${APP_ACCENT}
+!endif
+!define APP_L_BG 0xffffff
+!define APP_L_PANE 0xf6f7f9
+!define APP_L_TEXT 0x17181c
+!define APP_L_MUT 0x6b7280
+!define APP_L_LN 0xe2e7ee
+!define APP_L_RA 0xf3f5f8
+!define APP_L_WARN 0xd33a3d
+!define APP_L_ACCENT ${APP_ACCENT}
+!macro AppColors HWND FG BG
+  ${If} $AppLook == "d"
+    SetCtlColors ${HWND} ${APP_D_${FG}} ${APP_D_${BG}}
+  ${Else}
+    SetCtlColors ${HWND} ${APP_L_${FG}} ${APP_L_${BG}}
+  ${EndIf}
+!macroend
+
+!macro AppPicture VAR X Y W H BMP
+  !insertmacro AppCtl ${VAR} STATIC ${APP_PIC} ${X} ${Y} ${W} ${H} ""
+  SendMessage ${VAR} ${STM_SETIMAGE} 0 ${BMP}
+!macroend
+
+; What is drawn as a picture (buttons, switches, links, the slides' arrows) gets a real button
+; under it, the same size, for the keyboard and screen readers: Tab reaches it, Narrator reads
+; TEXT (and a switch's on/off), Space or Enter clicks it. It is never seen (the picture covers it
+; and WS_CLIPSIBLINGS keeps it from painting over it); the focus ring shows where Tab is. The
+; mouse still clicks the picture. Tab goes in the order they are made (each goes to the bottom
+; of the window's order, under the one before).
+!macro AppProxy VAR STYLE X Y W H TEXT
+  !insertmacro AppCtl ${VAR} BUTTON ${STYLE} ${X} ${Y} ${W} ${H} "${TEXT}"
+  SendMessage ${VAR} ${WM_SETFONT} $AppFSmall 1
+  System::Call "user32::SetWindowPos(p ${VAR}, p 1, i 0, i 0, i 0, i 0, i 0x13)"
+!macroend
+
+; The focus ring's 4 lines, hidden until Tab is used (AppFocusTick places them).
+!macro AppRingMake
+  !insertmacro AppLabel $AppRing1 0 0 1 1 ${APP_HIDDEN_LABEL} $AppFBody TEXT TEXT ""
+  !insertmacro AppLabel $AppRing2 0 0 1 1 ${APP_HIDDEN_LABEL} $AppFBody TEXT TEXT ""
+  !insertmacro AppLabel $AppRing3 0 0 1 1 ${APP_HIDDEN_LABEL} $AppFBody TEXT TEXT ""
+  !insertmacro AppLabel $AppRing4 0 0 1 1 ${APP_HIDDEN_LABEL} $AppFBody TEXT TEXT ""
+  StrCpy $AppRingOn ""
+!macroend
+
+!macro AppRingNone
+  StrCpy $AppRing1 0
+  StrCpy $AppRing2 0
+  StrCpy $AppRing3 0
+  StrCpy $AppRing4 0
+  StrCpy $AppRingOn ""
+!macroend
+
+; Something went wrong while installing or uninstalling: the line under the bar says what (in
+; the warning colour) and Close shows, so the window can be left (Windows' Cancel under ${APP_NAME}'s
+; picture; Esc and the window's ✕ close it too). Only with ${APP_NAME}'s look on the progress page.
+!macro AppFail TEXT
+  ${If} $AppInFiles = 1
+    Push $0
+    Push $1
+    FindWindow $0 "#32770" "" $HWNDPARENT
+    GetDlgItem $1 $0 1006
+    ; Windows' line under the bar doesn't wrap (SS_LEFTNOWORDWRAP): what went wrong may need two
+    ; lines, so here it wraps (SS_LEFT) in a box tall enough for three (same place and width).
+    Push $2
+    Push $3
+    System::Call "user32::GetWindowLongW(p r1, i -16) i .r2"
+    IntOp $2 $2 & 0xFFFFFFE0
+    System::Call "user32::SetWindowLongW(p r1, i -16, i r2)"
+    System::Call "*(i 0, i 0, i 0, i 0) p .r3"
+    System::Call "user32::GetClientRect(p r1, p r3)"
+    System::Call "*$3(i, i, i .r2, i)"
+    System::Free $3
+    !insertmacro AppScale $3 52
+    System::Call "user32::SetWindowPos(p r1, p 0, i 0, i 0, i r2, i r3, i 0x16)" ; NOMOVE NOZORDER NOACTIVATE
+    Pop $3
+    Pop $2
+    SendMessage $1 ${WM_SETTEXT} 0 "STR:${TEXT}"
+    !insertmacro AppColors $1 WARN BG
+    System::Call "user32::InvalidateRect(p r1, p 0, i 1)"
+    ShowWindow $AppFailBtn ${SW_SHOW}
+    ShowWindow $AppFailPic ${SW_SHOW}
+    Pop $1
+    Pop $0
+  ${EndIf}
+!macroend
+
+; [APP] Before a file is copied over: can it be written? A file another program holds (an
+; antivirus scan, a window left open) is tried again for 5 s; still held, the install stops
+; there with what happened under the bar and Close (AppFail), instead of Windows' own
+; Abort / Retry / Ignore box over a window with no button. NAME: the file's name, to say it.
+!macro AppCanWrite FILE NAME
+  Push $0
+  Push $1
+  StrCpy $1 0
+  ${Do}
+    ${IfNot} ${FileExists} "${FILE}"
+      ${Break}
+    ${EndIf}
+    ; GENERIC_WRITE, no sharing, OPEN_EXISTING: what copying over it needs.
+    System::Call 'kernel32::CreateFileW(w "${FILE}", i 0x40000000, i 0, p 0, i 3, i 0x80, p 0) i .r0'
+    ${If} $0 <> -1
+      System::Call 'kernel32::CloseHandle(i r0)'
+      ${Break}
+    ${EndIf}
+    IntOp $1 $1 + 1
+    ${If} $1 >= 10
+      StrCpy $AppFailName "${NAME}"
+      Pop $1
+      Pop $0
+      !insertmacro AppFail "$(appFailFile)"
+      Abort "$(appFailFile)"
+    ${EndIf}
+    Sleep 500
+  ${Loop}
+  Pop $1
+  Pop $0
+!macroend
+
+; ${APP_NAME}'s own Check: the same as Tauri's (asks before closing a ${APP_NAME} that is open), without the
+; question when the window already said ${APP_NAME} will be closed. On the progress page in ${APP_NAME}'s look
+; it is Tauri's check written out, so that a ${APP_NAME} that couldn't be closed (or "Cancel" to the
+; question) says so under the bar, with Close (AppFail), instead of a frozen window.
+!macro AppCheckRunning EXE
+  StrCpy $AppPassiveKeep $PassiveMode
+  ${If} $AppAgreedClose = 1
+    StrCpy $PassiveMode 1
+  ${EndIf}
+  ${If} $AppInFiles = 1
+    nsis_tauri_utils::StrReplace "$(appRunning)" "{{product_name}}" "${PRODUCTNAME}"
+    Pop $R1
+    nsis_tauri_utils::StrReplace "$(appRunningOkKill)" "{{product_name}}" "${PRODUCTNAME}"
+    Pop $R2
+    nsis_tauri_utils::StrReplace "$(failedToKillApp)" "{{product_name}}" "${PRODUCTNAME}"
+    Pop $R3
+    !insertmacro RestartManager_StartSession $R0
+    ${If} $R0 != ""
+      !insertmacro RestartManager_RegisterFile $R0 "${EXE}"
+      ${If} $0 = 0
+        System::Call 'RSTRTMGR::RmGetList(p R0, *i .r1, *i .r2, p 0, *i .r3) i .r0'
+        ${If} $0 = ${ERROR_MORE_DATA}
+          StrCpy $1 1
+          ${If} $PassiveMode != 1
+            MessageBox MB_OKCANCEL $R2 IDOK +2
+            StrCpy $1 0
+          ${EndIf}
+          ${If} $1 = 0
+            !insertmacro RestartManager_EndSession $R0
+            StrCpy $PassiveMode $AppPassiveKeep
+            !insertmacro AppFail $R1
+            Abort $R1
+          ${EndIf}
+          System::Call 'RSTRTMGR::RmShutdown(p R0, i ${RmForceShutdown}, p 0) i .r0'
+          ${If} $0 <> 0
+            !insertmacro RestartManager_EndSession $R0
+            StrCpy $PassiveMode $AppPassiveKeep
+            !insertmacro AppFail $R3
+            Abort $R3
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      !insertmacro RestartManager_EndSession $R0
+    ${EndIf}
+  ${Else}
+    !insertmacro CheckIfAppIsRunning "${EXE}" "${PRODUCTNAME}"
+  ${EndIf}
+  StrCpy $PassiveMode $AppPassiveKeep
+!macroend
+
+; ---------- the functions (installer and uninstaller each get their own copy) ----------
+!macro APP_UI_COMMON UN
+
+; Colours, fonts and the screen's scale; GDI+ for the pictures.
+Function ${UN}AppLookInit
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $AppDpi 96
+  System::Call "user32::GetDpiForWindow(p $HWNDPARENT) i .r0"
+  ${If} $0 > 0
+    StrCpy $AppDpi $0
+  ${EndIf}
+  ; Windows' "app mode": AppsUseLightTheme 0 = dark (missing = light, Windows' default).
+  StrCpy $AppLook "l"
+  ClearErrors
+  ReadRegDWORD $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "AppsUseLightTheme"
+  ${IfNot} ${Errors}
+  ${AndIf} $0 = 0
+    StrCpy $AppLook "d"
+  ${EndIf}
+  ; For trying both looks (tests, screenshots).
+  ReadEnvStr $0 APP_SETUP_LOOK
+  ${If} $0 == "dark"
+    StrCpy $AppLook "d"
+  ${ElseIf} $0 == "light"
+    StrCpy $AppLook "l"
+  ${EndIf}
+  ; ${APP_NAME}'s colours as numbers, for the title bar and the progress bar.
+  ${If} $AppLook == "d"
+    StrCpy $AppCBg ${APP_D_BG}
+    StrCpy $AppCText ${APP_D_TEXT}
+    StrCpy $AppCRa ${APP_D_RA}
+  ${Else}
+    StrCpy $AppCBg ${APP_L_BG}
+    StrCpy $AppCText ${APP_L_TEXT}
+    StrCpy $AppCRa ${APP_L_RA}
+  ${EndIf}
+  ; Fonts in pixels for this screen (negative = the letters' own height).
+  !insertmacro AppScale $0 13
+  IntOp $0 0 - $0
+  System::Call 'gdi32::CreateFontW(i r0, i 0, i 0, i 0, i 400, i 0, i 0, i 0, i 1, i 0, i 0, i 5, i 0, w "Segoe UI") p .r1'
+  StrCpy $AppFBody $1
+  !insertmacro AppScale $0 12
+  IntOp $0 0 - $0
+  System::Call 'gdi32::CreateFontW(i r0, i 0, i 0, i 0, i 400, i 0, i 0, i 0, i 1, i 0, i 0, i 5, i 0, w "Segoe UI") p .r1'
+  StrCpy $AppFSmall $1
+  !insertmacro AppScale $0 11
+  IntOp $0 0 - $0
+  System::Call 'gdi32::CreateFontW(i r0, i 0, i 0, i 0, i 400, i 0, i 0, i 0, i 1, i 0, i 0, i 5, i 0, w "Segoe UI") p .r1'
+  StrCpy $AppFTiny $1
+  !insertmacro AppScale $0 17
+  IntOp $0 0 - $0
+  System::Call 'gdi32::CreateFontW(i r0, i 0, i 0, i 0, i 600, i 0, i 0, i 0, i 1, i 0, i 0, i 5, i 0, w "Segoe UI") p .r1'
+  StrCpy $AppFTitle $1
+  ; GDI+ reads the PNG and JPEG pictures and scales them smoothly.
+  System::Call "*(i 1, p 0, i 0, i 0) p .r0"
+  System::Call "gdiplus::GdiplusStartup(*p .r1, p r0, p 0) i .r2"
+  System::Free $0
+  StrCpy $AppGdip $1
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 = file name in art (with -d/-l and the extension), $AppA2 x $AppA3 = its size at
+; 100 % -> $AppRet = a bitmap of that size for this screen, or 0.
+Function ${UN}AppImage
+  Push $0
+  Push $1
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  !insertmacro AppScale $1 $AppA2
+  !insertmacro AppScale $0 $AppA3
+  StrCpy $9 0
+  StrCpy $8 "$PLUGINSDIR\art\$AppA1"
+  System::Call "gdiplus::GdipCreateBitmapFromFile(w r8, *p .r3) i .r8"
+  ${If} $8 = 0
+    System::Call "gdiplus::GdipGetImageWidth(p r3, *i .r6)"
+    System::Call "gdiplus::GdipGetImageHeight(p r3, *i .r7)"
+    System::Call "gdiplus::GdipCreateBitmapFromScan0(i r1, i r0, i 0, i 0x26200A, p 0, *p .r4) i .r8"
+    System::Call "gdiplus::GdipGetImageGraphicsContext(p r4, *p .r5) i .r8"
+    System::Call "gdiplus::GdipSetInterpolationMode(p r5, i 7)"   ; high quality bicubic
+    System::Call "gdiplus::GdipSetPixelOffsetMode(p r5, i 2)"     ; high quality
+    System::Call "gdiplus::GdipSetCompositingQuality(p r5, i 2)"
+    ; Edges: the picture's own edge pixels, not a darker blend with nothing.
+    System::Call "gdiplus::GdipCreateImageAttributes(*p .r8)"
+    System::Call "gdiplus::GdipSetImageAttributesWrapMode(p r8, i 3, i 0, i 0)"
+    System::Call "gdiplus::GdipDrawImageRectRectI(p r5, p r3, i 0, i 0, i r1, i r0, i 0, i 0, i r6, i r7, i 2, p r8, p 0, p 0)"
+    System::Call "gdiplus::GdipDisposeImageAttributes(p r8)"
+    System::Call "gdiplus::GdipDeleteGraphics(p r5)"
+    System::Call "gdiplus::GdipCreateHBITMAPFromBitmap(p r4, *p .r9, i 0xff000000)"
+    System::Call "gdiplus::GdipDisposeImage(p r4)"
+    System::Call "gdiplus::GdipDisposeImage(p r3)"
+    ; Made 24-bit: a picture control (comctl32 6) keeps its own copy of every 32-bit picture it
+    ; is given, which would never be freed (the slides change every 4.5 s, the buttons on hover).
+    ${If} $9 != 0
+      Push $2
+      System::Call "user32::GetDC(p 0) p .r2"
+      System::Call "gdi32::CreateCompatibleDC(p r2) p .r5"
+      System::Call "gdi32::CreateCompatibleDC(p r2) p .r6"
+      System::Call "user32::ReleaseDC(p 0, p r2)"
+      IntOp $7 0 - $0
+      System::Call "*(i 40, i r1, i r7, &i2 1, &i2 24, i 0, i 0, i 0, i 0, i 0, i 0, i 0) p .r8"
+      System::Call "gdi32::CreateDIBSection(p r6, p r8, i 0, *p .r3, p 0, i 0) p .r4"
+      System::Free $8
+      ${If} $4 != 0
+        System::Call "gdi32::SelectObject(p r5, p r9) p .r7"
+        System::Call "gdi32::SelectObject(p r6, p r4) p .r8"
+        System::Call "gdi32::BitBlt(p r6, i 0, i 0, i r1, i r0, p r5, i 0, i 0, i 0x00CC0020)"
+        System::Call "gdi32::SelectObject(p r5, p r7)"
+        System::Call "gdi32::SelectObject(p r6, p r8)"
+        System::Call "gdi32::DeleteObject(p r9)"
+        StrCpy $9 $4
+      ${EndIf}
+      System::Call "gdi32::DeleteDC(p r5)"
+      System::Call "gdi32::DeleteDC(p r6)"
+      Pop $2
+    ${EndIf}
+  ${EndIf}
+  StrCpy $AppRet $9
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 x $AppA2 (at 100 %): makes the window's inside that size, with only ${APP_NAME}'s pages
+; in it (Tauri's header, buttons and lines hidden; Next and Cancel still work from the keyboard
+; and from ${APP_NAME}'s own buttons), centred on its screen, with a title bar in ${APP_NAME}'s colours.
+Function ${UN}AppWindow
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  !insertmacro AppScale $0 $AppA1
+  !insertmacro AppScale $1 $AppA2
+  ; The whole window for that inside.
+  System::Call "user32::GetWindowLongW(p $HWNDPARENT, i -16) i .r6"
+  System::Call "user32::GetWindowLongW(p $HWNDPARENT, i -20) i .r7"
+  System::Call "*(i 0, i 0, i r0, i r1) p .r2"
+  System::Call "user32::AdjustWindowRectExForDpi(p r2, i r6, i 0, i r7, i $AppDpi) i .r8"
+  ${If} $8 = 0
+    System::Call "user32::AdjustWindowRectEx(p r2, i r6, i 0, i r7)"
+  ${EndIf}
+  System::Call "*$2(i .r3, i .r4, i .r5, i .r6)"
+  System::Free $2
+  IntOp $5 $5 - $3
+  IntOp $6 $6 - $4
+  ; Centred in the work area of the screen the window is on.
+  System::Call "user32::MonitorFromWindow(p $HWNDPARENT, i 2) p .r7"
+  System::Call "*(i 40, i 0, i 0, i 0, i 0, i 0, i 0, i 0, i 0, i 0) p .r2"
+  System::Call "user32::GetMonitorInfoW(p r7, p r2)"
+  System::Call "*$2(i, i, i, i, i, i .r3, i .r4, i .r7, i .r8)"
+  System::Free $2
+  IntOp $7 $7 - $3
+  IntOp $7 $7 - $5
+  IntOp $7 $7 / 2
+  ; Bigger than the screen (a small screen at a high scale): its top left corner stays on it.
+  ${IfThen} $7 < 0 ${|} StrCpy $7 0 ${|}
+  IntOp $3 $3 + $7
+  IntOp $8 $8 - $4
+  IntOp $8 $8 - $6
+  IntOp $8 $8 / 2
+  ${IfThen} $8 < 0 ${|} StrCpy $8 0 ${|}
+  IntOp $4 $4 + $8
+  System::Call "user32::SetWindowPos(p $HWNDPARENT, p 0, i r3, i r4, i r5, i r6, i 0x14)"
+  ; Tauri's own parts of the window, hidden (the buttons keep working).
+  !insertmacro AppHideItem 1
+  !insertmacro AppHideItem 2
+  !insertmacro AppHideItem 3
+  !insertmacro AppHideItem 1028
+  !insertmacro AppHideItem 1256
+  !insertmacro AppHideItem 1034
+  !insertmacro AppHideItem 1035
+  !insertmacro AppHideItem 1036
+  !insertmacro AppHideItem 1037
+  !insertmacro AppHideItem 1038
+  !insertmacro AppHideItem 1039
+  !insertmacro AppHideItem 1044
+  !insertmacro AppHideItem 1045
+  ; Pages fill the whole inside.
+  GetDlgItem $2 $HWNDPARENT 1018
+  System::Call "user32::SetWindowPos(p r2, p 0, i 0, i 0, i r0, i r1, i 0x14)"
+  ; The title bar in ${APP_NAME}'s colours (Windows 11; Windows 10 shows its own).
+  ${If} $AppLook == "d"
+    System::Call "*(i 1) p .r2"
+  ${Else}
+    System::Call "*(i 0) p .r2"
+  ${EndIf}
+  System::Call "dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 20, p r2, i 4)"
+  System::Free $2
+  ; COLORREF is 0x00BBGGRR.
+  StrCpy $AppA1 $AppCBg
+  Call ${UN}AppColorRef
+  System::Call "*(i $AppRet) p .r2"
+  System::Call "dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 35, p r2, i 4)"
+  System::Free $2
+  StrCpy $AppA1 $AppCText
+  Call ${UN}AppColorRef
+  System::Call "*(i $AppRet) p .r2"
+  System::Call "dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 36, p r2, i 4)"
+  System::Free $2
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 = 0xRRGGBB -> $AppRet = 0x00BBGGRR (a Windows COLORREF).
+Function ${UN}AppColorRef
+  Push $1
+  Push $2
+  IntOp $1 $AppA1 & 0xff
+  IntOp $1 $1 << 16
+  IntOp $2 $AppA1 & 0xff00
+  IntOp $1 $1 | $2
+  IntOp $2 $AppA1 >> 16
+  IntOp $2 $2 & 0xff
+  IntOp $AppRet $1 | $2
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; $AppA1 = a control -> $AppRet = 1 if the mouse is on it, else 0.
+Function ${UN}AppMouseOn
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  StrCpy $AppRet 0
+  ${If} $AppA1 <> 0
+    System::Call "*(i 0, i 0) p .r1"
+    System::Call "user32::GetCursorPos(p r1)"
+    System::Call "*$1(i .r2, i .r3)"
+    System::Free $1
+    System::Call "*(i 0, i 0, i 0, i 0) p .r1"
+    System::Call "user32::GetWindowRect(p $AppA1, p r1)"
+    System::Call "*$1(i .r4, i .r5, i .r6, i .r7)"
+    System::Free $1
+    ${If} $2 >= $4
+    ${AndIf} $2 < $6
+    ${AndIf} $3 >= $5
+    ${AndIf} $3 < $7
+      ; [APP] And it's really Setup's window under the mouse: with another window over Setup
+      ; (or Setup behind it), the mouse resting at that place on the screen doesn't count. It
+      ; once kept the slides from ever moving on.
+      System::Int64Op $3 << 32
+      Pop $1
+      System::Int64Op $2 & 0xFFFFFFFF
+      Pop $4
+      System::Int64Op $1 | $4
+      Pop $1
+      System::Call "user32::WindowFromPoint(l r1) p .r4"
+      System::Call "user32::GetAncestor(p r4, i 2) p .r4" ; GA_ROOT
+      ${If} $4 = $HWNDPARENT
+        StrCpy $AppRet 1
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; The page's buttons: the picture for their state (n, h(over), x = can't be clicked).
+Function ${UN}AppButtonsTick
+  Push $0
+  Push $1
+  ${If} $AppB1Ctl <> 0
+    StrCpy $1 "n"
+    ${If} $AppHeld = 1
+    ${AndIf} $AppB1X <> 0
+      StrCpy $1 "x"
+    ${Else}
+      StrCpy $AppA1 $AppB1Ctl
+      Call ${UN}AppMouseOn
+      ${IfThen} $AppRet = 1 ${|} StrCpy $1 "h" ${|}
+    ${EndIf}
+    ${If} $1 != $AppB1Now
+      StrCpy $AppB1Now $1
+      ${If} $1 == "h"
+        SendMessage $AppB1Ctl ${STM_SETIMAGE} 0 $AppB1H
+      ${ElseIf} $1 == "x"
+        SendMessage $AppB1Ctl ${STM_SETIMAGE} 0 $AppB1X
+      ${Else}
+        SendMessage $AppB1Ctl ${STM_SETIMAGE} 0 $AppB1N
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ${If} $AppB2Ctl <> 0
+    StrCpy $AppA1 $AppB2Ctl
+    Call ${UN}AppMouseOn
+    StrCpy $1 "n"
+    ${IfThen} $AppRet = 1 ${|} StrCpy $1 "h" ${|}
+    ${If} $1 != $AppB2Now
+      StrCpy $AppB2Now $1
+      ${If} $1 == "h"
+        SendMessage $AppB2Ctl ${STM_SETIMAGE} 0 $AppB2H
+      ${Else}
+        SendMessage $AppB2Ctl ${STM_SETIMAGE} 0 $AppB2N
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Call ${UN}AppFocusTick
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; The focus ring: around the stand-in (AppProxy) the keyboard is on, 3 px out, 2 px thick.
+; Only once a key was used (Windows hides focus until then, as in its own windows).
+Function ${UN}AppFocusTick
+  ${If} $AppRing1 = 0
+    Return
+  ${EndIf}
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  System::Call "user32::GetFocus() p .r0"
+  System::Call "user32::GetParent(p r0) p .r1"
+  ${If} $1 != $AppDialog
+    StrCpy $0 0
+  ${EndIf}
+  SendMessage $AppDialog 0x129 0 0 $1 ; WM_QUERYUISTATE
+  IntOp $1 $1 & 1                      ; UISF_HIDEFOCUS
+  ${IfThen} $1 <> 0 ${|} StrCpy $0 0 ${|}
+  ${If} $0 != $AppRingOn
+    StrCpy $AppRingOn $0
+    ${If} $0 = 0
+      ShowWindow $AppRing1 ${SW_HIDE}
+      ShowWindow $AppRing2 ${SW_HIDE}
+      ShowWindow $AppRing3 ${SW_HIDE}
+      ShowWindow $AppRing4 ${SW_HIDE}
+    ${Else}
+      System::Call "*(i 0, i 0, i 0, i 0) p .r1"
+      System::Call "user32::GetWindowRect(p r0, p r1)"
+      System::Call "user32::MapWindowPoints(p 0, p $AppDialog, p r1, i 2)"
+      System::Call "*$1(i .r2, i .r3, i .r4, i .r5)"
+      System::Free $1
+      !insertmacro AppScale $6 3 ; gap
+      !insertmacro AppScale $7 2 ; thickness
+      ; Outer box: left $2, top $3, right $4, bottom $5.
+      IntOp $2 $2 - $6
+      IntOp $2 $2 - $7
+      IntOp $3 $3 - $6
+      IntOp $3 $3 - $7
+      IntOp $4 $4 + $6
+      IntOp $4 $4 + $7
+      IntOp $5 $5 + $6
+      IntOp $5 $5 + $7
+      IntOp $8 $4 - $2 ; width
+      IntOp $1 $5 - $3 ; height
+      System::Call "user32::SetWindowPos(p $AppRing1, p 0, i r2, i r3, i r8, i r7, i 0x50)"
+      IntOp $6 $5 - $7
+      System::Call "user32::SetWindowPos(p $AppRing2, p 0, i r2, i r6, i r8, i r7, i 0x50)"
+      System::Call "user32::SetWindowPos(p $AppRing3, p 0, i r2, i r3, i r7, i r1, i 0x50)"
+      IntOp $6 $4 - $7
+      System::Call "user32::SetWindowPos(p $AppRing4, p 0, i r6, i r3, i r7, i r1, i 0x50)"
+    ${EndIf}
+  ${EndIf}
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 = a button's name (art/b-<name>-<state>-<look>.png), $AppA2 = its width at 100 %
+; -> its pictures in $AppB1N/H/X (AppLoadButton2: $AppB2N/H).
+Function ${UN}AppLoadButton1
+  Push $0
+  Push $1
+  StrCpy $0 $AppA1
+  StrCpy $1 $AppA2
+  StrCpy $AppA3 40
+  StrCpy $AppA1 "b-$0-n-$AppLook.png"
+  Call ${UN}AppImage
+  StrCpy $AppB1N $AppRet
+  StrCpy $AppA1 "b-$0-h-$AppLook.png"
+  StrCpy $AppA2 $1
+  Call ${UN}AppImage
+  StrCpy $AppB1H $AppRet
+  StrCpy $AppB1X 0
+  ${If} ${FileExists} "$PLUGINSDIR\art\b-$0-x-$AppLook.png"
+    StrCpy $AppA1 "b-$0-x-$AppLook.png"
+    StrCpy $AppA2 $1
+    Call ${UN}AppImage
+    StrCpy $AppB1X $AppRet
+  ${EndIf}
+  StrCpy $AppB1Now ""
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function ${UN}AppLoadButton2
+  Push $0
+  Push $1
+  StrCpy $0 $AppA1
+  StrCpy $1 $AppA2
+  StrCpy $AppA3 40
+  StrCpy $AppA1 "b-$0-n-$AppLook.png"
+  Call ${UN}AppImage
+  StrCpy $AppB2N $AppRet
+  StrCpy $AppA1 "b-$0-h-$AppLook.png"
+  StrCpy $AppA2 $1
+  Call ${UN}AppImage
+  StrCpy $AppB2H $AppRet
+  StrCpy $AppB2Now ""
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 = a font, $AppA2 = a text -> $AppRet = its width in pixels.
+Function ${UN}AppTextWidth
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  ; (The text goes to System::Call in a register: a comma in it would split its arguments.)
+  StrCpy $1 $AppA2
+  System::Call "user32::GetDC(p 0) p .r2"
+  System::Call "gdi32::SelectObject(p r2, p $AppA1) p .r3"
+  StrLen $4 $1
+  System::Call "*(i 0, i 0) p .r0"
+  System::Call "gdi32::GetTextExtentPoint32W(p r2, w r1, i r4, p r0)"
+  System::Call "*$0(i .r4, i)"
+  System::Free $0
+  System::Call "gdi32::SelectObject(p r2, p r3)"
+  System::Call "user32::ReleaseDC(p 0, p r2)"
+  StrCpy $AppRet $4
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; The look of a progress page (Tauri's, Windows' own): its bar and line of text moved and
+; coloured, its list hidden. $0 = the page. X, W (at 100 %): where the bar goes; Y: its top.
+Function ${UN}AppStyleProgress
+  ; $0 page, $1 x, $2 y, $3 w (at 100 %)
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  GetDlgItem $4 $0 1016
+  ShowWindow $4 ${SW_HIDE}
+  GetDlgItem $4 $0 1027
+  ShowWindow $4 ${SW_HIDE}
+  ; The bar: flat, 6 px, ${APP_NAME}'s coral on the field colour.
+  GetDlgItem $4 $0 1004
+  System::Call 'uxtheme::SetWindowTheme(p r4, w " ", w " ")'
+  System::Call "user32::GetWindowLongW(p r4, i -16) i .r5"
+  IntOp $5 $5 & 0xFF7FFFFF ; no WS_BORDER
+  IntOp $5 $5 | 0x1        ; PBS_SMOOTH
+  System::Call "user32::SetWindowLongW(p r4, i -16, i r5)"
+  System::Call "user32::SetWindowLongW(p r4, i -20, i 0)"
+  StrCpy $AppA1 $AppCRa
+  Call ${UN}AppColorRef
+  SendMessage $4 0x2001 0 $AppRet ; PBM_SETBKCOLOR
+  ; [APP] The look's own accent (APP_D_ACCENT / APP_L_ACCENT).
+  ${If} $AppLook == "d"
+    StrCpy $AppA1 ${APP_D_ACCENT}
+  ${Else}
+    StrCpy $AppA1 ${APP_L_ACCENT}
+  ${EndIf}
+  Call ${UN}AppColorRef
+  SendMessage $4 0x409 0 $AppRet ; PBM_SETBARCOLOR
+  !insertmacro AppScale $5 $1
+  !insertmacro AppScale $6 $2
+  !insertmacro AppScale $7 $3
+  !insertmacro AppScale $8 6
+  System::Call "user32::SetWindowPos(p r4, p 0, i r5, i r6, i r7, i r8, i 0x34)"
+  ; The line under it ("Copying ${APP_EXE}... 40%", or what went wrong).
+  GetDlgItem $4 $0 1006
+  IntOp $6 $2 + 16
+  !insertmacro AppScale $6 $6
+  !insertmacro AppScale $8 36
+  System::Call "user32::SetWindowPos(p r4, p 0, i r5, i r6, i r7, i r8, i 0x14)"
+  SendMessage $4 ${WM_SETFONT} $AppFSmall 1
+  !insertmacro AppColors $4 MUT BG
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+FunctionEnd
+
+; $0 = a progress page (Windows' own): it fills the window ($AppA1 x $AppA2 at 100 %) and gets
+; ${APP_NAME}'s background (a label under everything: that page doesn't take colours itself).
+Function ${UN}AppPageFill
+  Push $1
+  Push $2
+  !insertmacro AppScale $1 $AppA1
+  !insertmacro AppScale $2 $AppA2
+  System::Call "user32::SetWindowPos(p r0, p 0, i 0, i 0, i r1, i r2, i 0x16)"
+  ; (WS_CLIPSIBLINGS: it never paints over the bar and the words on it.)
+  !insertmacro AppRaw $1 $0 STATIC 0x54000080 0 0 $AppA1 $AppA2 ""
+  !insertmacro AppColors $1 BG BG
+  System::Call "user32::SetWindowPos(p r1, p 1, i 0, i 0, i 0, i 0, i 0x13)" ; to the bottom
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; The progress page's Close, ready and hidden ($0 = the page; $1, $2, $3 = x, y, w at 100 %;
+; $AppFailBmp its picture): Windows' own Cancel, moved there, under ${APP_NAME}'s picture of Close,
+; which the mouse goes through. Shown by AppFail when something goes wrong (Windows enables
+; Cancel then; clicking it ends Setup, as do Esc and the window's ✕).
+Function ${UN}AppFailClose
+  Push $4
+  Push $5
+  ; The page paints around them, never over them.
+  System::Call "user32::GetWindowLongW(p r0, i -16) i .r4"
+  IntOp $4 $4 | 0x04000000 ; WS_CLIPSIBLINGS
+  System::Call "user32::SetWindowLongW(p r0, i -16, i r4)"
+  GetDlgItem $AppFailBtn $HWNDPARENT 2
+  System::Call "user32::GetWindowLongW(p $AppFailBtn, i -16) i .r4"
+  IntOp $4 $4 | 0x04000000
+  System::Call "user32::SetWindowLongW(p $AppFailBtn, i -16, i r4)"
+  SendMessage $AppFailBtn ${WM_SETTEXT} 0 "STR:$(appClose)"
+  !insertmacro AppScale $4 $1
+  !insertmacro AppScale $5 $2
+  !insertmacro AppScale $AppW $3
+  !insertmacro AppScale $AppH 40
+  System::Call "user32::SetWindowPos(p $AppFailBtn, p 0, i r4, i r5, i $AppW, i $AppH, i 0x10)"
+  !insertmacro AppRaw $AppFailPic $HWNDPARENT STATIC ${APP_PIC_PASS} $1 $2 $3 40 ""
+  SendMessage $AppFailPic ${STM_SETIMAGE} 0 $AppFailBmp
+  System::Call "user32::SetWindowPos(p $AppFailPic, p 0, i 0, i 0, i 0, i 0, i 0x13)"
+  ; Windows shows its Back button again when something went wrong: none to see (no size).
+  GetDlgItem $4 $HWNDPARENT 3
+  System::Call "user32::SetWindowPos(p r4, p 0, i 0, i 0, i 0, i 0, i 0x16)"
+  Pop $5
+  Pop $4
+FunctionEnd
+
+; Tauri's Back, Next and Cancel stay hidden on every page (Windows shows Back again on each one);
+; they keep working from the keyboard and from ${APP_NAME}'s own buttons.
+Function ${UN}AppHideNav
+  Push $2
+  !insertmacro AppHideItem 1
+  !insertmacro AppHideItem 2
+  !insertmacro AppHideItem 3
+  ; The focus ring waits for the keyboard on each page (Tab shows it, as in Windows' own
+  ; windows): WM_CHANGEUISTATE, UIS_SET UISF_HIDEFOCUS.
+  SendMessage $HWNDPARENT 0x127 0x10001 0
+  Pop $2
+FunctionEnd
+
+!macroend
+
+!macro AppHideItem ID
+  GetDlgItem $2 $HWNDPARENT ${ID}
+  ShowWindow $2 ${SW_HIDE}
+!macroend
+
+; ---------- the installer's pages ----------
+!macro APP_UI_FUNCTIONS
+!insertmacro APP_UI_COMMON ""
+!insertmacro APP_UI_COMMON "un."
+
+; MUI_CUSTOMFUNCTION_GUIINIT (hooks.nsh): the window, before it shows.
+Function AppGuiInit
+  Call AppInstallDir
+  StrCpy $AppPassiveOrig $PassiveMode
+  ${If} $PassiveMode = 1
+    Return
+  ${EndIf}
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR\art"
+  File "${APP_ART}\*.jpg"
+  File "${APP_ART}\*.png"
+  ; [APP] Out of the pictures' folder again: SetOutPath also made it Setup's working folder, and
+  ; Windows can't delete a working folder, so NSIS's own clean-up at exit left it behind, empty, in %TEMP%.
+  SetOutPath "$TEMP"
+  Call AppLookInit
+  StrCpy $AppA1 860
+  StrCpy $AppA2 540
+  Call AppWindow
+  Call AppDetect
+  ; The slides, once for every page.
+  StrCpy $AppA1 "slide1-$AppLook.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy $AppS1 $AppRet
+  StrCpy $AppA1 "slide2-$AppLook.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy $AppS2 $AppRet
+  StrCpy $AppA1 "slide3-$AppLook.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy $AppS3 $AppRet
+  StrCpy $AppA1 "slide4-$AppLook.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy $AppS4 $AppRet
+  StrCpy $AppA1 "slide5-$AppLook.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy $AppS5 $AppRet
+  StrCpy $AppA1 "logo-$AppLook.png"
+  StrCpy $AppA2 160
+  StrCpy $AppA3 44
+  Call AppImage
+  StrCpy $AppBmpLogo $AppRet
+  StrCpy $AppA1 "on-$AppLook.png"
+  StrCpy $AppA2 32
+  StrCpy $AppA3 18
+  Call AppImage
+  StrCpy $AppBmpOn $AppRet
+  StrCpy $AppA1 "off-$AppLook.png"
+  StrCpy $AppA2 32
+  StrCpy $AppA3 18
+  Call AppImage
+  StrCpy $AppBmpOff $AppRet
+  StrCpy $AppA1 "field-$AppLook.png"
+  StrCpy $AppA2 282
+  StrCpy $AppA3 32
+  Call AppImage
+  StrCpy $AppBmpField $AppRet
+  StrCpy $AppSlide 1
+  StrCpy $AppAuto 1
+  StrCpy $AppDir 1
+  StrCpy $AppIntro 1
+FunctionEnd
+
+; The window's title on every page (Windows sets "${APP_NAME} Setup" again on each one).
+Function AppSetTitle
+  ${If} $AppMode == "update"
+    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$(appUpdateTitle)"
+  ${EndIf}
+FunctionEnd
+
+; The line under the logo for what this Setup does -> $AppRet.
+Function AppModeTag
+  ${If} $AppMode == "update"
+    StrCpy $AppRet "$(appTagUpdate)"
+  ${ElseIf} $AppMode == "same"
+    StrCpy $AppRet "$(appTagSame)"
+  ${ElseIf} $AppMode == "older"
+    StrCpy $AppRet "$(appTagOlder)"
+  ${Else}
+    StrCpy $AppRet "$(appTag)"
+  ${EndIf}
+FunctionEnd
+
+; What is installed already (the same as Tauri's reinstall page worked out): $AppMode,
+; $AppOldVersion, $AppCmp, and the switches as they are for it.
+Function AppDetect
+  Push $0
+  Push $R0
+  Push $R1
+  Push $R6
+  StrCpy $AppMode "install"
+  StrCpy $AppOldVersion ""
+  StrCpy $AppDesktop ${APP_DEFAULT_DESKTOP}
+  StrCpy $AppStart ${APP_DEFAULT_START}
+  StrCpy $AppBrowsers ${APP_DEFAULT_BROWSERS}
+  Call FindWixInstall
+  StrCpy $AppR6 $R6
+  ${If} $R6 != ""
+    StrCpy $WixMode 1
+    ReadRegStr $AppOldVersion HKLM "$R6" "DisplayVersion"
+  ${Else}
+    ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
+    ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+    ${If} "$R0$R1" == ""
+      ; [APP] A portable copy that already starts with Windows keeps doing so: Windows has one
+      ; "${PRODUCTNAME}" start-up entry, and a new install switched on would take it over. Its
+      ; entry is "<exe in quotes>" [args]; one whose exe is gone doesn't count.
+      ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+      StrCpy $R1 $0 1
+      ${If} $R1 == '"'
+        StrCpy $R0 1
+        ${Do}
+          StrCpy $R1 $0 1 $R0
+          ${IfThen} $R1 == '"' ${|} ${Break} ${|}
+          ${IfThen} $R1 == "" ${|} ${Break} ${|}
+          IntOp $R0 $R0 + 1
+        ${Loop}
+        IntOp $R0 $R0 - 1
+        StrCpy $R1 $0 $R0 1
+        ${If} ${FileExists} "$R1"
+          StrCpy $AppStart 0
+        ${EndIf}
+      ${ElseIf} $0 != ""
+        ; [APP] Dobo's own entry (tauri-plugin-autostart, rename.rs) is the exe unquoted, then
+        ; " --hidden": the program is everything up to the first ".exe" (as install.rs reads it).
+        StrCpy $R0 0
+        ${Do}
+          StrCpy $R1 $0 4 $R0
+          ${IfThen} $R1 == ".exe" ${|} ${Break} ${|}
+          ${IfThen} $R1 == "" ${|} ${Break} ${|}
+          IntOp $R0 $R0 + 1
+        ${Loop}
+        ${If} $R1 == ".exe"
+          IntOp $R0 $R0 + 4
+          StrCpy $R1 $0 $R0
+          ${If} ${FileExists} "$R1"
+            StrCpy $AppStart 0
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      Goto app_detect_done
+    ${EndIf}
+    ReadRegStr $AppOldVersion SHCTX "${UNINSTKEY}" "DisplayVersion"
+  ${EndIf}
+  nsis_tauri_utils::SemverCompare "${VERSION}" $AppOldVersion
+  Pop $AppCmp
+  ${If} $AppCmp = 1
+    StrCpy $AppMode "update"
+  ${ElseIf} $AppCmp = 0
+    StrCpy $AppMode "same"
+  ${Else}
+    StrCpy $AppMode "older"
+  ${EndIf}
+  ; Its folder (as Tauri's RestorePreviousInstallLocation reads it; $INSTDIR is another one when
+  ; Setup was started with /D=).
+  ReadRegStr $AppOldDir SHCTX "${MANUPRODUCTKEY}" ""
+  ${IfThen} $AppOldDir == "" ${|} StrCpy $AppOldDir $INSTDIR ${|}
+  ; The switches show what this ${APP_NAME} has now.
+  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $AppDesktop
+  StrCpy $AppStart 0
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+  ${StrCase} $0 $0 "L"
+  ${StrCase} $R0 "$INSTDIR\${MAINBINARYNAME}.exe" "L"
+  ${StrLoc} $R1 $0 $R0 ">"
+  ${If} $R1 != ""
+    StrCpy $AppStart 1
+  ${EndIf}
+  !if ${APP_BROWSER_SWITCH} == 1
+  StrCpy $AppBrowsers 0
+  ClearErrors
+  ReadRegStr $0 HKCU "Software\Google\Chrome\NativeMessagingHosts\${APP_NATIVE_HOST}" ""
+  ${IfNot} ${Errors}
+    StrCpy $AppBrowsers 1
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $0 HKCU "Software\Microsoft\Edge\NativeMessagingHosts\${APP_NATIVE_HOST}" ""
+  ${IfNot} ${Errors}
+    StrCpy $AppBrowsers 1
+  ${EndIf}
+  !endif
+  app_detect_done:
+  Pop $R6
+  Pop $R1
+  Pop $R0
+  Pop $0
+FunctionEnd
+
+; The left side: the slide, and the line between the two sides.
+Function AppSlidePanel
+  Push $0
+  !insertmacro AppCtl $AppSlideCtl STATIC ${APP_PIC} 0 0 530 540 ""
+  Call AppSlideInit
+  ${NSD_OnClick} $AppSlideCtl AppSlideClick
+  ; ‹ and › for the keyboard (the mouse clicks them on the slide).
+  !insertmacro AppProxy $0 ${APP_PUSH} 444 492 30 40 "$(appPrevSlide)"
+  ${NSD_OnClick} $0 AppPrevSlide
+  !insertmacro AppProxy $0 ${APP_PUSH} 474 492 34 40 "$(appNextSlide)"
+  ${NSD_OnClick} $0 AppNextSlide
+  !insertmacro AppLabel $0 530 0 1 540 ${APP_LABEL} $AppFBody LN LN ""
+  Pop $0
+FunctionEnd
+
+Function AppPrevSlide
+  Pop $0
+  StrCpy $AppAuto 0
+  StrCpy $AppDir -1
+  IntOp $AppSlide $AppSlide - 1
+  ${IfThen} $AppSlide < 1 ${|} StrCpy $AppSlide ${APP_SLIDES} ${|}
+  Call AppShowSlide
+FunctionEnd
+
+Function AppNextSlide
+  Pop $0
+  StrCpy $AppAuto 0
+  StrCpy $AppDir 1
+  IntOp $AppSlide $AppSlide + 1
+  ${IfThen} $AppSlide > ${APP_SLIDES} ${|} StrCpy $AppSlide 1 ${|}
+  Call AppShowSlide
+FunctionEnd
+
+; $AppRet = the current slide's picture.
+Function AppSlideBmp
+  ${If} $AppSlide = 1
+    StrCpy $AppRet $AppS1
+  ${ElseIf} $AppSlide = 2
+    StrCpy $AppRet $AppS2
+  ${ElseIf} $AppSlide = 3
+    StrCpy $AppRet $AppS3
+  ${ElseIf} $AppSlide = 4
+    StrCpy $AppRet $AppS4
+  ${Else}
+    StrCpy $AppRet $AppS5
+  ${EndIf}
+FunctionEnd
+
+; $AppRet = a new 24-bit picture the size of a slide (24-bit: the picture control uses it as it
+; is, never a copy of its own, so drawing into it shows at once and nothing piles up).
+Function AppNewFrame
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  !insertmacro AppScale $0 530
+  !insertmacro AppScale $1 540
+  IntOp $1 0 - $1
+  System::Call "*(i 40, i r0, i r1, &i2 1, &i2 24, i 0, i 0, i 0, i 0, i 0, i 0, i 0) p .r2"
+  ; [APP] The picture's handle in $3, its pixels' address in $4 (never the same register).
+  System::Call "gdi32::CreateDIBSection(p 0, p r2, i 0, *p .r4, p 0, i 0) p .r3"
+  System::Free $2
+  StrCpy $AppRet $3
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Copies the picture $AppA1 (a slide, or $AppFrame) into the drawing $AppA2 (one of the
+; memory DCs). The picture is held only for the copy: a picture control can't draw one that is
+; held somewhere else.
+Function AppCopyIn
+  Push $0
+  System::Call "gdi32::SelectObject(p $AppDcF, p $AppA1) p .r0"
+  System::Call "gdi32::BitBlt(p $AppA2, i 0, i 0, i $AppSW, i $AppSH, p $AppDcF, i 0, i 0, i 0x00CC0020)"
+  System::Call "gdi32::SelectObject(p $AppDcF, p r0)"
+  Pop $0
+FunctionEnd
+
+; $AppOut -> $AppFrame (what the control shows when Windows asks it to repaint).
+Function AppFrameSave
+  Push $0
+  System::Call "gdi32::SelectObject(p $AppDcF, p $AppFrame) p .r0"
+  System::Call "gdi32::BitBlt(p $AppDcF, i 0, i 0, i $AppSW, i $AppSH, p $AppDcOut, i 0, i 0, i 0x00CC0020)"
+  System::Call "gdi32::SelectObject(p $AppDcF, p r0)"
+  Pop $0
+FunctionEnd
+
+; Once: the pictures and drawings the slide changes use (kept until Setup closes).
+Function AppSlideSetup
+  Push $0
+  Push $1
+  !insertmacro AppScale $AppSW 530
+  !insertmacro AppScale $AppSH 540
+  ; The picture and the words move; the dots and arrows under them only fade.
+  !insertmacro AppScale $AppSTop 496
+  !insertmacro AppScale $AppShift 80
+  Call AppNewFrame
+  StrCpy $AppFrame $AppRet
+  Call AppNewFrame
+  StrCpy $AppFrom $AppRet
+  Call AppNewFrame
+  StrCpy $AppTo $AppRet
+  Call AppNewFrame
+  StrCpy $AppOut $AppRet
+  Call AppNewFrame
+  StrCpy $AppMix $AppRet
+  System::Call "user32::GetDC(p 0) p .r0"
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppDcF $1
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppDcFrom $1
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppDcTo $1
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppDcOut $1
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppDcMix $1
+  System::Call "user32::ReleaseDC(p 0, p r0)"
+  System::Call "gdi32::SelectObject(p $AppDcFrom, p $AppFrom)"
+  System::Call "gdi32::SelectObject(p $AppDcTo, p $AppTo)"
+  System::Call "gdi32::SelectObject(p $AppDcOut, p $AppOut)"
+  System::Call "gdi32::SelectObject(p $AppDcMix, p $AppMix)"
+  ; What shows beside a moving slide: the slides' own background (read from the first one, so it
+  ; matches the picture exactly).
+  StrCpy $AppA1 $AppS1
+  StrCpy $AppA2 $AppDcTo
+  Call AppCopyIn
+  System::Call "gdi32::GetPixel(p $AppDcTo, i 2, i 2) i .r0"
+  System::Call "gdi32::CreateSolidBrush(i r0) p .r1"
+  System::Call "gdi32::SelectObject(p $AppDcOut, p r1)"
+  System::Call "gdi32::SelectObject(p $AppDcMix, p r1)"
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; One step of the change, $AppA1 = how far it is (0 to 1000, eased): what showed ($AppFrom)
+; moves off one way and fades out while the new slide ($AppTo) comes in from the other side.
+Function AppSlideDraw
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  IntOp $1 $AppA1 * $AppShift
+  IntOp $1 $1 / 1000
+  IntOp $2 $AppShift - $1
+  ${If} $AppDir < 0
+    StrCpy $3 $1
+    IntOp $4 0 - $2
+  ${Else}
+    IntOp $3 0 - $1
+    StrCpy $4 $2
+  ${EndIf}
+  ${If} $AppA1 >= 1000
+    System::Call "gdi32::BitBlt(p $AppDcOut, i 0, i 0, i $AppSW, i $AppSH, p $AppDcTo, i 0, i 0, i 0x00CC0020)"
+  ${Else}
+    !insertmacro AppShifted $AppDcOut $AppDcFrom $3
+    !insertmacro AppShifted $AppDcMix $AppDcTo $4
+    ; BLENDFUNCTION { AC_SRC_OVER, 0, alpha, 0 } as one 32-bit value.
+    IntOp $0 $AppA1 * 255
+    IntOp $0 $0 / 1000
+    ${If} $0 > 0
+      IntOp $0 $0 << 16
+      System::Call "msimg32::AlphaBlend(p $AppDcOut, i 0, i 0, i $AppSW, i $AppSH, p $AppDcMix, i 0, i 0, i $AppSW, i $AppSH, i r0)"
+    ${EndIf}
+  ${EndIf}
+  ; Straight onto the screen in one copy, and the control isn't asked to paint it again.
+  ; DCX_CACHE | DCX_CLIPSIBLINGS: the focus ring over the arrows stays.
+  System::Call "user32::GetDCEx(p $AppSlideCtl, p 0, i 0x12) p .r1"
+  System::Call "gdi32::BitBlt(p r1, i 0, i 0, i $AppSW, i $AppSH, p $AppDcOut, i 0, i 0, i 0x00CC0020)"
+  System::Call "user32::ReleaseDC(p $AppSlideCtl, p r1)"
+  System::Call "user32::ValidateRect(p $AppSlideCtl, p 0)"
+  Call AppFrameSave
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; A new slide control: it shows the current slide (no move). The slides wait 4.5 s from now.
+Function AppSlideInit
+  Push $0
+  Push $1
+  Push $2
+  ${If} $AppFrame == ""
+  ${OrIf} $AppFrame = 0
+    Call AppSlideSetup
+  ${EndIf}
+  ${NSD_KillTimer} AppFade
+  ; With Windows' "Animation effects" off there's nothing to come in: the slide shows at once.
+  StrCpy $0 1
+  System::Call "user32::SystemParametersInfoW(i 0x1042, i 0, *i .r0, i 0)" ; SPI_GETCLIENTAREAANIMATION
+  ${IfThen} $0 = 0 ${|} StrCpy $AppIntro 0 ${|}
+  ${If} $AppIntro = 1
+    ; The first time: only the slides' background, and the first slide comes in once the
+    ; window shows (AppTick).
+    System::Call "gdi32::PatBlt(p $AppDcOut, i 0, i 0, i $AppSW, i $AppSH, i 0x00F00021)"
+  ${Else}
+    Call AppSlideBmp
+    StrCpy $AppA1 $AppRet
+    StrCpy $AppA2 $AppDcOut
+    Call AppCopyIn
+  ${EndIf}
+  Call AppFrameSave
+  SendMessage $AppSlideCtl ${STM_SETIMAGE} 0 $AppFrame
+  System::Call "kernel32::GetTickCount() i .r0"
+  StrCpy $AppIdleT0 $0
+  StrCpy $AppMouseSeen 0
+  System::Call "*(i 0, i 0) p .r1"
+  System::Call "user32::GetCursorPos(p r1)"
+  System::Call "*$1(i .r0, i .r2)"
+  System::Free $1
+  StrCpy $AppCur0 "$0,$2"
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; The slide changed ($AppSlide, in the direction $AppDir): it slides in (also from the middle
+; of a change), or appears at once when Windows' "Animation effects" are off.
+Function AppShowSlide
+  Push $0
+  ; A slide flipped before the first one came in replaces that coming in (it never runs after).
+  StrCpy $AppIntro 0
+  ; What shows now (maybe half-way through a change) is what moves off.
+  StrCpy $AppA1 $AppFrame
+  StrCpy $AppA2 $AppDcFrom
+  Call AppCopyIn
+  Call AppSlideBmp
+  StrCpy $AppA1 $AppRet
+  StrCpy $AppA2 $AppDcTo
+  Call AppCopyIn
+  System::Call "kernel32::GetTickCount() i .r0"
+  StrCpy $AppIdleT0 $0
+  StrCpy $AppFadeT0 $0
+  StrCpy $0 1
+  System::Call "user32::SystemParametersInfoW(i 0x1042, i 0, *i .r0, i 0)" ; SPI_GETCLIENTAREAANIMATION
+  ${If} $0 = 0
+    ${NSD_KillTimer} AppFade
+    StrCpy $AppA1 1000
+    Call AppSlideDraw
+  ${Else}
+    StrCpy $AppA1 0
+    Call AppSlideDraw
+    ${NSD_CreateTimer} AppFade 10
+  ${EndIf}
+  Pop $0
+FunctionEnd
+
+; One step of the change (as often as Windows' timer allows): eased out (cubic), done after 650 ms.
+; Timed by the clock, so a busy PC skips steps instead of slowing the change down.
+Function AppFade
+  Push $0
+  Push $1
+  System::Call "kernel32::GetTickCount() i .r0"
+  IntOp $0 $0 - $AppFadeT0
+  ${If} $0 >= 650
+  ${OrIf} $0 < 0
+    ${NSD_KillTimer} AppFade
+    StrCpy $AppA1 1000
+  ${Else}
+    ; 1000 × (1 - (1 - t)³), t = $0 / 650, in thousandths.
+    IntOp $1 $0 * 1000
+    IntOp $1 $1 / 650
+    IntOp $1 1000 - $1
+    IntOp $0 $1 * $1
+    IntOp $0 $0 / 1000
+    IntOp $0 $0 * $1
+    IntOp $0 $0 / 1000
+    IntOp $AppA1 1000 - $0
+  ${EndIf}
+  Call AppSlideDraw
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; A click on the slides: ‹ › or a dot flips them, and they stop moving by themselves. A click
+; anywhere else on the picture (to bring the window to the front, say) changes nothing.
+Function AppSlideClick
+  Pop $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  System::Call "*(i 0, i 0) p .r1"
+  System::Call "user32::GetCursorPos(p r1)"
+  System::Call "user32::ScreenToClient(p $AppSlideCtl, p r1)"
+  System::Call "*$1(i .r2, i .r3)"
+  System::Free $1
+  ; Back to 100 %.
+  IntOp $2 $2 * 96
+  IntOp $2 $2 / $AppDpi
+  IntOp $3 $3 * 96
+  IntOp $3 $3 / $AppDpi
+  ${If} $3 >= 492
+  ${AndIf} $3 < 532
+    ${If} $2 >= 444
+    ${AndIf} $2 < 474
+      StrCpy $AppAuto 0
+      StrCpy $AppDir -1
+      IntOp $AppSlide $AppSlide - 1
+      ${IfThen} $AppSlide < 1 ${|} StrCpy $AppSlide ${APP_SLIDES} ${|}
+      Call AppShowSlide
+    ${ElseIf} $2 >= 474
+    ${AndIf} $2 < 508
+      StrCpy $AppAuto 0
+      StrCpy $AppDir 1
+      IntOp $AppSlide $AppSlide + 1
+      ${IfThen} $AppSlide > ${APP_SLIDES} ${|} StrCpy $AppSlide 1 ${|}
+      Call AppShowSlide
+    ${ElseIf} $2 < 140
+      ; The dots: 7 wide (the current one 20), 6 apart, from x 28.
+      StrCpy $1 28
+      StrCpy $4 1
+      ${Do}
+        StrCpy $0 7
+        ${IfThen} $4 = $AppSlide ${|} StrCpy $0 20 ${|}
+        IntOp $0 $0 + $1
+        IntOp $0 $0 + 3
+        ${If} $2 < $0
+          StrCpy $AppAuto 0
+          ; A dot further on comes from the right, an earlier one from the left.
+          ${If} $4 <> $AppSlide
+            StrCpy $AppDir 1
+            ${IfThen} $4 < $AppSlide ${|} StrCpy $AppDir -1 ${|}
+            StrCpy $AppSlide $4
+            Call AppShowSlide
+          ${EndIf}
+          ${Break}
+        ${EndIf}
+        IntOp $1 $0 + 3
+        IntOp $4 $4 + 1
+      ${LoopUntil} $4 > ${APP_SLIDES}
+    ${EndIf}
+  ${EndIf}
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; Every tenth of a second on the pages with slides: the next slide after 4.5 s without the mouse
+; on them, and the buttons' hover pictures. The 4.5 s are read from the clock (a busy PC, Windows
+; checking the new Setup say, sends these ticks late, and counting them kept the first slide far
+; too long). The mouse holds the slides only once it has moved since they showed: resting where
+; Setup was double-clicked, it may just happen to be over them.
+Function AppTick
+  Push $0
+  Push $1
+  Push $2
+  ; The first slide comes in once Setup's window is on the screen.
+  ${If} $AppIntro = 1
+    System::Call "user32::IsWindowVisible(p $HWNDPARENT) i .r0"
+    ${If} $0 <> 0
+      StrCpy $AppIntro 0
+      StrCpy $AppDir 1
+      Call AppShowSlide
+    ${EndIf}
+  ${EndIf}
+  ${If} $AppMouseSeen <> 1
+    System::Call "*(i 0, i 0) p .r1"
+    System::Call "user32::GetCursorPos(p r1)"
+    System::Call "*$1(i .r0, i .r2)"
+    System::Free $1
+    ${IfThen} "$0,$2" != $AppCur0 ${|} StrCpy $AppMouseSeen 1 ${|}
+  ${EndIf}
+  System::Call "kernel32::GetTickCount() i .r0"
+  ${If} $AppMouseSeen = 1
+    StrCpy $AppA1 $AppSlideCtl
+    Call AppMouseOn
+    ${IfThen} $AppRet = 1 ${|} StrCpy $AppIdleT0 $0 ${|}
+  ${EndIf}
+  IntOp $1 $0 - $AppIdleT0
+  ${If} $AppAuto = 1
+  ${AndIf} $1 >= 4500
+    StrCpy $AppDir 1
+    IntOp $AppSlide $AppSlide + 1
+    ${IfThen} $AppSlide > ${APP_SLIDES} ${|} StrCpy $AppSlide 1 ${|}
+    Call AppShowSlide
+  ${EndIf}
+  Call AppButtonsTick
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Logo, the version under it and the line under that, at the top of the right side.
+; $AppA1 = the line under the logo.
+Function AppHeader
+  Push $0
+  Push $1
+  StrCpy $1 $AppA1
+  !insertmacro AppPicture $0 615 34 160 44 $AppBmpLogo
+  !insertmacro AppLabel $0 554 80 282 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
+  !insertmacro AppLabel $0 554 104 282 18 0x50000081 $AppFSmall MUT BG $1
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; ---------- page 1: everything at once ----------
+Function AppMainPage
+  StrCpy $PassiveMode $AppPassiveOrig
+  ${If} $PassiveMode = 1
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $AppDialog
+  ${If} $AppDialog == error
+    Abort
+  ${EndIf}
+  Call AppHideNav
+  Call AppSetTitle
+  !insertmacro AppColors $AppDialog TEXT BG
+  StrCpy $AppB1Ctl 0
+  StrCpy $AppB2Ctl 0
+  Call AppSlidePanel
+  ; What this Setup does, under the logo.
+  Call AppModeTag
+  StrCpy $AppA1 $AppRet
+  Call AppHeader
+  !insertmacro AppLabel $0 554 132 282 1 ${APP_LABEL} $AppFBody LN LN ""
+  ; Install in: the folder, and Change. Over an installed ${APP_NAME} it stays where it is (no Change),
+  ; unless that folder won't do any more: then Change moves it (AppCheckFolder).
+  !insertmacro AppLabel $0 554 144 282 18 ${APP_LABEL} $AppFBody TEXT BG "$(appInstallIn)"
+  !insertmacro AppPicture $0 554 168 282 32 $AppBmpField
+  !insertmacro AppLabel $AppPathCtl 584 176 190 16 0x50008080 $AppFSmall TEXT RA $INSTDIR
+  !insertmacro AppLabel $AppChangeCtl 776 176 50 16 0x50000182 $AppFSmall ACCENT RA "$(appChange)"
+  ${NSD_OnClick} $AppChangeCtl AppChangeFolder
+  !insertmacro AppProxy $AppPxChange ${APP_PUSH} 776 176 50 16 "$(appChangeName)"
+  ${NSD_OnClick} $AppPxChange AppChangeFolder
+  !insertmacro AppLabel $0 554 214 282 1 ${APP_LABEL} $AppFBody LN LN ""
+  ; The switches (the words can be clicked too).
+  !insertmacro AppLabel $0 554 225 240 18 0x50000180 $AppFBody TEXT BG "$(appDesktop)"
+  ${NSD_OnClick} $0 AppToggleDesk
+  !insertmacro AppPicture $AppSwDesk 804 225 32 18 $AppBmpOff
+  ${NSD_OnClick} $AppSwDesk AppToggleDesk
+  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 804 225 32 18 "$(appDesktop)"
+  ${NSD_OnClick} $AppPxDesk AppToggleDesk
+  !insertmacro AppLabel $0 554 254 282 1 ${APP_LABEL} $AppFBody LN LN ""
+  !insertmacro AppLabel $0 554 265 240 18 0x50000180 $AppFBody TEXT BG "$(appStartWithWindows)"
+  ${NSD_OnClick} $0 AppToggleStart
+  !insertmacro AppPicture $AppSwStart 804 265 32 18 $AppBmpOff
+  ${NSD_OnClick} $AppSwStart AppToggleStart
+  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 804 265 32 18 "$(appStartWithWindows)"
+  ${NSD_OnClick} $AppPxStart AppToggleStart
+  !if ${APP_BROWSER_SWITCH} == 1
+  ; [APP] Optional third switch (APP_BROWSER_SWITCH in app.nsh): the browser connection.
+  !insertmacro AppLabel $0 554 294 282 1 ${APP_LABEL} $AppFBody LN LN ""
+  !insertmacro AppLabel $0 554 304 240 18 0x50000180 $AppFBody TEXT BG "$(appBrowsers)"
+  ${NSD_OnClick} $0 AppToggleBrowsers
+  !insertmacro AppLabel $0 554 323 240 16 0x50000180 $AppFTiny MUT BG "$(appBrowsersSub)"
+  ${NSD_OnClick} $0 AppToggleBrowsers
+  !insertmacro AppPicture $AppSwBrow 804 313 32 18 $AppBmpOff
+  ${NSD_OnClick} $AppSwBrow AppToggleBrowsers
+  !insertmacro AppProxy $AppPxBrow ${APP_CHECK} 804 313 32 18 "$(appBrowsers)"
+  ${NSD_OnClick} $AppPxBrow AppToggleBrowsers
+  !endif
+  Call AppShowSwitches
+  ; Said here when something stands in the way (the folder) or will happen (${APP_NAME} is open).
+  !insertmacro AppLabel $AppNoteCtl 554 360 282 72 ${APP_LABEL} $AppFSmall WARN BG ""
+  ; Install (Update, Install again, Install this version).
+  ${If} $AppMode == "update"
+    StrCpy $AppA1 "update"
+    StrCpy $1 "Update"
+  ${ElseIf} $AppMode == "same"
+    StrCpy $AppA1 "again"
+    StrCpy $1 "Install again"
+  ${ElseIf} $AppMode == "older"
+    StrCpy $AppA1 "older"
+    StrCpy $1 "Install this version"
+  ${Else}
+    StrCpy $AppA1 "install"
+    StrCpy $1 "Install"
+  ${EndIf}
+  StrCpy $AppA2 282
+  Call AppLoadButton1
+  !insertmacro AppPicture $AppB1Ctl 554 444 282 40 $AppB1N
+  ${NSD_OnClick} $AppB1Ctl AppInstallClick
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 554 444 282 40 $1
+  ${NSD_OnClick} $AppPxB1 AppInstallClick
+  ; By installing, you accept the terms of use (a link). No admin rights needed.
+  Call AppTermsLine
+  !insertmacro AppRingMake
+  StrCpy $AppCanMove 0
+  Call AppCheckFolder
+  ; Over an installed ${APP_NAME} whose folder will do: it stays there (no Change).
+  ${If} $AppMode != "install"
+  ${AndIf} $AppCanMove <> 1
+    ShowWindow $AppChangeCtl ${SW_HIDE}
+    ShowWindow $AppPxChange ${SW_HIDE}
+    !insertmacro AppScale $1 242
+    !insertmacro AppScale $2 16
+    System::Call "user32::SetWindowPos(p $AppPathCtl, p 0, i 0, i 0, i r1, i r2, i 0x16)"
+    !insertmacro AppColors $AppPathCtl MUT RA
+  ${EndIf}
+  Call AppCheckRunning
+  ${NSD_CreateTimer} AppTick 100
+  ${NSD_SetFocus} $AppPxB1
+  nsDialogs::Show
+FunctionEnd
+
+Function AppShowSwitches
+  ${If} $AppDesktop = 1
+    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOn
+  ${Else}
+    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOff
+  ${EndIf}
+  ${If} $AppStart = 1
+    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOn
+  ${Else}
+    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOff
+  ${EndIf}
+  !if ${APP_BROWSER_SWITCH} == 1
+  ${If} $AppBrowsers = 1
+    SendMessage $AppSwBrow ${STM_SETIMAGE} 0 $AppBmpOn
+  ${Else}
+    SendMessage $AppSwBrow ${STM_SETIMAGE} 0 $AppBmpOff
+  ${EndIf}
+  !endif
+  ; Screen readers read each switch's on/off from its stand-in.
+  SendMessage $AppPxDesk ${BM_SETCHECK} $AppDesktop 0
+  SendMessage $AppPxStart ${BM_SETCHECK} $AppStart 0
+  !if ${APP_BROWSER_SWITCH} == 1
+  SendMessage $AppPxBrow ${BM_SETCHECK} $AppBrowsers 0
+  !endif
+FunctionEnd
+
+Function AppToggleDesk
+  Pop $0
+  IntOp $AppDesktop 1 - $AppDesktop
+  Call AppShowSwitches
+FunctionEnd
+Function AppToggleStart
+  Pop $0
+  IntOp $AppStart 1 - $AppStart
+  Call AppShowSwitches
+FunctionEnd
+!if ${APP_BROWSER_SWITCH} == 1
+Function AppToggleBrowsers
+  Pop $0
+  IntOp $AppBrowsers 1 - $AppBrowsers
+  Call AppShowSwitches
+FunctionEnd
+!endif
+
+; "By installing, you accept the terms of use." (the last words a link), centred, and under it
+; "No admin rights needed."
+Function AppTermsLine
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  ${If} $AppMode == "update"
+    StrCpy $4 "$(appTermsAUpdate)"
+  ${Else}
+    StrCpy $4 "$(appTermsA)"
+  ${EndIf}
+  StrCpy $AppA1 $AppFTiny
+  StrCpy $AppA2 $4
+  Call AppTextWidth
+  StrCpy $1 $AppRet
+  StrCpy $AppA2 "$(appTermsLink)"
+  Call AppTextWidth
+  StrCpy $2 $AppRet
+  StrCpy $AppA2 "$(appTermsB)"
+  Call AppTextWidth
+  StrCpy $3 $AppRet
+  ; Left edge of the line: the middle of the right side, less half the line.
+  IntOp $0 $1 + $2
+  IntOp $0 $0 + $3
+  !insertmacro AppScale $5 695
+  IntOp $6 $0 / 2
+  IntOp $5 $5 - $6
+  !insertmacro AppScale $6 494
+  !insertmacro AppScale $0 16
+  ; (pixels already: nsDialogs takes them as they are)
+  IntOp $1 $1 + 1
+  nsDialogs::CreateControl STATIC ${APP_LABEL} 0 $5 $6 $1 $0 $4
+  Pop $4
+  SendMessage $4 ${WM_SETFONT} $AppFTiny 1
+  !insertmacro AppColors $4 MUT BG
+  IntOp $5 $5 + $1
+  IntOp $5 $5 - 1
+  IntOp $2 $2 + 1
+  nsDialogs::CreateControl STATIC 0x50000180 0 $5 $6 $2 $0 "$(appTermsLink)"
+  Pop $4
+  SendMessage $4 ${WM_SETFONT} $AppFTiny 1
+  !insertmacro AppColors $4 ACCENT BG
+  ${NSD_OnClick} $4 AppOpenTerms
+  ; Its stand-in for the keyboard (see AppProxy).
+  nsDialogs::CreateControl BUTTON ${APP_PUSH} 0 $5 $6 $2 $0 "$(appTermsLink)"
+  Pop $4
+  System::Call "user32::SetWindowPos(p r4, p 1, i 0, i 0, i 0, i 0, i 0x13)"
+  ${NSD_OnClick} $4 AppOpenTerms
+  IntOp $5 $5 + $2
+  IntOp $5 $5 - 1
+  IntOp $3 $3 + 1
+  nsDialogs::CreateControl STATIC ${APP_LABEL} 0 $5 $6 $3 $0 "$(appTermsB)"
+  Pop $4
+  SendMessage $4 ${WM_SETFONT} $AppFTiny 1
+  !insertmacro AppColors $4 MUT BG
+  ${If} $AppMode == "install"
+    !insertmacro AppLabel $4 554 512 282 16 0x50000081 $AppFTiny MUT BG "$(appNoAdmin)"
+  ${EndIf}
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function AppOpenTerms
+  Pop $0
+  ; As the Windows user, never with Setup's rights (Setup may run as administrator).
+  nsis_tauri_utils::RunAsUser "${APP_TERMS_URL}" ""
+FunctionEnd
+
+Function AppChangeFolder
+  Pop $0
+  nsDialogs::SelectFolderDialog "$(appPickFolder)" $INSTDIR
+  Pop $0
+  ${If} $0 == error
+  ${OrIf} $0 == ""
+    Return
+  ${EndIf}
+  ; Like Windows' own folder pages: ${APP_NAME} gets a folder of its own in the one picked.
+  ${GetFileName} $0 $1
+  ${If} $1 != "${PRODUCTNAME}"
+    StrCpy $1 $0 1 -1
+    ${If} $1 == "\"
+      StrCpy $0 "$0${PRODUCTNAME}"
+    ${Else}
+      StrCpy $0 "$0\${PRODUCTNAME}"
+    ${EndIf}
+  ${EndIf}
+  StrCpy $INSTDIR $0
+  SendMessage $AppPathCtl ${WM_SETTEXT} 0 "STR:$INSTDIR"
+  Call AppCheckFolder
+  Call AppCheckRunning
+FunctionEnd
+
+; Whether ${APP_NAME} can go in $INSTDIR: sets $AppHeld and says why not under the options.
+Function AppCheckFolder
+  Push $0
+  StrCpy $AppHeld 0
+  StrCpy $AppFolderMsg ""
+  ${If} $INSTDIR == ""
+    StrCpy $AppFolderMsg "$(appFolderPick)"
+  ${Else}
+    ; [APP] Where the installed ${APP_NAME} keeps its notes, and WebView2's data (app.nsh).
+    ${If} $INSTDIR == "${APP_DATA_DIR}"
+      StrCpy $AppFolderMsg "$(appFolderData)"
+    ${ElseIf} $INSTDIR == "${APP_WEBVIEW_DIR}"
+      StrCpy $AppFolderMsg "$(appFolderWebview)"
+    ${EndIf}
+    ; A portable ${APP_NAME}'s folder: installing there would leave its notes behind.
+    ; [APP] Dobo's portable notes: data\ztodo.sqlite next to the exe (paths.rs).
+    ${If} $AppFolderMsg == ""
+    ${AndIfNot} ${FileExists} "$INSTDIR\${APP_MARKER}"
+      ${If} ${FileExists} "$INSTDIR\data\ztodo.sqlite"
+        StrCpy $AppFolderMsg "$(appFolderPortable)"
+      ${EndIf}
+    ${EndIf}
+    ; A folder this Windows user can't change (or only administrators can), a drive or network
+    ; folder that isn't there, a path too long for Windows.
+    ${If} $AppFolderMsg == ""
+      Call AppCheckDir
+      ${If} $AppDirProblem == "admin"
+        StrCpy $AppFolderMsg "$(appFolderAdmin)"
+      ${ElseIf} $AppDirProblem != ""
+        ${If} $AppDirWhy == "missing"
+          StrCpy $AppFolderMsg "$(appFolderMissing)"
+        ${ElseIf} $AppDirWhy == "long"
+          StrCpy $AppFolderMsg "$(appFolderLong)"
+        ${Else}
+          Push $INSTDIR
+          Call AppIsAdminFolder
+          Pop $0
+          ${If} $0 = 1
+            StrCpy $AppFolderMsg "$(appFolderAdmin)"
+          ${Else}
+            StrCpy $AppFolderMsg "$(appFolderWrite)"
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ; Over an installed ${APP_NAME}: in another folder than its own, ${APP_NAME} moves there (its uninstaller
+  ; removes the old files, PageLeaveReinstall); its own folder that won't do any more can only be
+  ; left with Change, said in the note.
+  StrCpy $AppMoved 0
+  ${If} $AppMode != "install"
+    ${If} $INSTDIR != $AppOldDir
+      StrCpy $AppMoved 1
+    ${ElseIf} $AppFolderMsg != ""
+      StrCpy $AppCanMove 1
+      StrCpy $AppFolderMsg "$AppFolderMsg $(appMoveHint)"
+    ${EndIf}
+  ${EndIf}
+  ${If} $AppFolderMsg != ""
+    StrCpy $AppHeld 1
+  ${EndIf}
+  Call AppShowNote
+  Call AppButtonsTick
+  Pop $0
+FunctionEnd
+
+; Whether ${APP_NAME} is open there now (it will be closed first: said in the window, not asked).
+Function AppCheckRunning
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $R0
+  StrCpy $AppRunning 0
+  ; The installed ${APP_NAME} (where it is, also when it moves), else one in the folder picked.
+  StrCpy $3 $INSTDIR
+  ${IfThen} $AppMode != "install" ${|} StrCpy $3 $AppOldDir ${|}
+  ${If} ${FileExists} "$3\${MAINBINARYNAME}.exe"
+    !insertmacro RestartManager_StartSession $R0
+    ${If} $R0 != ""
+      !insertmacro RestartManager_RegisterFile $R0 "$3\${MAINBINARYNAME}.exe"
+      ${If} $0 = 0
+        System::Call 'RSTRTMGR::RmGetList(p R0, *i .r1, *i .r2, p 0, *i .r3) i .r0'
+        ${If} $0 = ${ERROR_MORE_DATA}
+          StrCpy $AppRunning 1
+        ${EndIf}
+      ${EndIf}
+      !insertmacro RestartManager_EndSession $R0
+    ${EndIf}
+  ${EndIf}
+  StrCpy $AppAgreedClose $AppRunning
+  Call AppShowNote
+  Pop $R0
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function AppShowNote
+  ${If} $AppFolderMsg != ""
+    !insertmacro AppColors $AppNoteCtl WARN BG
+    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$AppFolderMsg"
+  ${ElseIf} $AppMoved = 1
+    !insertmacro AppColors $AppNoteCtl MUT BG
+    ${If} $AppRunning = 1
+      SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appMoveNote)$\r$\n$(appIsOpen)"
+    ${Else}
+      SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appMoveNote)"
+    ${EndIf}
+  ${ElseIf} $AppRunning = 1
+    !insertmacro AppColors $AppNoteCtl MUT BG
+    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appIsOpen)"
+  ${Else}
+    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:"
+  ${EndIf}
+  ; The label repaints with its new colour.
+  System::Call "user32::InvalidateRect(p $AppNoteCtl, p 0, i 1)"
+FunctionEnd
+
+Function AppInstallClick
+  Pop $0
+  ${If} $AppHeld = 1
+    Return
+  ${EndIf}
+  ; Next: the page's leave function, then the installing.
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+
+Function AppMainLeave
+  StrCpy $PassiveMode $AppPassiveOrig
+  Call AppCheckFolder
+  ${If} $AppHeld = 1
+    Abort
+  ${EndIf}
+  ; Over an installed ${APP_NAME}: what Tauri's reinstall page did with its first (recommended)
+  ; choice: the same version is installed again over itself; another one is replaced (its
+  ; uninstaller removes only its files, see PageLeaveReinstall).
+  ${If} $AppMode != "install"
+    StrCpy $R0 $AppCmp
+    StrCpy $R6 $AppR6
+    StrCpy $AppUiChoice 1
+    Call PageLeaveReinstall
+  ${EndIf}
+  ${NSD_KillTimer} AppTick
+  ${NSD_KillTimer} AppFade
+  ; Installed before the first slide came in: the last page shows it at once.
+  StrCpy $AppIntro 0
+  !insertmacro AppRingNone
+FunctionEnd
+
+; ---------- page 2: installing (Tauri's progress page, in ${APP_NAME}'s look) ----------
+Function AppInstShow
+  ; A passive run (/P) keeps Windows' plain progress window (nothing of ${APP_NAME}'s look was set up).
+  ${If} $AppPassiveOrig = 1
+    Return
+  ${EndIf}
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Call AppHideNav
+  Call AppSetTitle
+  FindWindow $0 "#32770" "" $HWNDPARENT
+  StrCpy $AppA1 860
+  StrCpy $AppA2 540
+  Call AppPageFill
+  ; The slide stays where it was (still: nothing moves while ${APP_NAME} installs).
+  !insertmacro AppRaw $1 $0 STATIC ${APP_PIC} 0 0 530 540 ""
+  ${If} $AppSlide = 1
+    SendMessage $1 ${STM_SETIMAGE} 0 $AppS1
+  ${ElseIf} $AppSlide = 2
+    SendMessage $1 ${STM_SETIMAGE} 0 $AppS2
+  ${ElseIf} $AppSlide = 3
+    SendMessage $1 ${STM_SETIMAGE} 0 $AppS3
+  ${ElseIf} $AppSlide = 4
+    SendMessage $1 ${STM_SETIMAGE} 0 $AppS4
+  ${Else}
+    SendMessage $1 ${STM_SETIMAGE} 0 $AppS5
+  ${EndIf}
+  !insertmacro AppRaw $1 $0 STATIC ${APP_LABEL} 530 0 1 540 ""
+  !insertmacro AppColors $1 LN LN
+  !insertmacro AppRaw $1 $0 STATIC ${APP_PIC} 615 34 160 44 ""
+  SendMessage $1 ${STM_SETIMAGE} 0 $AppBmpLogo
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 554 80 282 16 "$(appVersion)"
+  SendMessage $1 ${WM_SETFONT} $AppFTiny 1
+  !insertmacro AppColors $1 MUT BG
+  Call AppModeTag
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 554 104 282 18 $AppRet
+  SendMessage $1 ${WM_SETFONT} $AppFSmall 1
+  !insertmacro AppColors $1 MUT BG
+  ${If} $AppMode == "update"
+    StrCpy $2 "$(appUpdating)"
+  ${ElseIf} $AppMode == "same"
+    StrCpy $2 "$(appInstallingAgain)"
+  ${ElseIf} $AppMode == "older"
+    StrCpy $2 "$(appInstallingOlder)"
+  ${Else}
+    StrCpy $2 "$(appInstalling)"
+  ${EndIf}
+  !insertmacro AppRaw $1 $0 STATIC 0x50000080 554 210 282 24 $2
+  SendMessage $1 ${WM_SETFONT} $AppFTitle 1
+  !insertmacro AppColors $1 TEXT BG
+  StrCpy $1 554
+  StrCpy $2 248
+  StrCpy $3 282
+  Call AppStyleProgress
+  ; Close, for when something goes wrong (AppFail).
+  StrCpy $AppA1 "b-done-n-$AppLook.png"
+  StrCpy $AppA2 282
+  StrCpy $AppA3 40
+  Call AppImage
+  StrCpy $AppFailBmp $AppRet
+  StrCpy $1 554
+  StrCpy $2 444
+  StrCpy $3 282
+  Call AppFailClose
+  StrCpy $AppInFiles 1
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; ---------- page 3: done ----------
+Function AppDonePage
+  StrCpy $PassiveMode $AppPassiveOrig
+  ${If} $PassiveMode = 1
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $AppDialog
+  ${If} $AppDialog == error
+    Abort
+  ${EndIf}
+  Call AppHideNav
+  Call AppSetTitle
+  !insertmacro AppColors $AppDialog TEXT BG
+  StrCpy $AppB1Ctl 0
+  StrCpy $AppB2Ctl 0
+  StrCpy $AppHeld 0
+  StrCpy $AppOpen 1
+  StrCpy $AppInFiles 0
+  Call AppSlidePanel
+  StrCpy $AppA1 "$(appTag)"
+  Call AppHeader
+  ${If} $AppMode == "update"
+    StrCpy $1 "$(appDoneUpdate)"
+  ${ElseIf} $AppMode == "same"
+    StrCpy $1 "$(appDoneAgain)"
+  ${ElseIf} $AppMode == "older"
+    StrCpy $1 "$(appDoneOlder)"
+  ${Else}
+    StrCpy $1 "$(appDone)"
+  ${EndIf}
+  !insertmacro AppLabel $0 554 210 282 24 ${APP_LABEL} $AppFTitle TEXT BG $1
+  ${If} $AppDesktop = 1
+    StrCpy $1 "$(appDoneWhereDesktop)"
+  ${Else}
+    StrCpy $1 "$(appDoneWhere)"
+  ${EndIf}
+  !insertmacro AppLabel $0 554 242 282 40 ${APP_LABEL} $AppFBody MUT BG $1
+  ; ${APP_EXE} couldn't take the window's choices (start with Windows, the browser connection).
+  ${If} $AppChoicesOk == "0"
+    ${If} $AppStart = 1
+    ${OrIf} $AppBrowsers = 1
+      !insertmacro AppLabel $0 554 292 282 54 ${APP_LABEL} $AppFSmall WARN BG "$(appChoicesFailed)"
+    ${EndIf}
+  ${EndIf}
+  StrCpy $AppA1 "open"
+  StrCpy $AppA2 282
+  Call AppLoadButton1
+  !insertmacro AppPicture $AppB1Ctl 554 444 282 40 $AppB1N
+  ${NSD_OnClick} $AppB1Ctl AppOpenClick
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 554 444 282 40 "$(appOpenName)"
+  ${NSD_OnClick} $AppPxB1 AppOpenClick
+  !insertmacro AppLabel $0 665 496 60 18 0x50000181 $AppFSmall MUT BG "$(appClose)"
+  ${NSD_OnClick} $0 AppCloseClick
+  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 665 496 60 18 "$(appClose)"
+  ${NSD_OnClick} $AppPxB2 AppCloseClick
+  !insertmacro AppRingMake
+  ; The window's ✕ and Esc close without opening ${APP_NAME}: with Cancel off (as Windows leaves it
+  ; after installing), Windows would take ✕ as Next, which opens it.
+  GetDlgItem $0 $HWNDPARENT 2
+  EnableWindow $0 1
+  ${NSD_CreateTimer} AppTick 100
+  ${NSD_SetFocus} $AppPxB1
+  nsDialogs::Show
+FunctionEnd
+
+Function AppOpenClick
+  Pop $0
+  StrCpy $AppOpen 1
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+Function AppCloseClick
+  Pop $0
+  StrCpy $AppOpen 0
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+
+; Enter (or Open ${APP_NAME}) opens ${APP_NAME}; Close and the window's ✕ don't.
+Function AppDoneLeave
+  ${NSD_KillTimer} AppTick
+  ${NSD_KillTimer} AppFade
+  ${If} $AppOpen = 1
+    Call RunMainBinary
+  ${EndIf}
+FunctionEnd
+
+; ---------- the uninstaller ----------
+Function un.AppGuiInit
+  StrCpy $AppPassiveOrig $PassiveMode
+  ${If} $PassiveMode = 1
+    Return
+  ${EndIf}
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR\art"
+  File "${APP_ART}\logo-*.png"
+  File "${APP_ART}\on-*.png"
+  File "${APP_ART}\off-*.png"
+  File "${APP_ART}\b-uninstall-*.png"
+  File "${APP_ART}\b-cancel-*.png"
+  File "${APP_ART}\b-close-*.png"
+  ; [APP] Out of the pictures' folder again: SetOutPath also made it Setup's working folder, and
+  ; Windows can't delete a working folder, so NSIS's own clean-up at exit left it behind, empty, in %TEMP%.
+  SetOutPath "$TEMP"
+  Call un.AppLookInit
+  StrCpy $AppA1 460
+  StrCpy $AppA2 320
+  Call un.AppWindow
+  StrCpy $AppA1 "logo-$AppLook.png"
+  StrCpy $AppA2 160
+  StrCpy $AppA3 44
+  Call un.AppImage
+  StrCpy $AppBmpLogo $AppRet
+  StrCpy $AppA1 "on-$AppLook.png"
+  StrCpy $AppA2 32
+  StrCpy $AppA3 18
+  Call un.AppImage
+  StrCpy $AppBmpOn $AppRet
+  StrCpy $AppA1 "off-$AppLook.png"
+  StrCpy $AppA2 32
+  StrCpy $AppA3 18
+  Call un.AppImage
+  StrCpy $AppBmpOff $AppRet
+FunctionEnd
+
+Function un.AppSetTitle
+  SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$(appUnTitle)"
+FunctionEnd
+
+Function un.AppTick
+  Call un.AppButtonsTick
+FunctionEnd
+
+Function un.AppUnPage
+  StrCpy $PassiveMode $AppPassiveOrig
+  ${If} $PassiveMode = 1
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $AppDialog
+  ${If} $AppDialog == error
+    Abort
+  ${EndIf}
+  Call un.AppHideNav
+  Call un.AppSetTitle
+  !insertmacro AppColors $AppDialog TEXT BG
+  StrCpy $AppHeld 0
+  StrCpy $DeleteAppDataCheckboxState 0
+  StrCpy $AppDeletePrivate 0
+  !insertmacro AppPicture $0 150 18 160 44 $AppBmpLogo
+  !insertmacro AppLabel $0 24 64 412 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
+  !insertmacro AppLabel $0 24 84 412 24 0x50000081 $AppFTitle TEXT BG "$(appUnTitle)"
+  !insertmacro AppLabel $0 24 112 412 36 0x50000081 $AppFBody MUT BG "$(appUnText)"
+  !insertmacro AppLabel $0 24 152 412 1 ${APP_LABEL} $AppFBody LN LN ""
+  ; [APP] Two switches: the settings and lists, and Private mode's files apart (they can't be
+  ; downloaded again, and the first switch never deletes them).
+  !insertmacro AppLabel $0 24 164 350 18 0x50000180 $AppFBody TEXT BG "$(deleteAppData)"
+  ${NSD_OnClick} $0 un.AppToggleData
+  ; [APP] Without the second switch the room under it is free: the line under the switch may
+  ; wrap to three lines (Dobo says exactly which backups go).
+  !if ${APP_EXTRA_DATA_SWITCH} == 1
+  !insertmacro AppLabel $0 24 183 350 16 0x50000180 $AppFTiny MUT BG "$(appUnDataSub)"
+  !else
+  !insertmacro AppLabel $0 24 183 350 46 0x50000180 $AppFTiny MUT BG "$(appUnDataSub)"
+  !endif
+  ${NSD_OnClick} $0 un.AppToggleData
+  !insertmacro AppPicture $AppSwDesk 404 172 32 18 $AppBmpOff
+  ${NSD_OnClick} $AppSwDesk un.AppToggleData
+  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 404 172 32 18 "$(deleteAppData)"
+  ${NSD_OnClick} $AppPxDesk un.AppToggleData
+  !if ${APP_EXTRA_DATA_SWITCH} == 1
+  ; [APP] Optional second switch (APP_EXTRA_DATA_SWITCH in app.nsh): a data folder the first one
+  ; never deletes (Pako: Private mode's encrypted files), deleted only when asked for here.
+  !insertmacro AppLabel $0 24 208 350 18 0x50000180 $AppFBody TEXT BG "$(appUnPrivate)"
+  ${NSD_OnClick} $0 un.AppTogglePrivate
+  !insertmacro AppLabel $0 24 227 350 16 0x50000180 $AppFTiny MUT BG "$(appUnPrivateSub)"
+  ${NSD_OnClick} $0 un.AppTogglePrivate
+  !insertmacro AppPicture $AppSwStart 404 216 32 18 $AppBmpOff
+  ${NSD_OnClick} $AppSwStart un.AppTogglePrivate
+  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 404 216 32 18 "$(appUnPrivate)"
+  ${NSD_OnClick} $AppPxStart un.AppTogglePrivate
+  !endif
+  StrCpy $AppA1 "cancel"
+  StrCpy $AppA2 200
+  Call un.AppLoadButton2
+  !insertmacro AppPicture $AppB2Ctl 24 262 200 40 $AppB2N
+  ${NSD_OnClick} $AppB2Ctl un.AppCancelClick
+  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 24 262 200 40 "Cancel"
+  ${NSD_OnClick} $AppPxB2 un.AppCancelClick
+  StrCpy $AppA1 "uninstall"
+  StrCpy $AppA2 200
+  Call un.AppLoadButton1
+  !insertmacro AppPicture $AppB1Ctl 236 262 200 40 $AppB1N
+  ${NSD_OnClick} $AppB1Ctl un.AppGoClick
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 236 262 200 40 "Uninstall"
+  ${NSD_OnClick} $AppPxB1 un.AppGoClick
+  !insertmacro AppRingMake
+  ${NSD_CreateTimer} un.AppTick 100
+  ${NSD_SetFocus} $AppPxB1
+  nsDialogs::Show
+FunctionEnd
+
+Function un.AppToggleData
+  Pop $0
+  IntOp $DeleteAppDataCheckboxState 1 - $DeleteAppDataCheckboxState
+  ${If} $DeleteAppDataCheckboxState = 1
+    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOn
+  ${Else}
+    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOff
+  ${EndIf}
+  SendMessage $AppPxDesk ${BM_SETCHECK} $DeleteAppDataCheckboxState 0
+FunctionEnd
+
+!if ${APP_EXTRA_DATA_SWITCH} == 1
+Function un.AppTogglePrivate
+  Pop $0
+  IntOp $AppDeletePrivate 1 - $AppDeletePrivate
+  ${If} $AppDeletePrivate = 1
+    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOn
+  ${Else}
+    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOff
+  ${EndIf}
+  SendMessage $AppPxStart ${BM_SETCHECK} $AppDeletePrivate 0
+FunctionEnd
+!endif
+
+Function un.AppGoClick
+  Pop $0
+  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
+FunctionEnd
+Function un.AppCancelClick
+  Pop $0
+  SendMessage $HWNDPARENT ${WM_COMMAND} 2 0
+FunctionEnd
+
+Function un.AppUnLeave
+  ${NSD_KillTimer} un.AppTick
+  StrCpy $AppB1Ctl 0
+  StrCpy $AppB2Ctl 0
+  !insertmacro AppRingNone
+FunctionEnd
+
+Function un.AppInstShow
+  ; A passive run (/P) keeps Windows' plain progress window (nothing of ${APP_NAME}'s look was set up).
+  ${If} $AppPassiveOrig = 1
+    Return
+  ${EndIf}
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Call un.AppHideNav
+  Call un.AppSetTitle
+  FindWindow $0 "#32770" "" $HWNDPARENT
+  StrCpy $AppA1 460
+  StrCpy $AppA2 320
+  Call un.AppPageFill
+  !insertmacro AppRaw $1 $0 STATIC ${APP_PIC} 150 32 160 44 ""
+  SendMessage $1 ${STM_SETIMAGE} 0 $AppBmpLogo
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 78 412 16 "$(appVersion)"
+  SendMessage $1 ${WM_SETFONT} $AppFTiny 1
+  !insertmacro AppColors $1 MUT BG
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 120 412 24 "$(appRemoving)"
+  SendMessage $1 ${WM_SETFONT} $AppFTitle 1
+  !insertmacro AppColors $1 TEXT BG
+  StrCpy $1 24
+  StrCpy $2 160
+  StrCpy $3 412
+  Call un.AppStyleProgress
+  ; Close, for when something goes wrong (AppFail).
+  StrCpy $AppA1 "b-close-n-$AppLook.png"
+  StrCpy $AppA2 412
+  StrCpy $AppA3 40
+  Call un.AppImage
+  StrCpy $AppFailBmp $AppRet
+  StrCpy $1 24
+  StrCpy $2 256
+  StrCpy $3 412
+  Call un.AppFailClose
+  StrCpy $AppInFiles 1
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function un.AppDonePage
+  StrCpy $PassiveMode $AppPassiveOrig
+  ${If} $PassiveMode = 1
+  ${OrIf} $UpdateMode = 1
+    Abort
+  ${EndIf}
+  nsDialogs::Create 1018
+  Pop $AppDialog
+  ${If} $AppDialog == error
+    Abort
+  ${EndIf}
+  Call un.AppHideNav
+  Call un.AppSetTitle
+  !insertmacro AppColors $AppDialog TEXT BG
+  StrCpy $AppB2Ctl 0
+  !insertmacro AppPicture $0 150 32 160 44 $AppBmpLogo
+  !insertmacro AppLabel $0 24 78 412 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
+  !insertmacro AppLabel $0 24 100 412 24 0x50000081 $AppFTitle TEXT BG "$(appUnDone)"
+  !insertmacro AppLabel $0 24 130 412 36 0x50000081 $AppFBody MUT BG "$(appUnDoneText)"
+  StrCpy $AppA1 "close"
+  StrCpy $AppA2 412
+  Call un.AppLoadButton1
+  !insertmacro AppPicture $AppB1Ctl 24 256 412 40 $AppB1N
+  ${NSD_OnClick} $AppB1Ctl un.AppGoClick
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 24 256 412 40 "$(appClose)"
+  ${NSD_OnClick} $AppPxB1 un.AppGoClick
+  !insertmacro AppRingMake
+  StrCpy $AppInFiles 0
+  ; The window's ✕ and Esc close it too (with Cancel off, as Windows leaves it after
+  ; uninstalling, they did nothing).
+  GetDlgItem $0 $HWNDPARENT 2
+  EnableWindow $0 1
+  ${NSD_CreateTimer} un.AppTick 100
+  ${NSD_SetFocus} $AppPxB1
+  nsDialogs::Show
+FunctionEnd
+
+Function un.AppDoneLeave
+  ${NSD_KillTimer} un.AppTick
+FunctionEnd
+!macroend

@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main Dobo window and the quick dump bar",
+  "windows": [
+    "main",
+    "dump"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-focused",
+    "dialog:allow-open"
+  ]
+}

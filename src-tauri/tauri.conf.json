@@ -1,0 +1,101 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dobo",
+  "mainBinaryName": "Dobo",
+  "version": "1.0.0",
+  "identifier": "com.sookera.ztodo",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "Dobo",
+        "width": 744,
+        "height": 900,
+        "minWidth": 380,
+        "minHeight": 420,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "resizable": true,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: asset: http://asset.localhost",
+        "font-src": "'self' data:",
+        "connect-src": "ipc: http://ipc.localhost asset: http://asset.localhost",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-src": "'none'"
+      },
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/pictures/**",
+          "$APPDATA/previews/**",
+          "$APPDATA/backgrounds/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Sookera",
+    "license": "GPL-3.0-only",
+    "homepage": "https://dobo.sookera.com",
+    "copyright": "Copyright (C) 2026 Sookera",
+    "shortDescription": "To-dos & Idea board",
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE.md": "NOTICE.md",
+      "../TERMS.md": "TERMS.md"
+    },
+    "licenseFile": "gen/terms.txt",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "languages": [
+          "English"
+        ],
+        "displayLanguageSelector": false,
+        "customLanguageFiles": {
+          "English": "installer/English.nsh"
+        },
+        "installerHooks": "installer/hooks.nsh",
+        "template": "installer/installer.nsi"
+      }
+    }
+  }
+}

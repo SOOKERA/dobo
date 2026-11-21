@@ -1,0 +1,297 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. */
+/* Fonts are bundled with the app (Latin + Latin Extended only, to stay light). */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url("../node_modules/@fontsource-variable/inter/files/inter-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Newsreader Variable";
+  font-style: normal;
+  font-display: block;
+  font-weight: 200 800;
+  src: url("../node_modules/@fontsource-variable/newsreader/files/newsreader-latin-opsz-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Newsreader Variable";
+  font-style: italic;
+  font-display: block;
+  font-weight: 200 800;
+  src: url("../node_modules/@fontsource-variable/newsreader/files/newsreader-latin-opsz-italic.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Newsreader Variable";
+  font-style: italic;
+  font-display: block;
+  font-weight: 200 800;
+  src: url("../node_modules/@fontsource-variable/newsreader/files/newsreader-latin-ext-opsz-italic.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* Spacing (4 px steps), radii, type. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 14px;
+  --t-xs: 11px;
+  --t-sm: 12px;
+  --t-md: 13px;
+  --t-base: 14px;
+  --t-lg: 15px;
+  --sans: "Inter Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --serif: "Newsreader Variable", Georgia, "Times New Roman", serif;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-glide: cubic-bezier(0.3, 0.8, 0.25, 1);
+
+  /* Light (Fold v3). */
+  --ground: #f2f0eb;
+  --edge: #dcd8cf;
+  --card: #fffefb;
+  --line: #e6e2d9;
+  --ink: #1f1d1a;
+  --soft: #47443f;
+  --muted: #6e6a62;
+  --icon: #55524c;
+  --chip: #eeebe4;
+  --box: #9a968d;
+  --done-box: #bdb9b0;
+  --done-ink: #7a766e;
+  --hover: rgba(31, 29, 26, 0.05);
+  --card-shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 4px 14px rgba(60, 50, 30, 0.04);
+  --lift-shadow: 0 18px 36px rgba(60, 50, 30, 0.22), 0 4px 10px rgba(60, 50, 30, 0.1);
+  --pop-shadow: 0 12px 32px rgba(30, 24, 16, 0.18), 0 2px 6px rgba(30, 24, 16, 0.08);
+  --shell-shadow: 0 8px 24px rgba(20, 16, 10, 0.22), 0 0 0 1px rgba(20, 16, 10, 0.1);
+  --late: #c2410c;
+  --late-ink: #b13a0a;
+  --focus: rgba(31, 29, 26, 0.35);
+  --now-bg: #2b211c;
+  --now-ink: #fbf3ee;
+  --now-muted: #d9c3b8;
+  --now-line: #5e4438;
+  --now-btn: #fbf3ee;
+  --now-btn-ink: #2b211c;
+  --focus-ring: #5d8bc2;
+  --antique: radial-gradient(120% 90% at 30% 15%, #fbf4e2, #f3e7cb 70%, #ead9b3);
+  color-scheme: light;
+}
+
+/* Dark mode: set by the app (Follow Windows, By hours, Always light / dark). */
+:root[data-mode="dark"] {
+  --ground: #161519;
+  --edge: #2b2930;
+  --card: #201f24;
+  --line: #2e2c33;
+  --ink: #eeebe5;
+  --soft: #cfcbc3;
+  --muted: #a39f97;
+  --icon: #b3afa7;
+  --chip: #2b2930;
+  --box: #7c7871;
+  --done-box: #5c5953;
+  --done-ink: #8e8a83;
+  --hover: rgba(255, 255, 255, 0.05);
+  --card-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  --lift-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
+  --pop-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shell-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --late: #e2572a;
+  --late-ink: #ff8a5b;
+  --focus: rgba(238, 235, 229, 0.4);
+  --now-bg: #2a1c17;
+  --now-ink: #f6e9e2;
+  --now-muted: #d3b7a9;
+  --now-line: #5a3a2e;
+  --now-btn: #f6e9e2;
+  --now-btn-ink: #2a1c17;
+  --focus-ring: #7ea6d8;
+  --antique: radial-gradient(120% 90% at 30% 15%, #2c2820, #24211b 70%, #1e1b16);
+  color-scheme: dark;
+}
+
+/* The Now card (light and dark share its warm dark paper). */
+:root {
+  --now-accent: #ff8a5b;
+  --now-check: #c9bbfa;
+  --now-halo: rgba(255, 138, 91, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--sans);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Browser preview only: a desktop behind the transparent window. */
+html.preview body {
+  background: linear-gradient(160deg, #6a7b86 0%, #3f4c57 60%, #2e3740 100%);
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(233, 196, 106, 0.45);
+}
+
+/* Thin scrollbars that match the paper. */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Words found by the Settings search (CSS Custom Highlight API). */
+::highlight(settings-find) {
+  background-color: rgba(233, 196, 106, 0.55);
+  color: inherit;
+}
+
+/* The app's one tooltip (lib/tip.ts): a control's name, then its shortcut as key chips. */
+.ztip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  max-width: 280px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--card);
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 6px 18px rgba(20, 16, 10, 0.2), 0 1px 3px rgba(20, 16, 10, 0.12);
+  pointer-events: none;
+  opacity: 0;
+  translate: 0 3px;
+  transition:
+    opacity 0.14s ease,
+    translate 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ztip.above {
+  translate: 0 -3px;
+}
+.ztip.on {
+  opacity: 1;
+  translate: 0 0;
+}
+/* A long path or link (no spaces) wraps inside the box instead of running out of it. */
+.ztip-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ztip-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ztip kbd {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--card) 28%, transparent);
+  background: color-mix(in srgb, var(--card) 12%, transparent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.ztip-or {
+  margin: 0 2px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ztip,
+  .ztip.above {
+    translate: none;
+  }
+}
+
+/* Switching language: only the words fade (out, change, back in); cards and colours stay. */
+@property --lang-a {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+.lang-swap,
+.lang-swap * {
+  -webkit-text-fill-color: color-mix(in srgb, currentColor calc(var(--lang-a) * 100%), transparent);
+}
+.lang-swap input::placeholder,
+.lang-swap textarea::placeholder {
+  opacity: var(--lang-a);
+}
+
+/* The window's drag areas (lib/windrag): a press there moves the window, never selects words. */
+[data-drag-area] {
+  -webkit-user-select: none;
+  user-select: none;
+}
