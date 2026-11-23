@@ -3,10 +3,14 @@
 // Arrow keys between the choices of a row or a grid (style cards, theme cards, mixes, colour
 // swatches, background chips, the segmented choices): Left / Right step to the previous / next,
 // Up / Down to the one above / below (by where it sits on screen), Home / End to the first /
-// last. Focus moves; Enter or Space picks, as with any button.
+// last. Focus moves; Enter or Space picks, as with any button. In a radio group too: the arrows
+// only move the keyboard, so passing a choice never picks it (each pick is saved, can be undone,
+// may move the window to another screen or restyle the whole app); Space or Enter picks. One Tab
+// stop per group (`roving`): the choice the keyboard is on, else the chosen one. In a row of tabs (a palette's Soft / Vivid / Custom), which
+// only shows another set of choices, the tab follows the arrows.
 
 /** Containers whose buttons are one set of choices. */
-const SETS = ".grid3, .swatches, .papers, .seg, .tabs, .days, .modes, .opts, .chips, .bgchips, .row-sw, [role='radiogroup'], [data-grid]";
+const SETS = ".grid3, .swatches, .papers, .seg, .tabs, .days, .modes, .opts, .chips, .bgchips, .row-sw, [role='radiogroup'], [role='tablist'], [data-grid]";
 
 function typing(el: Element | null): boolean {
   const a = el as HTMLElement | null;
@@ -16,9 +20,53 @@ function typing(el: Element | null): boolean {
 /** The choices of a set: its buttons that belong to it (not to a set inside it), not the ⋯
  * buttons, not disabled, visible. */
 export function choicesOf(set: Element): HTMLElement[] {
+  // (A radio group's choices are its radios, a tab row's its tabs: not a Delete beside one.)
+  const only = set.matches("[role='radiogroup']") ? "[role='radio']" : set.matches("[role='tablist']") ? "[role='tab']" : null;
   return [...set.querySelectorAll<HTMLElement>("button")].filter(
-    (b) => b.closest(SETS) === set && !b.matches(".more, .x, [disabled]") && b.offsetParent !== null,
+    (b) => b.closest(SETS) === set && !b.matches(".more, .x, [disabled]") && (!only || b.matches(only)) && b.offsetParent !== null,
   );
+}
+
+/** The radios of a radio group (or the tabs of a tab row) that are its own. */
+function ownRadios(group: Element): HTMLElement[] {
+  return [...group.querySelectorAll<HTMLElement>("[role='radio'], [role='tab']")].filter((b) => b.closest("[role='radiogroup'], [role='tablist']") === group);
+}
+
+/** On a radio group (or a row of tabs): one Tab stop, as WAI-ARIA has it. While the keyboard is
+ * in the group, the choice it is on (the arrows go between them, gridKey, without picking), so
+ * Tab goes on past the group from there; once the keyboard has left it, the chosen one again
+ * (the first that can be chosen while none is). Kept as the choice changes. */
+export function roving(group: HTMLElement) {
+  const sync = () => {
+    const all = ownRadios(group);
+    const here = group.ownerDocument.activeElement;
+    const on =
+      all.find((b) => b === here && !b.hasAttribute("disabled")) ??
+      all.find((b) => (b.getAttribute("aria-checked") ?? b.getAttribute("aria-selected")) === "true" && !b.hasAttribute("disabled")) ??
+      all.find((b) => !b.hasAttribute("disabled"));
+    for (const b of all) {
+      const ti = b === on ? 0 : -1;
+      if (b.tabIndex !== ti) b.tabIndex = ti;
+    }
+  };
+  sync();
+  const mo = new MutationObserver(sync);
+  mo.observe(group, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-checked", "aria-selected", "disabled"] });
+  // (Leaving: only once the keyboard is outside the group; focus going from one choice to the
+  // next stays in it. Seen after the move, when the document's focus is where it went.)
+  const left = (e: FocusEvent) => {
+    const to = e.relatedTarget as Node | null;
+    if (!to || !group.contains(to)) queueMicrotask(sync);
+  };
+  group.addEventListener("focusin", sync);
+  group.addEventListener("focusout", left);
+  return {
+    destroy: () => {
+      mo.disconnect();
+      group.removeEventListener("focusin", sync);
+      group.removeEventListener("focusout", left);
+    },
+  };
 }
 
 /** Which choice an arrow goes to, from the boxes of the choices (pure, for tests). */
@@ -57,5 +105,7 @@ export function gridKey(e: KeyboardEvent): boolean {
   if (to === from) return true;
   all[to].focus();
   all[to].scrollIntoView({ block: "nearest" });
+  // (In a tab row the tab follows: it only shows its panel. A radio waits for Space or Enter.)
+  if (all[to].matches("[role='tab']")) all[to].click();
   return true;
 }

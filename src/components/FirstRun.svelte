@@ -2,16 +2,24 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   // First launch (FirstRun board): how Dobo sits on the screen, shown with small moving
-  // pictures; then the shortcuts, starting with the computer, and the Sticky Notes import.
+  // pictures; then the shortcuts, starting with the computer, and, when Windows Sticky Notes has
+  // notes, the offer to bring them in (asked, never done by itself).
   import Icon from "./Icon.svelte";
+  import { roving } from "../lib/gridkeys";
   import Logo from "./Logo.svelte";
   import { store } from "../lib/store.svelte";
   import { inTauri } from "../lib/backend";
   import { APP_NAME } from "../lib/app";
-  import { fadeQuick, side } from "../lib/motion";
-  import { around, i18n, keysText, readChoice, switchLanguage, t, type LangChoice, words, type Words } from "../lib/i18n.svelte";
+  import { arrive, easeHeight, fadeQuick, fold, leave, side } from "../lib/motion";
+  import { modal, tabbables } from "../lib/modal";
+  import { onMount, tick } from "svelte";
+  import { askedLanguage, i18n, keysText, readChoice, switchLanguage, t, type LangChoice, words, type Words } from "../lib/i18n.svelte";
 
   let { onDone }: { onDone: () => void } = $props();
+
+  /** How long bringing in Sticky Notes may take before it is said to have failed. */
+  const STICKY_LIMIT_MS = 20_000;
+  class StickyTimeout extends Error {}
 
   let step = $state<1 | 2>(1);
   /** Going back to step 1: the pages slide the other way. */
@@ -21,17 +29,59 @@
   // a portable one start the same way. Installed, it shows what was chosen in Setup
   // (`installer_start`, saved by --install-choices), so finishing here never undoes it.
   let autostart = $state(store.settings.installer_start !== false);
-  let importMsg = $state<Words>("");
-  let imported = $derived(Number(store.settings.sticky_imported ?? 0));
   const isWindows = navigator.userAgent.includes("Windows");
   let osName = $derived(isWindows ? "Windows" : navigator.userAgent.includes("Mac") ? t("your Mac") : t("your computer"));
-  // The language, right here too (it starts as Windows speaks).
+  // The language, right here too: it starts from the setting, the one picked in Dobo Setup
+  // (--install-choices --lang, install.rs) or else as Windows speaks.
   let langChoice = $derived(readChoice(store.settings.language));
   let firstEl = $state<HTMLElement>();
   function setLanguage(c: LangChoice) {
-    if (c !== langChoice) void switchLanguage(c, () => store.setSetting("language", c), firstEl);
+    if (c !== (askedLanguage() ?? langChoice)) void switchLanguage(c, () => store.setSetting("language", c), firstEl);
   }
-  let [stickyBefore, stickyAfter] = $derived(around(t("Your {n} sticky notes are already on the board.", { n: imported }), String(imported)));
+
+  // Windows Sticky Notes: how many an import would bring in (null while that is read; 0 when
+  // there are none, or "Not now" was said at an earlier start: then nothing is shown). Nothing
+  // comes in unless Import is pressed; Settings › Start can bring them in any time.
+  let stickyCount = $state<number | null>(null);
+  /** The offer: asked, being brought in, done, put off, or failed (then asked again). */
+  let sticky = $state<"ask" | "busy" | "done" | "later" | "failed">("ask");
+  let stickyMsg = $state<Words>("");
+  /** Said to screen readers when the offer's answer changes. */
+  let stickySaid = $state("");
+  let stickyEl = $state<HTMLElement>();
+  // The count can come in once this page shows: the offer then unfolds above Back and Start,
+  // moving them down. Never while the pointer is on them (a click aimed at Start would land on
+  // the offer): it unfolds as soon as the pointer leaves them (or they go: Back). Start pressed
+  // before that shows the offer, once, instead of starting (`finish`).
+  let offerShown = $state(false);
+  let onFoot = $state(false);
+  $effect(() => {
+    if (stickyCount && !offerShown && !(step === 2 && onFoot)) offerShown = true;
+  });
+  /** The pointer on Back and Start: kept for as long as they are there (cleared as they go, the
+   * pointer then never leaving them). */
+  function footWatch(node: HTMLElement) {
+    const enter = () => (onFoot = true);
+    const leave = () => (onFoot = false);
+    node.addEventListener("pointerenter", enter);
+    node.addEventListener("pointerleave", leave);
+    return {
+      destroy() {
+        node.removeEventListener("pointerenter", enter);
+        node.removeEventListener("pointerleave", leave);
+        onFoot = false;
+      },
+    };
+  }
+  /** Start was pressed while the offer waited unseen: it was shown instead, once. */
+  let startHeld = false;
+  onMount(() => {
+    if (store.settings.sticky_declined || !(isWindows || !inTauri)) return void (stickyCount = 0);
+    store.backend.countStickyNotes().then(
+      (n) => (stickyCount = n),
+      () => (stickyCount = 0),
+    );
+  });
 
   async function next() {
     await store.setSetting("mode", mode);
@@ -39,20 +89,90 @@
     await store.backend.applyWindow();
     back = false;
     step = 2;
+    await follow(2, null);
+  }
+  /** The keyboard follows from step to step (when it was in the window): to the new step's first
+   * choice, or back to Continue. */
+  async function follow(to: 1 | 2, sel: string | null) {
+    const a = document.activeElement;
+    const keys = !a || a === document.body || !!firstEl?.contains(a);
+    await tick();
+    if (!keys) return;
+    const page = firstEl?.querySelector<HTMLElement>(`.page[data-step="${to}"]:not([inert])`);
+    const el = page && (sel ? page.querySelector<HTMLElement>(sel) : tabbables(page)[0]);
+    el?.focus({ preventScroll: true });
+  }
+  function toStep1() {
+    // (Back and Start go, under the pointer: it is on them no more.)
+    onFoot = false;
+    back = true;
+    step = 1;
+    void follow(1, ".go");
   }
 
   async function bringIn() {
-    importMsg = () => t("Reading Sticky Notes…");
+    if (sticky === "busy") return;
+    sticky = "busy";
+    stickyMsg = () => t("Reading Sticky Notes…");
+    stickySaid = words(stickyMsg);
+    // (Never waited for forever: a Sticky Notes file that can't be read, on a stuck drive for
+    // one. If it does come in after all, it is said then.)
+    const importing = store.backend.importStickyNotes();
+    let limit = 0;
+    const late = new Promise<never>((_, no) => (limit = window.setTimeout(() => no(new StickyTimeout()), STICKY_LIMIT_MS)));
     try {
-      const n = await store.backend.importStickyNotes();
-      await store.reload();
-      importMsg = () => (n ? t("Brought in {n} notes.", { n }) : t("No sticky notes found on this computer."));
+      const n = await Promise.race([importing, late]);
+      await brought(n);
     } catch (e) {
-      importMsg = () => t("Couldn't read Sticky Notes: {error}", { error: String(e) });
+      // Asked again, with what went wrong under the question (Import tries again).
+      const slow = e instanceof StickyTimeout;
+      stickyMsg = () => t("Couldn’t read Sticky Notes: {error}", { error: slow ? t("it took too long") : String(e) });
+      sticky = "failed";
+      stickySaid = words(stickyMsg);
+      if (slow) {
+        importing.then(
+          (n) => {
+            if (sticky === "failed") void brought(n);
+          },
+          () => {},
+        );
+      }
+    } finally {
+      clearTimeout(limit);
     }
+  }
+  async function brought(n: number) {
+    await store.reload();
+    stickyMsg = () => (n ? t("Your {n} sticky notes are on the board now.", { n }) : t("Nothing new to bring in from Sticky Notes."));
+    await answered("done");
+  }
+  /** Not now: remembered (a later start doesn't ask again); Settings › Start still can. */
+  async function notNow() {
+    if (sticky === "busy") return;
+    stickyMsg = () => t("They stay in Sticky Notes. Settings › Start brings them in any time.");
+    await answered("later");
+    await store.setSetting("sticky_declined", Date.now());
+  }
+  /** The offer's answer takes the question's place; the keyboard, if it was on its buttons
+   * (now gone), goes on to Start. */
+  async function answered(how: "done" | "later") {
+    const had = !!stickyEl?.contains(document.activeElement);
+    sticky = how;
+    stickySaid = words(stickyMsg);
+    await tick();
+    if (had) firstEl?.querySelector<HTMLElement>('.page[data-step="2"]:not([inert]) .go')?.focus({ preventScroll: true });
   }
 
   async function finish() {
+    // (Not while the notes are coming in: the window would close before saying how it went.)
+    if (sticky === "busy") return;
+    // (An offer that came in under the pointer, not shown yet: shown now, once, rather than
+    // started past without a word.)
+    if (stickyCount && !offerShown && !startHeld) {
+      startHeld = true;
+      offerShown = true;
+      return;
+    }
     try {
       await store.backend.setAutostart(autostart);
     } catch {
@@ -63,10 +183,11 @@
   }
 </script>
 
-<div class="first" bind:this={firstEl} role="dialog" aria-label={t("Welcome to {app}", { app: APP_NAME })}>
+<!-- (On Start it fades away over the board that is already there, rather than cutting to it.) -->
+<div class="first" bind:this={firstEl} role="dialog" aria-label={t("Welcome to {app}", { app: APP_NAME })} tabindex="-1" use:modal={{ initial: "self" }} out:fadeQuick={{ duration: 200 }}>
   <!-- The window has no title bar: its top strip moves it (lib/windrag), as it stays in view. -->
   <div class="move" data-drag-area aria-hidden="true"></div>
-  <div class="lang" role="radiogroup" aria-label={t("Language")}>
+  <div class="lang" role="radiogroup" use:roving aria-label={t("Language")}>
     {#each [["en", "English"], ["fr", "Français"]] as const as [k, name] (k)}
       <button role="radio" lang={k} aria-checked={i18n.lang === k} class:on={i18n.lang === k} onclick={() => setLanguage(k)}>{name}</button>
     {/each}
@@ -77,7 +198,7 @@
       <h1>{t("How should it sit on your screen?")}</h1>
       <p class="lead">{t("You can change this any time in Settings.")}</p>
 
-      <div class="choices" role="radiogroup" aria-label={t("Window mode")}>
+      <div class="choices" role="radiogroup" use:roving aria-label={t("Window mode")}>
         <button role="radio" aria-checked={mode === "docked"} class:on={mode === "docked"} disabled={!store.win.docked_possible} onclick={() => (mode = "docked")}>
           <div class="pic" aria-hidden="true">
             <div class="win"></div>
@@ -118,7 +239,8 @@
       </div>
 
       <div class="foot">
-        <span class="soft">{t("Next: your shortcuts, and your notes from Sticky Notes")}</span>
+        <!-- (Once it is known whether Sticky Notes has notes to bring in.) -->
+        {#if stickyCount !== null}<span class="soft" in:fadeQuick={{ duration: 220 }}>{stickyCount ? t("Next: your shortcuts, and your notes from Sticky Notes") : t("Next: your shortcuts")}</span>{/if}
         <button class="go" onclick={next}>{t("Continue")}</button>
       </div>
     </div>
@@ -132,40 +254,57 @@
         <div class="row"><span>{t("Open or hide {app}", { app: APP_NAME })}</span><span class="k">{keysText(store.shortcuts.toggle)}</span></div>
         <div class="row"><span>{t("Quick dump into the Inbox")}</span><span class="k">{keysText(store.shortcuts.dump)}</span></div>
         <div class="row"><span>{t("Search, when {app} is open", { app: APP_NAME })}</span><span class="k">{keysText(store.shortcuts.search)}</span></div>
-        <div class="row"><span>{t("A task · an idea · a deadline")}</span><span class="k">{t("Enter · Shift+Enter · end with !")}</span></div>
+        <div class="row"><span>{t("A task · an idea · a deadline")}</span><span class="k">{t("Enter · Shift+Enter · end with\u00a0!")}</span></div>
       </div>
 
       <label class="toggle">
         <span>
-          <b>{t("Start with {os}", { os: osName })}</b>
+          <b>{t("Start {app} with {os}", { app: APP_NAME, os: osName })}</b>
           <small>{t("Reminders only ring while {app} runs; it waits quietly in the tray.", { app: APP_NAME })}</small>
         </span>
         <input type="checkbox" bind:checked={autostart} />
         <span class="sw" aria-hidden="true"></span>
       </label>
 
-      {#if isWindows || !inTauri}
-        <div class="sticky">
-          <Icon name="inbox" size={20} />
-          {#if imported > 0}
-            <span in:fadeQuick={{ duration: 220 }}>{stickyBefore}<b>{imported}</b>{stickyAfter}</span>
-          {:else}
-            <span>{words(importMsg) || t("Bring in the notes you already have in Windows Sticky Notes.")}</span>
-            {#if !importMsg}<button class="small" out:fadeQuick onclick={bringIn}>{t("Bring them in")}</button>{/if}
-          {/if}
-        </div>
+      <!-- Windows Sticky Notes, when it has notes to bring in: a question, answered here. It
+           unfolds if the count comes in after this page; its answer then takes the question's
+           place, the strip easing to its new height. -->
+      {#if stickyCount && offerShown}
+        <section class="sticky" aria-labelledby="sticky-q" aria-busy={sticky === "busy"} bind:this={stickyEl} transition:fold={{ duration: 320 }} use:easeHeight>
+          <div class="stack">
+            {#if sticky === "ask" || sticky === "busy" || sticky === "failed"}
+              <div class="offer" in:arrive out:leave>
+                <span class="ic"><Icon name="inbox" size={20} /></span>
+                <span class="words">
+                  <span class="q" id="sticky-q">{t("Bring in your {n} Windows Sticky Notes?", { n: stickyCount })}</span>
+                  <small id="sticky-more" class:warn={sticky === "failed"}>{sticky === "ask" ? t("A copy comes onto your board; Sticky Notes keeps its own.") : words(stickyMsg)}</small>
+                </span>
+                <span class="acts">
+                  <button class="plain" aria-disabled={sticky === "busy"} onclick={notNow}>{t("Not now")}</button>
+                  <button class="small" aria-disabled={sticky === "busy"} aria-describedby="sticky-more" onclick={bringIn}>{t("Import")}</button>
+                </span>
+              </div>
+            {:else}
+              <div class="offer" in:arrive out:leave>
+                <span class="ic" class:done={sticky === "done"}><Icon name={sticky === "done" ? "check" : "inbox"} size={20} /></span>
+                <span class="words"><span class="q said" id="sticky-q">{words(stickyMsg)}</span></span>
+              </div>
+            {/if}
+          </div>
+          <span class="visually-hidden" aria-live="polite">{stickySaid}</span>
+        </section>
       {/if}
 
-      <div class="foot">
-        <button class="back" onclick={() => ((back = true), (step = 1))}>{t("Back")}</button>
-        <button class="go" onclick={finish}>{t("Start (button)")}</button>
+      <div class="foot" use:footWatch>
+        <button class="back" onclick={toStep1}>{t("Back")}</button>
+        <button class="go" aria-disabled={sticky === "busy"} onclick={finish}>{t("Start (button)")}</button>
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  /* The language, in the corner (it starts as Windows speaks). */
+  /* The language, in the corner (it starts as the setting says: Setup's choice, or Windows). */
   .lang {
     position: absolute;
     top: 16px;
@@ -183,7 +322,7 @@
     border: 0;
     border-radius: 999px;
     background: transparent;
-    color: var(--muted);
+    color: var(--soft);
     font: inherit;
     font-size: var(--t-sm);
     cursor: pointer;
@@ -479,6 +618,12 @@
     font-size: var(--t-base);
     font-weight: 600;
     cursor: pointer;
+    transition: opacity 0.2s var(--ease-glide);
+  }
+  /* (While the notes come in: Start waits.) */
+  .go[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: default;
   }
   .back {
     height: 44px;
@@ -575,43 +720,138 @@
     transform: translateX(18px);
   }
   .toggle input:focus-visible + .sw {
-    outline: 2px solid var(--focus);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
+  /* The Sticky Notes offer: a sticky note of its own, under the switch above (same width,
+     padding and corners). The icon sits level with the question's line; the buttons to the
+     right, centred on the words (under them, right-aligned, when it is narrow). */
   .sticky {
     margin-top: 14px;
     max-width: 620px;
-    display: flex;
-    align-items: center;
-    gap: var(--s3);
     padding: 14px var(--s4);
     border-radius: var(--r-lg);
     background: #fbf4df;
     color: #4a3c14;
     font-size: var(--t-base);
   }
-  .sticky span {
-    flex: 1;
+  .stack {
+    position: relative;
+    display: grid;
   }
-  .small {
+  .offer {
+    grid-area: 1 / 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--s3);
+    row-gap: 10px;
+  }
+  .ic {
+    flex-shrink: 0;
+    align-self: flex-start;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    /* The question's line box: the icon is centred on it. */
+    height: 20px;
+  }
+  .ic.done {
+    color: #6d8f4e;
+  }
+  .words {
+    flex: 1 1 220px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .q {
+    line-height: 20px;
+    font-weight: 600;
+  }
+  /* The answer: said, not asked. */
+  .q.said {
+    font-weight: 500;
+  }
+  .words small {
+    font-size: var(--t-sm);
+    line-height: 17px;
+    color: #7a6a3e;
+  }
+  .words small.warn {
+    color: #9a3b26;
+  }
+  .acts {
+    flex-shrink: 0;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .small,
+  .plain {
     height: 32px;
     padding: 0 var(--s3);
-    border: 1px solid #eadba9;
     border-radius: var(--r-md);
-    background: #fffefb;
-    color: #4a3c14;
     font-size: var(--t-md);
     font-weight: 500;
     cursor: pointer;
+    transition:
+      background-color 0.18s,
+      border-color 0.18s,
+      color 0.18s,
+      opacity 0.18s;
+  }
+  .small {
+    border: 1px solid #eadba9;
+    background: #fffefb;
+    color: #4a3c14;
+  }
+  .small:hover {
+    border-color: #d9c68a;
+  }
+  .plain {
+    border: 1px solid transparent;
+    background: transparent;
+    color: #7a6a3e;
+  }
+  .plain:hover {
+    background: rgba(74, 60, 20, 0.07);
+    color: #4a3c14;
+  }
+  .small[aria-disabled="true"],
+  .plain[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: default;
   }
   :global(:root[data-mode="dark"]) .sticky {
     background: rgba(217, 169, 40, 0.12);
     color: #ead9a0;
   }
+  :global(:root[data-mode="dark"]) .words small {
+    color: #bfae78;
+  }
+  :global(:root[data-mode="dark"]) .words small.warn {
+    color: #f0a48f;
+  }
+  :global(:root[data-mode="dark"]) .ic.done {
+    color: #a9c98a;
+  }
   :global(:root[data-mode="dark"]) .small {
     background: transparent;
     color: #ead9a0;
     border-color: #5e4b19;
+  }
+  :global(:root[data-mode="dark"]) .small:hover {
+    border-color: #7c6526;
+  }
+  :global(:root[data-mode="dark"]) .plain {
+    color: #bfae78;
+  }
+  :global(:root[data-mode="dark"]) .plain:hover {
+    background: rgba(234, 217, 160, 0.08);
+    color: #ead9a0;
   }
   @container shell (max-width: 560px) {
     .page {
@@ -630,5 +870,20 @@
     .page {
       padding-top: 56px;
     }
+  }
+  /* Narrow: each key under what it does (beside it, a long one squeezed the words to a column),
+     as in Settings › Keyboard. */
+  @container shell (max-width: 420px) {
+    .row {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 0;
+    }
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .first:focus {
+    outline: none;
   }
 </style>

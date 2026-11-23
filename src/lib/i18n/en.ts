@@ -8,15 +8,17 @@ import type { Entry, Key } from "../i18n.svelte";
 export const en: Partial<Record<Key, Entry>> = {
   "Added {n} notes from Sticky Notes.": { one: "Added {n} note from Sticky Notes.", other: "Added {n} notes from Sticky Notes." },
   "{n} ideas": { one: "{n} idea", other: "{n} ideas" },
+  "{n} results": { one: "{n} result", other: "{n} results" },
   "{n} tasks": { one: "{n} task", other: "{n} tasks" },
   "{a} of {n} steps done": { one: "{a} of {n} step done", other: "{a} of {n} steps done" },
   "Every (weeks)": "Every",
   "day(s)": { one: "day", other: "days" },
   "week(s)": { one: "week", other: "weeks" },
   "month(s)": { one: "month", other: "months" },
-  "Your {n} sticky notes are already on the board.": { one: "Your {n} sticky note is already on the board.", other: "Your {n} sticky notes are already on the board." },
-  "Brought in {n} notes.": { one: "Brought in {n} note.", other: "Brought in {n} notes." },
+  "Bring in your {n} Windows Sticky Notes?": { one: "Bring in your note from Windows Sticky Notes?", other: "Bring in your {n} Windows Sticky Notes?" },
+  "Your {n} sticky notes are on the board now.": { one: "Your sticky note is on the board now.", other: "Your {n} sticky notes are on the board now." },
   "Start (button)": "Start",
+  "Copied (text)": "Copied",
   "{n} themes": { one: "{n} theme", other: "{n} themes" },
   "{n} styles": { one: "{n} style", other: "{n} styles" },
   "{n} mixes": { one: "{n} mix", other: "{n} mixes" },
@@ -24,6 +26,7 @@ export const en: Partial<Record<Key, Entry>> = {
   "Deleted “{name}” (look)": "Deleted “{name}”",
   "{n} new": { one: "{n} new", other: "{n} new" },
   "Next (tour)": "Next",
+  "folded (inbox strip)": "folded",
   "Done (tour)": "Done",
   "Deleted {n} archived notes": { one: "Deleted {n} archived note", other: "Deleted {n} archived notes" },
   "{n} notes put away, their reminders quiet. Restore or delete them there.": {
@@ -31,6 +34,7 @@ export const en: Partial<Record<Key, Entry>> = {
     other: "{n} notes put away, their reminders quiet. Restore or delete them there.",
   },
   "{n} notes": { one: "{n} note", other: "{n} notes" },
+  "{n} lines": { one: "{n} line", other: "{n} lines" },
   "{n} notes match": { one: "{n} note matches", other: "{n} notes match" },
   "and {n} more": { one: "and {n} more", other: "and {n} more" },
   "and {n} more lines": { one: "and {n} more line", other: "and {n} more lines" },
@@ -39,4 +43,7 @@ export const en: Partial<Record<Key, Entry>> = {
   "Small (size)": "Small",
   "Normal (size)": "Normal",
   "Large (size)": "Large",
+  "Studio (sample note)": "Studio",
+  // (As the French says it: "My theme (copy)".)
+  "{name} copy": "{name} (copy)",
 };

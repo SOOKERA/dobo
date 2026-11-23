@@ -10,6 +10,7 @@
 import { baseHex, colourOf, lookIsDark, type Look, type WcLook } from "./looks";
 import { paintSteps, release, svgBitmap, wcPlan, type PaintStep, type Raster } from "./watercolour";
 import { loadStored, store as storePainting } from "./paintStore";
+import { calmMoment, interrupt } from "./calm";
 
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
@@ -43,6 +44,14 @@ const idleTime = async () => {
     else setTimeout(() => r(null), 16);
   });
 };
+// A painting no one waits for (made ahead: priority under URGENT) starts its next step only in a
+// calm moment (calm.ts): readying a step lays out an SVG picture on the main thread, so it must
+// never land while the user is doing something. It gives way as soon as someone waits.
+const urgentWaiting = () => queue.some((j) => !j.cancelled && j.pr.v >= URGENT);
+const calmTime = async (job: Job) => {
+  if (deadline && deadline.timeRemaining() > 8) return;
+  deadline = await calmMoment(() => job.pr.v >= URGENT || urgentWaiting());
+};
 
 function fill(job: Job) {
   const want = job.pr.v >= 10 ? 3 : 1;
@@ -59,7 +68,13 @@ async function pump() {
   try {
     while (queue.length) {
       queue.sort((a, b) => b.pr.v - a.pr.v);
-      const job = queue[0];
+      let job = queue[0];
+      if (!job.cancelled && job.pr.v < URGENT && !job.ahead.length) {
+        await calmTime(job);
+        // (Someone may have asked for a picture meanwhile: theirs first.)
+        queue.sort((a, b) => b.pr.v - a.pr.v);
+        job = queue[0];
+      }
       if (!job.cancelled) fill(job);
       if (job.cancelled || !job.ahead.length) {
         for (const a of job.ahead) void a.img.then(release);
@@ -69,7 +84,8 @@ async function pump() {
       }
       const { step, img } = job.ahead.shift()!;
       const ready = await img;
-      fill(job);
+      // (The next steps are readied ahead only for someone waiting.)
+      if (job.pr.v >= URGENT) fill(job);
       if (job.pr.v < URGENT) await idleTime();
       if (ready && !job.cancelled) {
         step.draw(ready);
@@ -89,6 +105,8 @@ function enqueue(gen: Generator<PaintStep>, pr: { v: number }, onStep?: () => vo
     job = { gen, ahead: [], ended: false, pr, cancelled: false, onStep, resolve };
   });
   queue.push(job);
+  // (Someone waits for this one: a painting made ahead, waiting for a calm moment, gives way now.)
+  if (pr.v >= URGENT) interrupt();
   void pump();
   return { done, cancel: () => (job.cancelled = true) };
 }
@@ -204,6 +222,7 @@ const priorities = new WeakMap<Painting, { v: number }>();
 function raise(p: Painting, to: number) {
   const pr = priorities.get(p);
   if (pr && pr.v < to) pr.v = to;
+  if (to >= URGENT) interrupt();
 }
 
 /** A swatch's painting: laid out at the board's shape (shrunk to cover the swatch) or at the

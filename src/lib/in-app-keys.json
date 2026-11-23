@@ -1,0 +1,28 @@
+{
+  "_": "The keys Dobo uses inside its own window, which a global shortcut (or the search shortcut) may never take. Read by src-tauri/src/lib.rs (IN_APP_KEYS must be this list) and by keyboard.test.ts (each one is a key Dobo's handlers use). Each: the shortcut as Rust reads it, what it does, and the key press it stands for.",
+  "keys": [
+    { "accel": "Ctrl+Shift+S", "what": "style", "key": "S", "code": "KeyS", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+Shift+P", "what": "settings", "key": "P", "code": "KeyP", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+Comma", "what": "settings", "key": ",", "code": "Comma", "ctrl": true },
+    { "accel": "Ctrl+Z", "what": "undo", "key": "z", "code": "KeyZ", "ctrl": true },
+    { "accel": "Ctrl+Y", "what": "undo", "key": "y", "code": "KeyY", "ctrl": true },
+    { "accel": "Ctrl+Shift+Z", "what": "undo", "key": "Z", "code": "KeyZ", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+Equal", "what": "size", "key": "=", "code": "Equal", "ctrl": true },
+    { "accel": "Ctrl+Shift+Equal", "what": "size", "key": "+", "code": "Equal", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+NumpadAdd", "what": "size", "key": "+", "code": "NumpadAdd", "ctrl": true },
+    { "accel": "Ctrl+Minus", "what": "size", "key": "-", "code": "Minus", "ctrl": true },
+    { "accel": "Ctrl+Shift+Minus", "what": "size", "key": "_", "code": "Minus", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+NumpadSubtract", "what": "size", "key": "-", "code": "NumpadSubtract", "ctrl": true },
+    { "accel": "Ctrl+Digit6", "what": "size", "key": "-", "code": "Digit6", "ctrl": true, "layout": "AZERTY's − key" },
+    { "accel": "Ctrl+Digit8", "what": "size", "key": "_", "code": "Digit8", "ctrl": true, "layout": "AZERTY's _ key" },
+    { "accel": "Ctrl+Digit0", "what": "size", "key": "0", "code": "Digit0", "ctrl": true },
+    { "accel": "Ctrl+Shift+Digit0", "what": "size", "key": ")", "code": "Digit0", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+Numpad0", "what": "size", "key": "0", "code": "Numpad0", "ctrl": true },
+    { "accel": "Ctrl+ArrowUp", "what": "move", "key": "ArrowUp", "code": "ArrowUp", "ctrl": true },
+    { "accel": "Ctrl+ArrowDown", "what": "move", "key": "ArrowDown", "code": "ArrowDown", "ctrl": true },
+    { "accel": "Ctrl+Shift+ArrowUp", "what": "move", "key": "ArrowUp", "code": "ArrowUp", "ctrl": true, "shift": true },
+    { "accel": "Ctrl+Shift+ArrowDown", "what": "move", "key": "ArrowDown", "code": "ArrowDown", "ctrl": true, "shift": true },
+    { "accel": "Alt+ArrowLeft", "what": "back", "key": "ArrowLeft", "code": "ArrowLeft", "alt": true },
+    { "accel": "Alt+ArrowRight", "what": "back", "key": "ArrowRight", "code": "ArrowRight", "alt": true }
+  ]
+}

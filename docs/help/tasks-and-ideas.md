@@ -42,7 +42,9 @@ Every note ends with **+ Add**. Click it, or click the empty space of a note, an
 - **Edit a line**: double-click it (or select it and press **Enter** or **F2**). **Enter** saves, **Esc** leaves.
 - **Delete a line**: its menu › **Delete**, or select it and press **Delete**.
 - **Move a line**: press on its words and drag it onto another note, onto a task (it becomes a step) or onto the Inbox strip. **Esc** while carrying sends it back.
-- **A task's menu** (**⋯** on the line): its time, **Pick on today's hours**, **Repeat**, **Kind of reminder**, **Add a step**, **Make it an idea**.
+- **A task's menu** (**⋯** on the line, or right-click it): its time, **Pick on today's hours**, **Repeat**, **Kind of reminder**, **Add a step**, **Copy text**, **Make it an idea**.
+- **An idea's menu** (right-click it): **Copy text**, **Make it a task**, **Delete**.
+- **Copy text** copies the line's words, with its link's address and its file's path each on a line of their own; a short "Copied" says it's done.
 
 ## Task or idea
 
@@ -54,10 +56,11 @@ A task that becomes an idea leaves its time behind.
 
 ## Dates written in a note
 
-When you edit a task and write a day and a time in it ("Call the client demain 9h"), the date gets a dotted line and a **Remind?** offer. **Enter** adds the reminder, **Esc** leaves it. In **Settings › Notes › Dates written in a note** choose **Ask** (as described), **Automatic** (only when the date is certain, a day and an hour like "lundi 14h30") or **Off**.
+When you edit a task and write a day and a time in it ("Call the client tomorrow 9am"), the date gets a dotted line and a **Remind?** offer. **Enter** adds the reminder, **Esc** leaves it. In **Settings › Notes › Dates written in a note** choose **Ask** (as described), **Automatic** (only when the date is certain, a day and an hour like "Monday 2:30pm") or **Off**.
 
 ## Pictures and files
 
 - **Paste a picture** (**Ctrl+V**) with the mouse over a note: it joins that note's pictures. Pasted into the entry line or the dump bar, it comes in as a new line in the Inbox.
-- **Drop files** from File Explorer onto a note. Pictures join the note's pictures; other files become a line with a file card. Click the card to open the file. Dobo never starts programs or scripts from a card.
+- **Drop files** from File Explorer onto a note. Pictures join the note's pictures; other files become a line with a file card. Click the card to open the file. Dobo never starts programs or scripts from a card: it shows them in their folder instead. When a file can't open (moved, deleted), the card says why.
+- **A file on another computer** (a shared folder, a NAS): the first time, the card asks once for that computer, "Files on nas open from the network. Allow?" **Allow** opens it, and that computer's files open from then on; **Not now** leaves it. (Opening it sends your Windows sign-in to that computer: see [Privacy](privacy.md#files-on-another-computer).)
 - A note shows one picture large, with arrows when there are more. Double-click it for the viewer: **←** / **→** to browse, **Copy picture**, **Open in Photos**, **Remove**. **Esc** closes.

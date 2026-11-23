@@ -111,7 +111,7 @@
     {/if}
     <span class="end">
       {#if waiting}
-        <button class="tidy" data-tour="tidy" transition:widen={{ gap: 8 }} data-tip={t("Tidy the inbox, one card at a time")} onclick={() => window.dispatchEvent(new CustomEvent("dobo-tidy"))}>{t("Tidy")}</button>
+        <button class="tidy" data-tour="tidy" transition:widen={{ gap: 8 }} data-tip={t("Tidy the Inbox, one card at a time")} onclick={() => window.dispatchEvent(new CustomEvent("dobo-tidy"))}>{t("Tidy")}</button>
       {/if}
       <button
         class="small pin"

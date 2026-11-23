@@ -6,6 +6,60 @@
 ; ${APP_NAME} Setup's own window (the slides, the options, the progress, the uninstaller's look).
 ; [APP] The app's own settings (name, exe, colours, switches...): copy app.example.nsh to app.nsh.
 !include "${__FILEDIR__}\app.nsh"
+; [APP] French (template 1.1.0): off unless app.nsh says !define APP_FRENCH 1. With it on, every text
+; app.nsh gives needs its French twin (<name>_FR), and the build stops here naming any missing one.
+!ifndef APP_FRENCH
+  !define APP_FRENCH 0
+!endif
+; [APP] Optional (template 1.1.0): what the uninstaller says when the app's --uninstall-cleanup
+; kept the data because another copy of the app is open (its exit code 2). An app.nsh that sets
+; APP_UN_KEPT sets APP_UN_KEPT_FR too when French is on.
+!ifndef APP_UN_KEPT
+  !define APP_UN_KEPT "Another ${APP_NAME} is open, so ${APP_NAME}'s settings and lists were kept. To delete them, close that ${APP_NAME}, then delete the ${APP_NAME} folder in %LOCALAPPDATA%."
+  !ifndef APP_UN_KEPT_FR
+    !define APP_UN_KEPT_FR "Un autre ${APP_NAME} est ouvert : les paramètres et listes de ${APP_NAME} ont été gardés. Pour les supprimer, fermez cet autre ${APP_NAME}, puis supprimez le dossier ${APP_NAME} dans %LOCALAPPDATA%."
+  !endif
+!endif
+; [APP] Optional (template 1.1.1): the dark look's accent, for an app whose colour is too dark to
+; read on it (the art config's accentDark says the same). Default: APP_ACCENT in both looks.
+!ifndef APP_ACCENT_DARK
+  !define APP_ACCENT_DARK ${APP_ACCENT}
+!endif
+; [APP] Optional (template 1.1.1): the colour of the language not shown in English | Français:
+; "accent" (like the window's links, the default) or "grey" (for an accent close to the text
+; colour, where the two words would look the same).
+!ifndef APP_LANG_OTHER
+  !define APP_LANG_OTHER "accent"
+!endif
+!if "${APP_LANG_OTHER}" == "grey"
+  !define APP_LANG_OTHER_COLOR MUT
+!else if "${APP_LANG_OTHER}" == "accent"
+  !define APP_LANG_OTHER_COLOR ACCENT
+!else
+  !error 'APP_LANG_OTHER is "${APP_LANG_OTHER}": write "accent" or "grey".'
+!endif
+!if ${APP_FRENCH} == 1
+  !macro AppNeedFr NAME
+    !ifndef ${NAME}_FR
+      !error "APP_FRENCH is on: app.nsh needs ${NAME}_FR, the French twin of ${NAME}."
+    !endif
+  !macroend
+  !insertmacro AppNeedFr APP_TAGLINE
+  !insertmacro AppNeedFr APP_IS_OPEN_NOTE
+  !insertmacro AppNeedFr APP_UN_KEEPS
+  !insertmacro AppNeedFr APP_UN_DATA_SUB
+  !insertmacro AppNeedFr APP_UN_DONE_TEXT
+  !insertmacro AppNeedFr APP_CHOICES_FAILED
+  !insertmacro AppNeedFr APP_UN_KEPT
+  ; The extra-data switch's words: only when it is shown.
+  !if ${APP_EXTRA_DATA_SWITCH} == 1
+    !insertmacro AppNeedFr APP_EXTRA_DATA_LABEL
+    !insertmacro AppNeedFr APP_EXTRA_DATA_SUB
+  !else
+    !define /ifndef APP_EXTRA_DATA_LABEL_FR ""
+    !define /ifndef APP_EXTRA_DATA_SUB_FR ""
+  !endif
+!endif
 !include "${__FILEDIR__}\ui.nsh"
 ; [APP] Both set up the window before it shows (installer/ui.nsh).
 !define MUI_CUSTOMFUNCTION_GUIINIT AppGuiInit
@@ -258,8 +312,9 @@ FunctionEnd
   FileOpen $0 "$INSTDIR\${APP_MARKER}" w
   ${If} ${Errors}
     ; Said under the bar, with Close (installer/ui.nsh: AppFail).
-    !insertmacro AppFail "$(appFailInstall)"
-    Abort "$(appFailInstall)"
+    !insertmacro AppT $AppTx appFailInstall
+    !insertmacro AppFail $AppTx
+    Abort $AppTx
   ${EndIf}
   FileWrite $0 "Installed by ${APP_NAME} Setup. ${APP_NAME} keeps your notes in %APPDATA%\${APP_IDENTIFIER}.$\r$\n"
   FileClose $0
@@ -284,6 +339,18 @@ FunctionEnd
     StrCpy $1 '"$INSTDIR\${MAINBINARYNAME}.exe" --install-choices --start-with-windows=$AppStart --browsers=$AppBrowsers --terms-accepted=1'
     !else
     StrCpy $1 '"$INSTDIR\${MAINBINARYNAME}.exe" --install-choices --start-with-windows=$AppStart --terms-accepted=1'
+    !endif
+    ; [APP] --lang=en|fr: the window's language (apps with French on only), so the app starts in
+    ; it (app-side/install.rs). Only when it was picked in the window. Nothing picked, the app
+    ; keeps the language it has: its default for a new install (English, the window's first
+    ; language too), or the one a portable copy already uses over the same data, an update, a
+    ; reinstall… "Nothing saved yet" doesn't mean "chosen": a silent install saves nothing, and
+    ; a portable copy's data may say French. (The installed app then notes its own language for
+    ; the uninstaller: README, The app's language.)
+    !if ${APP_FRENCH} == 1
+    ${If} $AppLangPicked = 1
+      StrCpy $1 '$1 --lang=$AppLang'
+    ${EndIf}
     !endif
     ; STARTUPINFOW (68 bytes in a 32-bit Setup, 104 in a 64-bit one), PROCESS_INFORMATION.
     System::Alloc 104
@@ -331,6 +398,10 @@ FunctionEnd
 ; A "start with Windows" entry left by another ${APP_NAME} (a portable copy): Tauri deletes the "${APP_NAME}"
 ; value after PREUNINSTALL whatever it starts, so it's put back in POSTUNINSTALL.
 Var AppOtherRun
+; An app.nsh made before template 1.0.4 has no APP_START_ARG.
+!ifndef APP_START_ARG
+  !define APP_START_ARG "--tray"
+!endif
 ; 1 = ${APP_EXE} couldn't delete the data: this uninstaller deletes what it knows itself.
 Var AppDeleteHere
 ; The uninstall-cleanup switches ("--delete-data", "--delete-private").
@@ -364,10 +435,13 @@ Var AppUnArgs
     ${OrIf} $AppDeletePrivate = 1
       ${If} $0 = 2
         ; Another ${APP_NAME} is open (a portable copy): it may use the same folders. Nothing is
-        ; deleted, also not by Tauri below.
+        ; deleted, also not by Tauri below. [APP] Also when a portable Dobo uses these notes (it
+        ; noted so in them: .dobo-portable-copies, src-tauri/src/paths.rs).
         StrCpy $DeleteAppDataCheckboxState 0
         StrCpy $AppDeletePrivate 0
-        MessageBox MB_ICONINFORMATION|MB_OK "Another ${APP_NAME} is open, so your notes were kept. To delete them, close that ${APP_NAME}, then delete the ${APP_IDENTIFIER} folder in %APPDATA%." /SD IDOK
+        ; [APP] The words: English.nsh / French.nsh (appOtherOpen).
+        !insertmacro AppT $AppTx appOtherOpen
+        MessageBox MB_ICONINFORMATION|MB_OK $AppTx /SD IDOK
       ${ElseIf} $0 <> 0
         StrCpy $AppDeleteHere 1
       ${EndIf}
@@ -375,11 +449,12 @@ Var AppUnArgs
     ; This copy's entry is gone by now: one still there is another ${APP_NAME}'s (unless ${APP_EXE}
     ; couldn't run).
     ReadRegStr $AppOtherRun HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
-    ; [APP] Dobo's entry (tauri-plugin-autostart) is the exe unquoted, then " --hidden".
+    ; Quoted or not, with or without APP_START_ARG (tauri-plugin-autostart writes it unquoted).
+    ; [APP] Dobo 1.1 writes it quoted ("<exe>" --hidden); 1.0 wrote it unquoted.
     ${If} $AppOtherRun == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
-    ${OrIf} $AppOtherRun == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --hidden"
-    ${OrIf} $AppOtherRun == "$INSTDIR\${MAINBINARYNAME}.exe --hidden"
+    ${OrIf} $AppOtherRun == "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" ${APP_START_ARG}"
     ${OrIf} $AppOtherRun == "$INSTDIR\${MAINBINARYNAME}.exe"
+    ${OrIf} $AppOtherRun == "$INSTDIR\${MAINBINARYNAME}.exe ${APP_START_ARG}"
       StrCpy $AppOtherRun ""
     ${EndIf}
   ${EndIf}

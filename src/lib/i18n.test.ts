@@ -13,6 +13,9 @@ import type { Note } from "./types";
 
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 const forms = (e: Entry) => (typeof e === "string" ? [e] : [e.one, e.other]);
+/** The placeholders a form must have: all of the key's, except that a plural's "one" may leave
+ * out its number ("Your note", not "Your 1 note"). */
+const expected = (e: Entry, f: string, want: string[]) => (typeof e !== "string" && f === e.one && !f.includes("{n}") ? want.filter((p) => p !== "n") : want);
 
 afterEach(() => {
   i18n.choice = "en";
@@ -24,7 +27,7 @@ describe("the French dictionary", () => {
       const want = placeholders(key);
       for (const f of forms(value)) {
         expect(f.trim(), key).not.toBe("");
-        expect(placeholders(f), `${key} → ${f}`).toEqual(want);
+        expect(placeholders(f), `${key} → ${f}`).toEqual(expected(value, f, want));
       }
     }
   });
@@ -33,7 +36,7 @@ describe("the French dictionary", () => {
     for (const [key, value] of Object.entries(en) as [Key, Entry][]) {
       expect(key in fr, key).toBe(true);
       const want = placeholders(key.replace(/ \([a-z ]+\)$/, ""));
-      for (const f of forms(value!)) expect(placeholders(f), key).toEqual(want);
+      for (const f of forms(value!)) expect(placeholders(f), key).toEqual(expected(value!, f, want));
       if (typeof value !== "string") expect(typeof fr[key], `${key} is a plural in English, so in French too`).toBe("object");
     }
     for (const [key, value] of Object.entries(fr)) if (typeof value !== "string") expect(key in en, `${key} needs an English plural`).toBe(true);
@@ -71,7 +74,7 @@ describe("t()", () => {
     expect(t("{n} ideas", { n: 0 })).toBe("0 idée");
     expect(t("{n} ideas", { n: 1 })).toBe("1 idée");
     expect(t("{n} tasks", { n: 3 })).toBe("3 tâches");
-    expect(t("Couldn't back up: {error}", { error: "x" })).toBe("Sauvegarde impossible : x");
+    expect(t("Couldn’t back up: {error}", { error: "x" })).toBe("Sauvegarde impossible : x");
     expect(t("Is “{text}” really done?", { text: "Payer" })).toBe("« Payer », vraiment fini ?");
   });
 
@@ -79,6 +82,11 @@ describe("t()", () => {
     i18n.choice = "fr";
     expect(tMaybe("Cork board")).toBe("Panneau liège");
     expect(tMaybe("My lovely cork")).toBe("My lovely cork");
+  });
+
+  it("frType keeps a quoted « ! » whole", () => {
+    expect(frType("avec « ! » devant")).toBe("avec « ! » devant");
+    expect(frType("tapez « ? » ici ?")).toBe("tapez « ? » ici ?");
   });
 
   it("frType puts the right spaces", () => {
@@ -181,6 +189,11 @@ describe("French wording decisions", () => {
     const ours = OUR_THEMES.find((x) => x.id === "plain")!;
     expect(themeShownName({ name: ours.name, light: ours.light, dark: ours.dark })).toBe(tMaybe(ours.name));
     expect(themeShownName({ name: ours.name, light: ours.light, dark: OUR_THEMES[0].dark })).toBe(ours.name);
-    expect(tIn("fr", "Your {n} sticky notes are already on the board.", { n: 1 })).toBe("1 note est déjà sur le tableau.");
+    expect(tIn("fr", "Your {n} sticky notes are on the board now.", { n: 1 })).toBe("Votre note est maintenant sur le tableau.");
+    expect(tIn("fr", "Your {n} sticky notes are on the board now.", { n: 3 })).toBe("Vos 3 notes sont maintenant sur le tableau.");
+    expect(tIn("fr", "Bring in your {n} Windows Sticky Notes?", { n: 1 })).toBe("Récupérer votre note de Pense-bêtes ?");
+    expect(tIn("fr", "Bring in your {n} Windows Sticky Notes?", { n: 3 })).toBe("Récupérer vos 3 notes de Pense-bêtes ?");
+    expect(tIn("en", "Bring in your {n} Windows Sticky Notes?", { n: 1 })).toBe("Bring in your note from Windows Sticky Notes?");
+    expect(tIn("en", "Your {n} sticky notes are on the board now.", { n: 1 })).toBe("Your sticky note is on the board now.");
   });
 });

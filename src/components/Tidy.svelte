@@ -5,16 +5,22 @@
   // note (one is suggested), and where in it — a new task, a step of a task, or the first step
   // of an idea. Keys: T / I, 1–9, Up/Down, Enter, D (delete), L (keep for later).
   import { composing } from "../lib/compose";
+  import { roving } from "../lib/gridkeys";
   import { untrack } from "svelte";
   import ViewHeader from "./ViewHeader.svelte";
   import LinkCard from "./LinkCard.svelte";
   import FileCard from "./FileCard.svelte";
   import { store } from "../lib/store.svelte";
+  import { thumbs } from "../lib/thumbs.svelte";
   import { normalize, parseCapture } from "../lib/capture";
   import { formatDueLong, hhmm } from "../lib/time";
   import { pushLayer } from "../lib/layers";
+  import { digitKey, latinKey } from "../lib/keyboard";
+  import { isTopModal, modal } from "../lib/modal";
   import { arrive, crumbIn, crumbOut, fadeQuick, fold, sheet, widen } from "../lib/motion";
   import { swatchOf } from "../lib/palette";
+  import { toastAbove } from "../lib/toastroom.svelte";
+  import { look } from "../lib/look.svelte";
   import type { Item, Kind, Note } from "../lib/types";
   import { keysText, t } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
@@ -22,6 +28,7 @@
   let { onClose }: { onClose: () => void } = $props();
 
   $effect(() => pushLayer(onClose));
+  let tidyEl = $state<HTMLElement>();
 
   // The queue is taken when tidying starts; "later" sends a card to the end.
   let queue = $state<number[]>(untrack(() => store.inboxWaiting.map((i) => i.id)));
@@ -55,10 +62,28 @@
 
   let notes = $derived(store.notes.filter((n) => !n.archived && !store.inboxIds.has(n.id) && (store.view === "all" || n.space === store.view)));
 
+  // Each text's words worked out once (the same lines come back card after card), and each
+  // note's words with how often they come, gathered in one pass over the lines.
+  const wordCache = new Map<string, string[]>();
+  const wordsOf = (s: string) => {
+    let w = wordCache.get(s);
+    if (!w) wordCache.set(s, (w = words(s)));
+    return w;
+  };
+  let noteWords = $derived.by(() => {
+    const by = new Map<number, Map<string, number>>();
+    for (const it of store.items) {
+      let m = by.get(it.note_id);
+      if (!m) by.set(it.note_id, (m = new Map()));
+      for (const w of wordsOf(it.text)) m.set(w, (m.get(w) ?? 0) + 1);
+    }
+    return by;
+  });
+
   /** The note whose title (counts most) or lines share words with the card. */
   let suggestion = $derived.by(() => {
     if (!item) return null;
-    const mine = words(item.text);
+    const mine = wordsOf(item.text);
     let best: { note: Note; word: string; score: number } | null = null;
     for (const n of notes) {
       let score = 0;
@@ -69,8 +94,9 @@
         score += weight;
         if (m.length > word.length) word = m;
       };
-      for (const w of words(n.title)) hit(w, 4);
-      for (const it of store.items.filter((i) => i.note_id === n.id)) for (const w of words(it.text)) hit(w, 1);
+      for (const w of wordsOf(n.title)) hit(w, 4);
+      // (A word that comes back in several lines counts each time, as before: its count.)
+      for (const [w, times] of noteWords.get(n.id) ?? []) hit(w, times);
       if (score > (best?.score ?? 0)) best = { note: n, word, score };
     }
     if (!best) return null;
@@ -180,14 +206,19 @@
 
   function onKey(e: KeyboardEvent) {
     // (A key that finishes a composed character, a dead key's accent or an IME's word, isn't ours.)
-    if (!item || e.ctrlKey || e.metaKey || e.altKey || composing(e)) return;
+    // (Nor while something opened over Tidy has the keyboard: its keys are that view's.)
+    // (Nor a key already used: the arrows of a row of choices with the keyboard on it.)
+    if (!item || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || composing(e) || !isTopModal(tidyEl)) return;
     if (e.key === "Enter") {
+      // (On a button or a choice, Enter presses that one: Close, Delete, another note.)
+      if ((e.target as Element).closest?.("button, a[href], [role=button], [role=radio]")) return;
       e.preventDefault();
       putAway();
       return;
     }
     if (typing(e)) return;
-    const k = e.key.toLowerCase();
+    const k = latinKey(e);
+    const digit = digitKey(e);
     if (k === "t") kind = "task";
     else if (k === "i") kind = "idea";
     else if (k === "d") remove();
@@ -198,8 +229,8 @@
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       place = Math.max(0, place - 1);
-    } else if (/^[1-9]$/.test(e.key)) {
-      const n = notes[Number(e.key) - 1];
+    } else if (digit) {
+      const n = notes[digit - 1];
       if (n) {
         noteId = n.id;
         place = 0;
@@ -222,17 +253,19 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="tidy" role="dialog" aria-label={t("Tidy the inbox")} transition:sheet|global={{ y: 8 }}>
+<!-- (The keyboard comes in, on the view itself: its letter keys work at once, Tab goes to the card.) -->
+<div class="tidy" role="dialog" aria-label={t("Tidy the Inbox")} tabindex="-1" bind:this={tidyEl} transition:sheet|global={{ y: 8 }} use:modal={{ initial: "self" }}>
   <div class="top" data-drag-area={store.win.mode === "floating" || undefined}>
-    <ViewHeader crumbs={[{ label: t("Tidy the inbox") }]} big={24} fit onBack={onClose} {onClose}>
+    <ViewHeader crumbs={[{ label: t("Tidy the Inbox") }]} big={24} fit onBack={onClose} {onClose}>
       <span class="count">{t("{a} of {b}", { a: Math.min(done + 1, total), b: total })}</span>
       <div class="bar" aria-hidden="true"><div style:width="{total ? (done / total) * 100 : 100}%"></div></div>
     </ViewHeader>
   </div>
 
+  <span class="visually-hidden" aria-live="polite">{landed ? t("Landed in {title}", { title: landed.title }) : ""}</span>
   {#if landed}
     {#key landed.at}
-      <div class="landed" aria-live="polite"><span style:background={landed.dot}></span>{t("Landed in {title}", { title: landed.title })}</div>
+      <div class="landed" aria-hidden="true"><span style:background={landed.dot}></span>{t("Landed in {title}", { title: landed.title })}</div>
     {/key}
   {/if}
 
@@ -249,7 +282,7 @@
             {#if item.file}<FileCard path={item.file} />{/if}
             {#if store.picturesByItem.get(item.id)?.length}
               <div class="pics">
-                {#each store.picturesByItem.get(item.id) ?? [] as p (p.id)}<img src={store.src(p.path)} alt="" />{/each}
+                {#each store.picturesByItem.get(item.id) ?? [] as p (p.id)}<img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" onerror={() => thumbs.failed(p)} />{/each}
               </div>
             {/if}
             <span class="age">{ageText}</span>
@@ -259,8 +292,8 @@
 
       <div class="form">
         <div class="field">
-          <span class="lab">{t("It's")}</span>
-          <div class="kinds" role="radiogroup" aria-label={t("Kind")}>
+          <span class="lab">{t("It’s")}</span>
+          <div class="kinds" role="radiogroup" use:roving aria-label={t("Kind")}>
             <button role="radio" aria-checked={kind === "task"} class:on={kind === "task"} onclick={() => (kind = "task")}
               ><span class="box" aria-hidden="true"></span>{t("A task")}<span class="key">T</span></button
             >
@@ -270,9 +303,9 @@
 
         {#if kind === "task"}
           <div class="field" transition:fold={{ gap: 20 }}>
-            <label class="lab" for="tidy-when">{t("When?")} <span class="soft">{t("optional · end with ! for a deadline")}</span></label>
+            <label class="lab" for="tidy-when">{t("When?")} <span class="soft">{t("optional · end with\u00a0! for a deadline")}</span></label>
             <div class="when">
-              <input id="tidy-when" bind:value={when} placeholder={t("demain 10h, friday 3pm…")} autocomplete="off" />
+              <input id="tidy-when" bind:value={when} placeholder={t("tomorrow 10am, Friday 3pm…")} autocomplete="off" />
               {#if due?.due}<span class="chip" transition:widen={{ gap: 10 }}>{formatDueLong(due.due.getTime(), store.now)} · {due.deadline ? t("deadline") : t("reminds you")}</span>{/if}
             </div>
           </div>
@@ -285,7 +318,8 @@
           </div>
           <div class="notes">
             {#each notes as n, k (n.id)}
-              {@const sw = swatchOf(n, store.custom).light}
+              <!-- (The note's own paper; in dark mode its dark one, so the light ink stays readable on it.) -->
+              {@const sw = swatchOf(n, store.custom)[look.dark ? "dark" : "light"]}
               <button class="note" class:on={noteId === n.id && !naming} aria-pressed={noteId === n.id && !naming} style:--tint={sw.bg} onclick={() => ((noteId = n.id), (naming = false), (place = 0))}>
                 {#if k < 9}<span class="num">{k + 1}</span>{/if}
                 <span class="ndot" style:background={sw.dot}></span>{noteTitle(n)}
@@ -302,7 +336,7 @@
         {#if chosen && !naming && places.length > 1}
           <div class="field" transition:fold={{ gap: 20 }}>
             <span class="lab">{t("Where in {title}?", { title: noteTitle(chosen) })} <span class="soft">{t("Up / Down to choose")}</span></span>
-            <div class="places" role="radiogroup" aria-label={t("Place in the note")}>
+            <div class="places" role="radiogroup" use:roving aria-label={t("Place in the note")}>
               {#each places as p, k (k)}
                 <button role="radio" aria-checked={k === place} class:on={k === place} onclick={() => (place = k)}>
                   <span class="radio" aria-hidden="true"></span>
@@ -316,7 +350,7 @@
       </div>
     </div>
 
-    <div class="foot">
+    <div class="foot" use:toastAbove>
       <button class="ghost" onclick={remove}>{t("Delete")} <span class="key">D</span></button>
       <button class="ghost" onclick={later} disabled={queue.length < 2}>{t("Keep for later")} <span class="key">L</span></button>
       <span class="grow"></span>
@@ -345,24 +379,26 @@
     flex-direction: column;
     background: var(--ground);
   }
+  /* (The same box as Settings' and the Archive's header: Back, the title and × sit exactly
+     where they do there, so nothing jumps from one view to the other.) */
   .top {
-    height: 64px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    padding: 0 var(--s4) 0 28px;
+    padding: var(--s3) var(--s6);
   }
   .top > :global(.vh) {
     flex: 1;
-    gap: var(--s4);
   }
   .count {
+    margin-left: 10px;
     font-size: var(--t-md);
     color: var(--muted);
     white-space: nowrap;
   }
   .bar {
     flex: 1;
+    margin: 0 10px;
     height: 4px;
     border-radius: 2px;
     background: var(--edge);
@@ -377,7 +413,7 @@
   .landed {
     position: absolute;
     right: 40px;
-    top: 74px;
+    top: 78px;
     z-index: 3;
     padding: 8px 12px;
     border-radius: var(--r-md);
@@ -722,7 +758,7 @@
   .foot {
     height: 76px;
     flex-shrink: 0;
-    padding: 0 28px;
+    padding: 0 var(--s6);
     border-top: 1px solid var(--line);
     display: flex;
     align-items: center;
@@ -812,11 +848,32 @@
     .scroll {
       padding: 14px 20px 20px;
     }
+    /* Narrow: Delete and Keep for later share the first row, the main button has the whole
+       second one (beside them its words were cut down to "R…"). */
     .foot {
-      padding: 0 var(--s4);
+      height: auto;
+      flex-wrap: wrap;
+      row-gap: var(--s2);
+      padding: var(--s3) var(--s4);
+    }
+    .ghost {
+      flex: 1 1 0;
+      justify-content: center;
     }
     .ghost .key {
       display: none;
     }
+    .grow {
+      display: none;
+    }
+    .go {
+      flex: 1 0 100%;
+      max-width: none;
+      justify-content: center;
+    }
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .tidy:focus {
+    outline: none;
   }
 </style>

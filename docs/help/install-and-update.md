@@ -13,6 +13,7 @@ Dobo comes two ways, from [dobo.sookera.com](https://dobo.sookera.com). Both are
 
 ### Dobo Setup's window
 
+- **English | Français**, at the top right: the language of Setup's window. It opens in English for a first install, and in Dobo's own language over an installed Dobo (an update, a reinstall). A click (or Tab, then the arrow keys) changes every word at once and keeps what you've set. When you pick a language there, Dobo then opens in it, its welcome window too; change it any time in **Settings › Appearance › Language**. Leave it as it is and Dobo keeps its own language.
 - **Install in**: the folder, `%LOCALAPPDATA%\Programs\Dobo` at first. **Change** picks another one. It must be a folder you can change without admin rights (not Program Files), because Dobo updates itself there: if it isn't, Setup says why and holds the button until you pick another.
 - **Desktop shortcut** (on at first).
 - **Start Dobo with Windows** (on at first). Reminders only ring while Dobo runs.
@@ -31,7 +32,7 @@ The first time it starts, Dobo.exe makes a `data` folder next to itself and keep
 Two cases where it uses the usual folder in your user profile (`%APPDATA%\com.sookera.ztodo`) instead:
 
 - **This PC already has Dobo notes there** (from an installed Dobo, or an earlier copy) and the `data` folder has none yet: the portable Dobo keeps using them, so your notes are never left behind or split in two. **Settings › About** says "Portable, using the notes already on this computer." A `data` folder that already holds notes is always the one used.
-- **The folder next to Dobo.exe can't be written** (in Program Files, or on a read-only drive): "Portable, but the folder next to Dobo.exe can't be written: the notes are in your user profile." Dobo can't update itself there either: move the Dobo folder somewhere you can change files, such as Documents.
+- **The folder next to Dobo.exe can't be written** (in Program Files, or on a read-only drive): Dobo asks first, never silently, so your notes are never split. Its start screen says where the notes would be and why they can't go there, then offers **Use the usual folder** (with that folder's path: your notes stay there from then on) or **Quit Dobo**. It asks again at each start while the folder can't be written, unless your notes are in the usual folder by then. Once they are, Dobo keeps using that folder, even after its own folder can be written again: nothing is moved without a word. **Settings › About** then says "Portable, but the folder next to Dobo.exe can't be written: the notes are in your user profile." Dobo can't update itself there either: quit, and move the Dobo folder somewhere you can change files, such as Documents.
 
 Anyone who can open the portable folder can read the notes in it, so keep it in a folder of your own.
 
@@ -53,14 +54,15 @@ Open **Settings › Updates**:
 
 - **Check for updates automatically** (on at first): "Once a day. A new version is downloaded and checked, then used the next time Dobo starts. Your notes are never touched." It also checks while Dobo stays open in the tray for days. If it can't reach the internet, it tries again an hour later.
 - **Check for updates** looks right away, also with the automatic check off.
-- The line next to the button says where things stand. Under it, the version line: "Version 1.0.0 · last checked …" (or "not checked yet"). When the line next to the button only gives the version, the one under it just says "Last checked …" or "Not checked yet". When a new version is downloaded and checked, it says **Dobo {v} is ready** ("It starts the next time Dobo opens, or now with Restart now."), and **Restart now** takes the button's place. The board says it once too, with **Restart now**: "Dobo {v} is ready. It starts the next time Dobo opens."
+- The line next to the button says where things stand. Under it, the version line: "Version 1.1.0 · last checked …" (or "not checked yet"). When the line next to the button only gives the version, the one under it just says "Last checked …" or "Not checked yet". When a new version is downloaded and checked, it says **Dobo {v} is ready** ("It starts the next time Dobo opens, or now with Restart now."), and **Restart now** takes the button's place. The board says it once too, with **Restart now**: "Dobo {v} is ready. It starts the next time Dobo opens."
 
 How an update works:
 
 - Dobo downloads the new version and checks it before anything else: it must be signed by Sookera, with the right size and checksum. Anything else is refused, and Settings says why.
 - It's used the next time Dobo starts, or right away with **Restart now**.
-- The new version runs on trial at first. If it doesn't start properly, the next start puts back the version you had, which keeps working, and Settings says so ("Dobo 1.0.1 didn't start properly, so Dobo 1.0.0 was put back."). The automatic check doesn't download that version again; **Check for updates** can.
+- The new version runs on trial at first. If it doesn't start properly, the next start puts back the version you had, which keeps working, and Settings says so ("Dobo 1.1.1 didn’t start properly, so Dobo 1.1.0 was put back."). The automatic check doesn't download that version again; **Check for updates** can.
 - Only Dobo.exe changes. Your notes, settings and styles are never touched.
+- The first time a new version opens your notes, before it adds anything to them, it backs them up as they were: **Settings › Backups** lists that backup under **Before an update**, with the version's number (the last 3 are kept). Dobo makes it at its first start after the update (Setup leaves it to Dobo), once for each version, and quickly: the notes are copied at once; on the same drive, the pictures aren't copied again but linked (a picture file never changes); otherwise (another drive, or a USB stick that can't link files) they're copied in the background once the board is open, and if Dobo is closed before that's done, its next start finishes it. If the backups folder you chose can't be used in time (a network drive that's gone, a slow or full drive, a folder that can't be written to), that backup goes into the `backups` folder inside the data folder instead: **Settings › Backups** says where and why, and lists it with the others ("in the data folder") for as long as it's kept.
 
 With the automatic check off, Dobo never goes online for updates unless you click **Check for updates**.
 
@@ -84,15 +86,17 @@ For installing on several PCs, or from a script:
 
 ### Uninstall the installed Dobo
 
+The uninstaller speaks Dobo's language: the one Setup was in when Dobo was installed, and, once you change it in **Settings › Appearance › Language**, that one (with **Follow Windows**, the language Windows shows). A Dobo installed with an older, English-only Dobo-Setup uninstalls in English until an up-to-date Dobo has started once, or a newer Dobo-Setup is run over it.
+
 1. Open Windows **Settings › Apps › Installed apps**, find Dobo and click **Uninstall**.
 2. Turn on **Also delete my notes** only if you want them gone too. Under it: "Your notes, pictures, settings and the backups in Dobo's own folder. A backups folder you chose is kept. This can't be undone." It's off at first, so reinstalling later picks up where you left off. If you might want your notes back one day, keep a backup outside the data folder first (see [Backups and your data](backups-and-data.md)). A backups folder you chose in **Settings › Backups** is never removed by uninstalling: delete it yourself if you want.
 3. Confirm. Dobo, its shortcuts and its start with Windows are removed: "Dobo is gone from this PC."
 
-If another Dobo is open (a portable copy), your notes are kept even with **Also delete my notes** on, since it may use the same folder. Close it, then delete the `com.sookera.ztodo` folder in `%APPDATA%` yourself if you want them gone.
+If another Dobo is open, or a portable Dobo uses the same notes (one that kept the notes already on this PC: it leaves a small `.dobo-portable-copies` file in that folder; one on a USB stick that isn't plugged in still counts, for 180 days after it last ran), your notes are kept even with **Also delete my notes** on: "Your notes were kept: another Dobo is open, or a portable Dobo uses them too." Close every Dobo, then delete the `com.sookera.ztodo` folder in `%APPDATA%` yourself if you want them gone.
 
 ### Remove the portable Dobo
 
-1. In Dobo, turn off **Settings › Start › Start Dobo with the computer**.
+1. In Dobo, turn off **Settings › Start › Start Dobo with Windows**.
 2. Quit Dobo (right-click the tray icon › **Quit Dobo**).
 3. Delete Dobo.exe and its `data` folder. If **Settings › About** said its notes were in your user profile, they're in `%APPDATA%\com.sookera.ztodo` (shared with an installed Dobo, if you have one). A backups folder you chose stays until you delete it.
 
@@ -104,6 +108,10 @@ The installed Dobo keeps its notes in your user folder, not next to the portable
 2. Quit it, then install Dobo with Dobo-Setup.exe, in another folder than the portable one (Setup asks for another, so the portable's notes stay with it).
 3. In the installed Dobo, open **Settings › Backups › Folder › Choose…** and pick the portable's `data\backups` folder.
 4. Click **Restore…** next to the newest backup, then **Restore this**.
+
+## Notification buttons
+
+The buttons on Dobo's notifications (**Done**, **10 min**, **Later…**) open a `ztodo:` link that Windows hands to Dobo. The installed Dobo always registers it. A portable Dobo only does when no Dobo has it yet, or when the Dobo that has it is gone: running a portable copy once never takes the buttons from the installed one.
 
 ## Free software
 

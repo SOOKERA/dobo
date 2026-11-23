@@ -13,23 +13,31 @@
   import { store } from "../lib/store.svelte";
   import { swatchOf } from "../lib/palette";
   import { look } from "../lib/look.svelte";
-  import type { Note } from "../lib/types";
+  import type { Item, Note } from "../lib/types";
   import { arrange, moveTo, sameSeq, type Step } from "../lib/arrange";
   import { untrack } from "svelte";
   import { t } from "../lib/i18n.svelte";
   import { crumbIn, crumbOut, fadeQuick } from "../lib/motion";
+  import { rightClick, takeMenu } from "../lib/rightclick.svelte";
+  import type { Point } from "../lib/contextmenu";
 
   let { notes, scroller }: { notes: Note[]; scroller?: HTMLElement } = $props();
 
   const GAP = 18;
+  // (One empty list for every note without lines: a new one each time would redraw them all.)
+  const NO_LINES: Item[] = [];
   const MIN_COL = 248;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
   let isDark = $derived(look.dark);
 
   let width = $state(0);
-  let heights = $state<Record<number, number>>({});
+  // (Replaced whole, once per round of measuring: one placing round for all the notes that
+  // changed size together, not one per note.)
+  let heights = $state.raw<Record<number, number>>({});
   let order = $state<number[]>([]);
   let menuFor = $state<number | null>(null);
+  /** Where its menu was right-clicked open (null: under its ⋯). */
+  let menuAt = $state.raw<Point | null>(null);
 
   interface Drag {
     id: number;
@@ -92,6 +100,24 @@
 
   // ---- Widening a note by its edge grip ----
   let widen = $state<{ id: number; w: number; want: boolean } | null>(null);
+  // A note carried or widened: no right-click menu opens meanwhile (App).
+  let carrying = $derived(dragId != null || widen != null);
+  $effect(() => {
+    rightClick.carrying = carrying;
+  });
+  // A note's menu asked for by a right-click, Shift+F10 or the Menu key (App): it opens, at the
+  // pointer or under its ⋯.
+  $effect(() => {
+    if (rightClick.ask?.kind !== "note") return;
+    const id = rightClick.ask.id;
+    untrack(() => {
+      if (!byId.has(id) || carrying) return;
+      const got = takeMenu("note", id);
+      if (!got) return;
+      menuAt = got.at;
+      menuFor = id;
+    });
+  });
   function grip(e: PointerEvent, id: number) {
     if (e.button !== 0 || cols < 2) return;
     e.preventDefault();
@@ -110,8 +136,14 @@
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key, true);
       document.body.style.cursor = "";
+    };
+    // The system took the pointer: the width stays as it was, as with Esc.
+    const cancel = () => {
+      stop();
+      widen = null;
     };
     const up = () => {
       stop();
@@ -130,6 +162,7 @@
     document.body.style.cursor = "ew-resize";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", key, true);
   }
 
@@ -144,11 +177,22 @@
   let inStep: { total: number; at: number; start: number | null } | null = null;
   // The app's fold ease (cubicOut, as the notes' own transitions use it), for WAAPI.
   const FOLD_EASE = `linear(${Array.from({ length: 25 }, (_, i) => (1 - Math.pow(1 - i / 24, 3)).toFixed(4)).join(", ")})`;
-  function running(node: HTMLElement): Animation[] {
-    return node.getAnimations({ subtree: true }).filter((a) => {
+  /** The running animations inside each measured note, from one look at the page's animations
+   * (not one look per note: each look makes the browser bring its styles up to date). */
+  function runningIn(): Map<Element, Animation[]> {
+    const by = new Map<Element, Animation[]>();
+    for (const a of document.getAnimations()) {
+      if (a.playState !== "running") continue;
       const end = a.effect?.getComputedTiming().endTime;
-      return a.playState === "running" && typeof end === "number" && Number.isFinite(end);
-    });
+      if (typeof end !== "number" || !Number.isFinite(end)) continue;
+      const target = (a.effect as KeyframeEffect | null)?.target;
+      const box = target?.closest("[data-measure]");
+      if (!box) continue;
+      const list = by.get(box);
+      if (list) list.push(a);
+      else by.set(box, [a]);
+    }
+    return by;
   }
   /** The height once the running animations are over, and the longest one's length and time. */
   function settled(node: HTMLElement, anims: Animation[]): { h: number; total: number; at: number; start: number | null } {
@@ -176,38 +220,81 @@
     if (saved || working || held || document.fonts?.status === "loading" || !order.every((i) => heights[i] != null)) return;
     hold = { sig: holdSig, seq: layout.seq };
   }
-  function measure(node: HTMLElement, id: number) {
-    const ro = new ResizeObserver(() => {
-      const anims = heights[id] == null || reduce.matches ? [] : running(node);
-      if (anims.length) {
+  // One observer for all the notes: the notes that change size in the same frame (a new width,
+  // the note size, the language, the fonts coming in) are taken together, in one round.
+  const measuredId = new WeakMap<Element, number>();
+  const sizes = new ResizeObserver((entries) => {
+    let next: Record<number, number> | null = null;
+    const now = () => next ?? heights;
+    const set = (id: number, h: number) => {
+      next ??= { ...heights };
+      next[id] = h;
+    };
+    // (Only notes measured once before can be easing: the first measure just takes the size.)
+    let anims: Map<Element, Animation[]> | null = null;
+    for (const entry of entries) {
+      const node = entry.target as HTMLElement;
+      const id = measuredId.get(node);
+      if (id == null || !node.isConnected) continue;
+      if (now()[id] != null && !reduce.matches) anims ??= runningIn();
+      const own = now()[id] == null || reduce.matches ? undefined : anims?.get(node);
+      if (own?.length) {
         const e = easing.get(id);
         // Still the same easing: its end is already known.
-        if (e && anims.every((a) => e.anims.has(a))) return;
-        const { h, total, at, start } = settled(node, anims);
-        easing.set(id, { anims: new Set(anims), h });
-        if (heights[id] !== h) {
+        if (e && own.every((a) => e.anims.has(a))) continue;
+        const { h, total, at, start } = settled(node, own);
+        easing.set(id, { anims: new Set(own), h });
+        if (now()[id] !== h) {
           if (!inStep || total - at > inStep.total - inStep.at) inStep = { total, at, start };
           holdColumns();
-          heights[id] = h;
+          set(id, h);
         }
-        return;
+        continue;
       }
       easing.delete(id);
       const h = node.offsetHeight;
-      if (heights[id] === h) return;
-      if (heights[id] != null) holdColumns();
-      heights[id] = h;
-    });
-    ro.observe(node);
-    return { destroy: () => (ro.disconnect(), easing.delete(id)) };
+      if (now()[id] === h) continue;
+      if (now()[id] != null) holdColumns();
+      set(id, h);
+    }
+    if (next) heights = next;
+  });
+  function measure(node: HTMLElement, id: number) {
+    measuredId.set(node, id);
+    sizes.observe(node);
+    return { destroy: () => (sizes.unobserve(node), measuredId.delete(node), easing.delete(id)) };
   }
+  $effect(() => () => sizes.disconnect());
 
   // ---- FLIP: animate from where each note is seen now to its new place ----
   const slots = new Map<number, HTMLElement>();
   function slot(node: HTMLElement, id: number) {
     slots.set(id, node);
-    return { destroy: () => slots.delete(id) };
+    return { destroy: () => (slots.delete(id), slotAnims.delete(id)) };
   }
+  // The animations this board started on each note's slot (the only ones a slot ever has), kept
+  // here so stopping them needs no look at the page: asking an element for its animations right
+  // after another one was started makes the browser restyle the page, once per note.
+  const slotAnims = new Map<number, Set<Animation>>();
+  function play(id: number, el: HTMLElement, frames: Keyframe[], opts: KeyframeAnimationOptions): Animation {
+    const a = el.animate(frames, opts);
+    let set = slotAnims.get(id);
+    if (!set) slotAnims.set(id, (set = new Set()));
+    set.add(a);
+    const done = () => slotAnims.get(id)?.delete(a);
+    // (One that holds its end, a note faded away, stays known until it is let go.)
+    if (opts.fill !== "forwards" && opts.fill !== "both") a.addEventListener("finish", done);
+    a.addEventListener("cancel", done);
+    return a;
+  }
+  /** Stops a slot's animations (`moves` only: not a note fading away where it is). */
+  function stopSlot(id: number, moves = false) {
+    const set = slotAnims.get(id);
+    if (!set?.size) return;
+    for (const a of [...set]) if (!moves || a.effect?.getTiming().fill !== "forwards") a.cancel();
+  }
+  // The board's own height easing down with a folding note.
+  let boardAnim: Animation | null = null;
 
   let boardEl: HTMLDivElement;
   let seen = new Map<number, { x: number; y: number }>();
@@ -219,6 +306,11 @@
   // After the columns change, the notes are measured again at their new width (same frame):
   // that second pass must keep the reflow style instead of replacing it with a plain glide.
   let reflowUntil = 0;
+  // The width changing continuously (the panel's edge dragged, the window resized): the notes
+  // take their places as it goes, and the reflow glide is kept for a change of width on its own.
+  const LIVE_GAP = 150;
+  let widthAt = -Infinity;
+  let live = false;
 
   $effect.pre(() => {
     void layout;
@@ -237,16 +329,23 @@
     const l = layout;
     const carried = dragId;
     if (!boardEl || l.width <= 0) return;
-    const colsChanged = prevCols !== 0 && l.cols !== prevCols;
-    const onlyWidth = !colsChanged && prevWidth !== 0 && Math.abs(l.width - prevWidth) > 0.5;
+    const widthChanged = prevWidth !== 0 && Math.abs(l.width - prevWidth) > 0.5;
+    const t = performance.now();
+    if (widthChanged) {
+      live = t - widthAt < LIVE_GAP;
+      widthAt = t;
+    } else if (t - widthAt >= LIVE_GAP) live = false;
+    const colsChanged = !live && prevCols !== 0 && l.cols !== prevCols;
+    const onlyWidth = !colsChanged && widthChanged;
     // Until every note has been measured once, notes just take their place (no gliding).
     const measured = order.every((id) => heights[id] != null);
+    if (measured) store.markBoardSettled();
     const wasFirst = first || !measured;
     prevCols = l.cols;
     prevWidth = l.width;
     first = !measured;
-    if (colsChanged) reflowUntil = performance.now() + 160;
-    const reflow = colsChanged || performance.now() < reflowUntil;
+    if (colsChanged) reflowUntil = t + 160;
+    const reflow = !live && (colsChanged || t < reflowUntil);
     // In step with a note easing its height (its own ease-out, for the time it has left).
     const step = inStep && inStep.total - inStep.at > 40 ? inStep : null;
     inStep = null;
@@ -257,11 +356,16 @@
     // The board taken straight to its new, shorter height would pull the page up at once under a
     // window scrolled to the end (the note is still folding): it eases down with the fold.
     // (A new placing round takes over from one still easing.)
-    if (Math.abs(l.height - wasHeight) > 0.5) for (const a of boardEl.getAnimations()) a.cancel();
+    if (Math.abs(l.height - wasHeight) > 0.5 && boardAnim) {
+      boardAnim.cancel();
+      boardAnim = null;
+    }
     if (step && !wasFirst && l.height < wasHeight - 0.5) {
       const a = boardEl.animate([{ height: `${Math.max(wasHeight, 0)}px` }, { height: `${Math.max(l.height, 0)}px` }], { duration: step.total, easing: FOLD_EASE });
       if (step.start != null) a.startTime = step.start;
       else a.currentTime = step.at;
+      boardAnim = a;
+      a.addEventListener("finish", () => boardAnim === a && (boardAnim = null));
     }
 
     let k = 0;
@@ -279,7 +383,9 @@
         }
         // A new note: it settles in.
         if (!wasFirst) {
-          el.animate(
+          play(
+            id,
+            el,
             [
               { opacity: 0, transform: `translate(${to.x}px, ${to.y + 10}px) scale(0.97)` },
               { opacity: 1, transform: `translate(${to.x}px, ${to.y}px)` },
@@ -292,13 +398,22 @@
       const dx = to.x - from.x;
       const dy = to.y - from.y;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-      if (wasFirst || (onlyWidth && !reflow)) continue;
-      for (const a of el.getAnimations()) a.cancel();
+      if (wasFirst) continue;
+      // (While the width is dragged, a glide from a step before would end on a place that is no
+      // longer the note's: the note just takes its place, as it does at every step of the drag.)
+      if (live) {
+        stopSlot(id, true);
+        continue;
+      }
+      if (onlyWidth && !reflow) continue;
+      stopSlot(id);
       const fromT = `translate(${from.x}px, ${from.y}px)`;
       const toT = `translate(${to.x}px, ${to.y}px)`;
       if (reflow) {
         const tilt = (dx >= 0 ? 1 : -1) * 1.5;
-        el.animate(
+        play(
+          id,
+          el,
           [
             { transform: `${fromT} rotate(0deg)` },
             { transform: `translate(${(from.x + to.x) / 2}px, ${(from.y + to.y) / 2 - 8}px) rotate(${tilt}deg) scale(1.02)`, offset: 0.5 },
@@ -311,12 +426,12 @@
         const dropped = id === justDropped;
         if (step && !dropped) {
           // On the easing note's own clock (same start), so both move as one, frame by frame.
-          const a = el.animate([{ transform: fromT }, { transform: toT }], { duration: step.total, easing: FOLD_EASE });
+          const a = play(id, el, [{ transform: fromT }, { transform: toT }], { duration: step.total, easing: FOLD_EASE });
           if (step.start != null) a.startTime = step.start;
           else a.currentTime = step.at;
           continue;
         }
-        el.animate([{ transform: fromT }, { transform: toT }], {
+        play(id, el, [{ transform: fromT }, { transform: toT }], {
           duration: dropped ? 260 : 300,
           easing: dropped ? "cubic-bezier(.2,.9,.3,1)" : "cubic-bezier(.3,.8,.25,1)",
         });
@@ -337,11 +452,13 @@
         const el = slots.get(id);
         const p = layout.pos.get(id);
         if (!el || !p) continue;
-        for (const a of el.getAnimations()) a.cancel();
+        stopSlot(id);
         const at = `translate(${p.x}px, ${p.y}px)`;
         const a = reduce.matches
-          ? el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, fill: "forwards" })
-          : el.animate(
+          ? play(id, el, [{ opacity: 1 }, { opacity: 0 }], { duration: 120, fill: "forwards" })
+          : play(
+              id,
+              el,
               [
                 { opacity: 1, transform: `${at} scale(1)` },
                 { opacity: 0, transform: `translate(${p.x}px, ${p.y - 12}px) scale(0.95)` },
@@ -373,7 +490,9 @@
           el.style.opacity = "";
           first ??= el;
           if (reduce.matches) continue;
-          el.animate(
+          play(
+            id,
+            el,
             [
               { opacity: 0, transform: `translate(${to.x}px, ${to.y + 14}px) scale(0.96) rotate(-1.2deg)` },
               { opacity: 1, transform: `translate(${to.x}px, ${to.y}px) scale(1) rotate(0deg)` },
@@ -438,8 +557,7 @@
         if (!pos) return;
         started = true;
         menuFor = null;
-        const el = slots.get(id);
-        el?.getAnimations().forEach((a) => a.cancel());
+        stopSlot(id);
         const p = boardPoint(sx, sy);
         drag = { id, ox: p.x - pos.x, oy: p.y - pos.y, x: pos.x, y: pos.y, tilt: -2.5 };
         startSeq = layout.seq;
@@ -487,7 +605,7 @@
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key, true);
       if (scrollTimer) clearInterval(scrollTimer);
       document.body.style.cursor = "";
@@ -522,7 +640,17 @@
       if (ev.key !== "Escape" || !started || !drag) return;
       ev.preventDefault();
       ev.stopImmediatePropagation();
+      callOff();
+    };
+    // The system took the pointer (a pen or touch gesture, Windows taking it mid-carry): called
+    // off the same way, never put down wherever it last was.
+    const cancel = () => {
+      if (started && drag) callOff();
+      else stop();
+    };
+    const callOff = () => {
       stop();
+      if (!drag) return;
       const tilt = drag.tilt;
       const card = slots.get(id)?.querySelector(".card") as HTMLElement | null;
       drag = null;
@@ -533,7 +661,7 @@
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", key, true);
   }
 </script>
@@ -573,19 +701,21 @@
         use:slot={id}
         style:width="{p.w}px"
         style:transform={dragging && drag ? `translate(${drag.x}px, ${drag.y}px)` : `translate(${p.x}px, ${p.y}px)`}
-        style:--tilt="{dragging && drag ? drag.tilt.toFixed(2) : -2.5}deg"
       >
         <Holder look={look.active} {id} {index} />
-        <div use:measure={id}>
+        <div data-measure use:measure={id}>
           <NoteCard
             {note}
-            items={store.itemsByNote.get(id) ?? []}
+            items={store.itemsByNote.get(id) ?? NO_LINES}
             tone={isDark ? swatchOf(note, store.custom).dark : swatchOf(note, store.custom).light}
             menuOpen={menuFor === id}
+            menuAt={menuFor === id ? menuAt : null}
             lifted={dragging}
-            onMenu={(open) => (menuFor = open ? id : null)}
+            tilt={dragging && drag ? drag.tilt : -2.5}
+            onMenu={(open) => ((menuAt = null), (menuFor = open ? id : null))}
             onGrab={(e) => grab(e, id)}
             onWiden={cols >= 2 ? (e) => grip(e, id) : null}
+            width={p.w}
           />
         </div>
       </div>

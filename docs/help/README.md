@@ -15,7 +15,7 @@ These guides explain what Dobo does, with the names you see in the window.
 - [Style and themes](style-and-themes.md): backgrounds, watercolour, your own styles, light and dark, sharing a look.
 - [Docked or floating](docked-and-floating.md): where Dobo sits on your screen, and how it opens.
 - [Keyboard shortcuts](keyboard-shortcuts.md): every key and every gesture in one place.
-- [Backups and your data](backups-and-data.md): daily backups, restoring, where your notes are, moving to another PC.
-- [Installing and updating](install-and-update.md): Dobo-Setup.exe or the portable Dobo.exe, the terms at first start, updates, silent installs, uninstalling.
+- [Backups and your data](backups-and-data.md): daily backups and their kinds, restoring, if your notes don't open, where your notes are, moving to another PC.
+- [Installing and updating](install-and-update.md): Dobo-Setup.exe or the portable Dobo.exe, the terms at first start, updates, silent installs, uninstalling, notification buttons.
 - [Privacy](privacy.md): what stays on your PC, and when Dobo goes online (never before you accept its terms).
 - [Questions](faq.md): short answers to common questions.

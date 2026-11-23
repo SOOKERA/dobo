@@ -693,6 +693,13 @@ export function themeShownName(th: { name: string; light: Look; dark: Look | nul
 
 /** Its name: the style's, or "Paper · Dark" for a theme's half. */
 export function refName(ref: Ref | null, styles: SavedStyle[], themes: SavedTheme[]): string | null {
+  const name = refBaseName(ref, styles, themes);
+  if (name == null || ref?.kind !== "theme") return name;
+  return ref.half === "dark" ? t("{name} · Dark", { name }) : t("{name} · Light", { name });
+}
+
+/** The same without the half a theme's look is (where the half shows already: a sun or a moon). */
+export function refBaseName(ref: Ref | null, styles: SavedStyle[], themes: SavedTheme[]): string | null {
   if (!ref) return null;
   if (ref.kind !== "theme") {
     if (ref.kind === "ours") {
@@ -704,8 +711,7 @@ export function refName(ref: Ref | null, styles: SavedStyle[], themes: SavedThem
   const [kind, ...rest] = ref.id.split(":");
   const pair = themePairOf({ kind: kind === "yours" ? "yours" : "ours", id: rest.join(":") }, themes);
   if (!pair) return null;
-  const name = kind === "yours" ? themeShownName(pair) : tMaybe(pair.name);
-  return ref.half === "dark" ? t("{name} · Dark", { name }) : t("{name} · Light", { name });
+  return kind === "yours" ? themeShownName(pair) : tMaybe(pair.name);
 }
 
 /** Where a theme's half comes from: a style that is exactly it (ours, then yours), else that

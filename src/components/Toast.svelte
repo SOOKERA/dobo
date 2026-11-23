@@ -6,6 +6,7 @@
   import { words } from "../lib/i18n.svelte";
   import { store } from "../lib/store.svelte";
   import { reduced, rise } from "../lib/motion";
+  import { toastRoom } from "../lib/toastroom.svelte";
 
   // A toast replacing another: the old words step aside and fade first, the new ones arrive just
   // after (never both strong at once).
@@ -16,18 +17,31 @@
     replacing = prevId != null && id != null && id !== prevId;
     prevId = id;
   });
+  // What screen readers hear: emptied, then the words a frame later, so the same words coming
+  // again (two toasts alike in a row) are said again too.
+  let said = $state("");
+  $effect(() => {
+    const toast = store.toast;
+    said = "";
+    if (!toast) return;
+    const f = requestAnimationFrame(() => (said = words(toast.text)));
+    return () => cancelAnimationFrame(f);
+  });
   function swapOut(_n: Element) {
     if (reduced()) return { duration: 80, css: (t: number) => `position:absolute;opacity:${t}` };
     return { duration: 120, css: (t: number) => `position:absolute;opacity:${t};transform:translateY(${(-(1 - t) * 6).toFixed(2)}px)` };
   }
 </script>
 
+<!-- What it says, for screen readers: one region that is always there (one made with its words is
+     often not heard). -->
+<span class="visually-hidden" role="status" aria-live="polite">{said}</span>
 {#if store.toast}
   <!-- The holder leaves the way the toast came (down and out); a new toast replacing one only
        swaps what's inside. -->
-  <div class="holder" data-lang-fade out:rise|global={{ y: 8, scale: 1, duration: 280 }}>
+  <div class="holder" class:lifted={toastRoom.lift > 0} style:--lift="{toastRoom.lift}px" data-lang-fade data-modal-also out:rise|global={{ y: 8, scale: 1, duration: 280 }}>
   {#key store.toast.id}
-    <div class="toast" class:replacing class:two={!!store.toast.action && !!store.toast.more} role="status" aria-live="polite" out:swapOut>
+    <div class="toast" class:replacing class:two={!!store.toast.action && !!store.toast.more} out:swapOut>
       <span class="text">{words(store.toast.text)}</span>
       {#if store.toast.action || store.toast.more}
         <span class="acts">
@@ -57,14 +71,21 @@
      left mirrors the corner on the right); a longer one gives up the left room first, its
      right end staying clear of the corner. */
   .holder {
+    --base: 18px;
     position: absolute;
     left: 16px;
     right: 168px;
-    bottom: 18px;
+    bottom: var(--base);
     z-index: 60;
     display: flex;
     justify-content: center;
     pointer-events: none;
+    /* (Moved, never laid out again: only its translate glides.) */
+    transition: translate 0.32s var(--ease-glide);
+  }
+  /* A view with buttons along its bottom (Tidy, New note): just above them. */
+  .holder.lifted {
+    translate: 0 calc(var(--base) - var(--lift) - 12px);
   }
   .holder::before {
     content: "";
@@ -96,14 +117,17 @@
   }
   @container shell (max-width: 620px) {
     .holder {
+      --base: 62px;
       right: 16px;
-      bottom: 62px;
     }
     .holder::before {
       display: none;
     }
   }
   @media (prefers-reduced-motion: reduce) {
+    .holder {
+      transition: none;
+    }
     .toast {
       animation: none;
     }
@@ -113,6 +137,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* A narrow panel: the words may take two lines rather than be cut short beside the buttons. */
+  @container shell (max-width: 620px) {
+    .text {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      line-height: 1.35;
+      padding: 2px 0;
+    }
   }
   /* The buttons stay together (wrapped, they move as one). */
   .acts {

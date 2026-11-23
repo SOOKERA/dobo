@@ -2,18 +2,25 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   // A note's pictures (Pictures board): one large, arrows and "2 / 3" on mouse-over, dots
-  // under it. Double-click opens the viewer.
+  // under it. Double-click opens the viewer. Each shows from its thumb when the thumb is sharp
+  // in this box (thumbs.svelte.ts), else from the picture itself.
   import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
   import { openViewer } from "../lib/viewer.svelte";
   import type { Picture } from "../lib/types";
   import { t } from "../lib/i18n.svelte";
   import { blip, fold } from "../lib/motion";
+  import { inDevicePixels, thumbs } from "../lib/thumbs.svelte";
 
-  let { pictures }: { pictures: Picture[] } = $props();
+  // `width`: the note's width on the board (unknown elsewhere: the box is small there).
+  let { pictures, width = null }: { pictures: Picture[]; width?: number | null } = $props();
   let i = $state(0);
   let index = $derived(Math.min(i, pictures.length - 1));
   let dir = $state(1);
+  // The box's size in device pixels (its height: .stage's).
+  let box = $derived(width ? inDevicePixels([width, 150], store.zoom) : null);
+  let shown = $derived(pictures[index]);
+  let thumb = $derived(shown ? thumbs.sharpIn(shown, box) : null);
 
   function go(d: number) {
     dir = d;
@@ -31,13 +38,27 @@
       tabindex="0"
       ondblclick={() => openViewer(pictures, index)}
       onkeydown={(e) => {
+        // (Its keys are its own: they never also move the board's selection. Enter on its
+        // arrows presses that arrow.)
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
         if (e.key === "ArrowRight") go(1);
-        if (e.key === "ArrowLeft") go(-1);
-        if (e.key === "Enter") openViewer(pictures, index);
+        else if (e.key === "ArrowLeft") go(-1);
+        else if (e.key === "Enter" && e.target === e.currentTarget) openViewer(pictures, index);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
       }}
     >
       {#key pictures[index].id}
-        <img src={store.src(pictures[index].path)} alt="" draggable="false" style:--from="{dir * 18}px" />
+        <img
+          src={store.src(thumb?.path ?? shown.path)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable="false"
+          style:--from="{dir * 18}px"
+          onerror={() => thumb && thumbs.failed(shown)}
+        />
       {/key}
       {#if pictures.length > 1}
         <button class="nav prev" aria-label={t("Previous picture")} onclick={() => go(-1)}><Icon name="chev-left" size={16} stroke={2.2} /></button>

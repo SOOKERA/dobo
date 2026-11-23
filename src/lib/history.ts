@@ -84,3 +84,19 @@ export class History {
     return s.label;
   }
 }
+
+/** The fields a change made (`from` → `to`), compared by value. */
+export function changedKeys<T extends object>(from: T, to: T): (keyof T)[] {
+  const keys = new Set([...Object.keys(from), ...Object.keys(to)] as (keyof T)[]);
+  return [...keys].filter((k) => JSON.stringify(from[k] ?? null) !== JSON.stringify(to[k] ?? null));
+}
+
+/** What an undo (or redo) writes: the thing as it is `now`, with only the fields its change made
+ * taken from `want`. Whatever changed meanwhile without a step of its own (a reminder answered
+ * "Done" from its notification, a link's preview arriving, a note unfolded by a ringing task)
+ * stays as it is now, never written back over. */
+export function withFields<T extends object>(now: T, want: T, keys: (keyof T)[]): T {
+  const out = { ...now };
+  for (const k of keys) out[k] = want[k];
+  return out;
+}

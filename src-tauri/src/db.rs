@@ -80,9 +80,11 @@ pub struct Item {
     #[serde(default)]
     pub repeat: Option<serde_json::Value>,
 
-    // Written by the reminder clock only (the page never sends them back).
+    // Written by the reminder clock only (the page sends them back only to bring back a deleted
+    // line, with Undo).
     /// "" (quiet), "early" (before the time), "ringing", "check" (is it really done?),
-    /// "on_it" (I'm on it), "snoozed".
+    /// "on_it" (I'm on it), "snoozed", "passed" (a step whose time came while its task was done:
+    /// quiet until its time changes).
     #[serde(default)]
     pub ring_state: String,
     /// Rings since the last answer (shown as "3rd reminder").
@@ -107,6 +109,10 @@ pub struct Picture {
     pub path: String,
     pub sort: f64,
     pub created_at: i64,
+    /// Its board-size copy (thumbs.rs), when it has one: found when the notes are read, never
+    /// stored with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<crate::thumbs::Thumb>,
 }
 
 #[derive(Serialize)]
@@ -135,13 +141,47 @@ fn add_column(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<(
     Ok(())
 }
 
+/// A connection that never runs what a database file brings with it beyond Dobo's own tables: no
+/// SQL functions with side effects from its schema (`trusted_schema = OFF`), and none of the
+/// tricks that can damage a file on purpose (SQLite's defensive mode). Dobo's own notes, and any
+/// backup opened to be restored (backup.rs: it may come from someone else).
+pub fn harden(conn: &Connection) -> Result<()> {
+    conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).map_err(err)?;
+    conn.execute_batch("PRAGMA trusted_schema = OFF").map_err(err)
+}
+
+/// Is this file on another computer (a `\\server\share` path, or a drive letter for one: a
+/// redirected AppData, a portable Dobo on a network share)?
+fn on_network(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\?\UNC\") || (s.starts_with(r"\\") && !s.starts_with(r"\\?\") && !s.starts_with(r"\\.\")) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a NUL-terminated path that lives through the call.
+        unsafe { windows::Win32::UI::Shell::PathIsNetworkPathW(windows::core::PCWSTR(wide.as_ptr())).as_bool() }
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// The journal the notes use: WAL (readers and the writer never wait for each other), except on
+/// another computer's disk, where SQLite can't keep WAL's shared index safely: the classic
+/// journal there.
+fn journal_mode(path: &Path) -> &'static str {
+    if path != Path::new(":memory:") && on_network(path) { "DELETE" } else { "WAL" }
+}
+
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).map_err(err)?;
+    harden(&conn)?;
+    conn.execute_batch(&format!("PRAGMA journal_mode = {};", journal_mode(path))).map_err(err)?;
     // (AUTOINCREMENT: an id is never given again once its note, line or picture is gone, so an
     // undo that puts one back can't land on something made meanwhile: `ids_never_reused`.)
     conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;
+        "PRAGMA foreign_keys = ON;
          PRAGMA busy_timeout = 3000;
          CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,7 +279,7 @@ pub fn ids_never_reused(conn: &Connection) -> Result<()> {
     // checked, never assumed.)
     conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(err)?;
     let off = conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0)).map_err(err)? == 0;
-    let done = if off { rebuild_with_unique_ids(conn, &todo) } else { Err("the links between tables couldn't be paused".into()) };
+    let done = if off { rebuild_with_unique_ids(conn, &todo) } else { Err("the links between tables couldn’t be paused".into()) };
     let on = conn.execute_batch("PRAGMA foreign_keys = ON").map_err(err);
     done.and(on)
 }
@@ -258,7 +298,7 @@ fn rebuild_with_unique_ids(conn: &Connection, todo: &[&str]) -> Result<()> {
         let head = format!("CREATE TABLE {t} (");
         let key = "id INTEGER PRIMARY KEY,";
         if !sql.starts_with(&head) || sql.matches(key).count() != 1 {
-            return Err(format!("the {t} table isn't as expected: {sql}"));
+            return Err(format!("the {t} table isn’t as expected: {sql}"));
         }
         let new = format!("{t}_unique_ids");
         let ddl = sql.replacen(&head, &format!("CREATE TABLE {new} ("), 1).replacen(key, "id INTEGER PRIMARY KEY AUTOINCREMENT,", 1);
@@ -275,7 +315,7 @@ fn rebuild_with_unique_ids(conn: &Connection, todo: &[&str]) -> Result<()> {
             conn.execute_batch(&s).map_err(err)?;
         }
         if shape(t)? != before {
-            return Err(format!("the {t} table didn't come through whole"));
+            return Err(format!("the {t} table didn’t come through whole"));
         }
     }
     if table_sql(conn, "notes")?.is_none() || broken_links(conn)? > broken {
@@ -367,7 +407,7 @@ fn item_from_row(r: &rusqlite::Row) -> rusqlite::Result<Item> {
 }
 
 fn picture_from_row(r: &rusqlite::Row) -> rusqlite::Result<Picture> {
-    Ok(Picture { id: r.get(0)?, note_id: r.get(1)?, item_id: r.get(2)?, path: r.get(3)?, sort: r.get(4)?, created_at: r.get(5)? })
+    Ok(Picture { id: r.get(0)?, note_id: r.get(1)?, item_id: r.get(2)?, path: r.get(3)?, sort: r.get(4)?, created_at: r.get(5)?, thumb: None })
 }
 
 const NOTE_COLS: &str = "id, title, space, palette, color, sort, archived, created_at, wide, folded, paper, archived_at";
@@ -401,12 +441,14 @@ pub fn get_item(conn: &Connection, id: i64) -> Result<Item> {
 }
 
 /// Items that may ring: open timed tasks whose reminder is on, in notes that aren't archived
-/// (an archived note is put away: silent until it comes back, then it rings once if overdue).
+/// (an archived note is put away: silent until it comes back, then it rings once if overdue),
+/// and not steps of a task that is done (paused with it, until it is unticked).
 pub fn timed_items(conn: &Connection) -> Result<Vec<Item>> {
     let mut st = conn
         .prepare(&format!(
-            "SELECT {ITEM_COLS} FROM items WHERE kind = 'task' AND due_at IS NOT NULL AND done_at IS NULL AND alarm != 'off'
-               AND note_id NOT IN (SELECT id FROM notes WHERE archived != 0)"
+            "{ANCESTORS} SELECT {ITEM_COLS} FROM items WHERE kind = 'task' AND due_at IS NOT NULL AND done_at IS NULL AND alarm != 'off'
+               AND note_id NOT IN (SELECT id FROM notes WHERE archived != 0)
+               AND id NOT IN (SELECT up.id FROM up JOIN items a ON a.id = up.anc WHERE a.done_at IS NOT NULL)"
         ))
         .map_err(err)?;
     st.query_map([], item_from_row).map_err(err)?.collect::<rusqlite::Result<Vec<_>>>().map_err(err)
@@ -506,13 +548,88 @@ pub fn create_item(conn: &Connection, n: NewItem) -> Result<Item> {
 /// changes, the reminder starts again from scratch.
 #[cfg(test)]
 pub fn update_item(conn: &Connection, it: &Item) -> Result<Item> {
-    update_item_full(conn, it).map(|(i, _)| i)
+    update_item_full(conn, it).map(|(i, _, _)| i)
 }
+
+/// Every line under a task, with each of the lines above it (`up(id, anc)`), for the steps of a
+/// task that is done. UNION also stops on a loop.
+const ANCESTORS: &str = "WITH RECURSIVE up(id, anc) AS (SELECT id, parent_id FROM items WHERE parent_id IS NOT NULL
+    UNION SELECT up.id, i.parent_id FROM up JOIN items i ON i.id = up.anc WHERE i.parent_id IS NOT NULL)";
+
+/// What saving a line changed: the line, a repeating task's next occurrence, and the steps
+/// under it whose reminder was paused or brought back (their notifications to clear, the board
+/// to tell).
+pub type Saved = (Item, Option<Item>, Vec<Item>);
 
 /// Like `update_item`; when a repeating task was just ticked, also makes its next occurrence
 /// (returned second).
-pub fn update_item_full(conn: &Connection, it: &Item) -> Result<(Item, Option<Item>)> {
+pub fn update_item_full(conn: &Connection, it: &Item) -> Result<Saved> {
+    update_item_at(conn, it, now_ms())
+}
+
+/// The reminder-clock state a "Not done" sets, at `now`:
+/// - the task itself, overdue (or with an early ring already past), waits a minute before it
+///   rings, never at once as it is unticked;
+/// - its steps were paused while it was done: nothing that came meanwhile rings now. A step whose
+///   time came while the task was done stays quiet ("passed"); the others go on with their next
+///   ring to come.
+pub const UNDONE_WAIT: i64 = 60_000;
+
+fn after_undone(conn: &Connection, task: &Item, done_at: i64, now: i64) -> Result<Vec<i64>> {
+    let r = crate::reminders::rhythm_of(conn, task);
+    if crate::reminders::slots(task, &r).first().is_some_and(|(t, _)| *t <= now) {
+        conn.execute("UPDATE items SET snooze_until = ?2 WHERE id = ?1", params![task.id, now + UNDONE_WAIT]).map_err(err)?;
+    }
+    let mut changed = Vec::new();
+    for id in subtree_ids(conn, task.id).into_iter().filter(|i| *i != task.id) {
+        let s = get_item(conn, id)?;
+        let Some(due) = s.due_at else { continue };
+        if s.done_at.is_some() || s.kind != "task" || s.alarm == "off" {
+            continue;
+        }
+        if due > done_at && due <= now {
+            conn.execute("UPDATE items SET ring_state = 'passed' WHERE id = ?1", [id]).map_err(err)?;
+        } else {
+            conn.execute("UPDATE items SET last_ring_at = MAX(COALESCE(last_ring_at, ?2), ?2) WHERE id = ?1", params![id, now]).map_err(err)?;
+        }
+        changed.push(id);
+    }
+    Ok(changed)
+}
+
+/// A task just ticked: its steps' rings stop showing (their reminders are kept, paused).
+pub fn after_done(conn: &Connection, task: &Item) -> Result<Vec<i64>> {
+    let mut changed = Vec::new();
+    for id in subtree_ids(conn, task.id).into_iter().filter(|i| *i != task.id) {
+        let n = conn
+            .execute("UPDATE items SET ring_state = '' WHERE id = ?1 AND done_at IS NULL AND ring_state IN ('early', 'ringing', 'check')", [id])
+            .map_err(err)?;
+        if n > 0 {
+            changed.push(id);
+        }
+    }
+    Ok(changed)
+}
+
+/// A repeat's own time of day (`Repeat::at`): the time it is given, kept while the time stays the
+/// same (an occurrence moved by a clock change keeps the repeat's own), set from the time
+/// otherwise.
+fn repeat_with_time(it: &Item, old: &Item) -> Option<serde_json::Value> {
+    let mut rule = it.repeat.clone()?;
+    let (Some(obj), Some(due)) = (rule.as_object_mut(), it.due_at) else { return Some(rule) };
+    let kept = if old.due_at == it.due_at {
+        obj.get("at").or_else(|| old.repeat.as_ref().and_then(|r| r.get("at"))).and_then(|v| v.as_str()).filter(|s| crate::repeat::parse_hhmm(s).is_some()).map(String::from)
+    } else {
+        None
+    };
+    obj.insert("at".into(), serde_json::json!(kept.unwrap_or_else(|| crate::clock::local_hhmm(due))));
+    Some(rule)
+}
+
+/// `update_item_full` at a given time.
+pub fn update_item_at(conn: &Connection, it: &Item, now: i64) -> Result<Saved> {
     let old = get_item(conn, it.id)?;
+    let it = &Item { repeat: repeat_with_time(it, &old), ..it.clone() };
     let restart = old.due_at != it.due_at || old.done_at != it.done_at || old.alarm != it.alarm || old.rhythm != it.rhythm || old.kind != it.kind;
     // All or nothing (the line, its steps' note and the next occurrence of a repeat).
     let tx = conn.unchecked_transaction().map_err(err)?;
@@ -547,10 +664,16 @@ pub fn update_item_full(conn: &Connection, it: &Item) -> Result<(Item, Option<It
             .map_err(err)?;
     }
     let saved = get_item(conn, it.id)?;
+    let steps = match (old.done_at, saved.done_at) {
+        (None, Some(_)) => after_done(conn, &saved)?,
+        (Some(was), None) => after_undone(conn, &saved, was, now)?,
+        _ => vec![],
+    };
     let next = if old.done_at.is_none() && saved.done_at.is_some() { spawn_next(conn, &saved)? } else { None };
-    let saved = if next.is_some() { get_item(conn, it.id)? } else { saved };
+    let saved = get_item(conn, it.id)?;
+    let steps = steps.into_iter().map(|id| get_item(conn, id)).collect::<Result<Vec<_>>>()?;
     tx.commit().map_err(err)?;
-    Ok((saved, next))
+    Ok((saved, next, steps))
 }
 
 /// A line and everything under it (its steps, their steps…), as the table `sub(id)`.
@@ -565,6 +688,10 @@ pub fn spawn_next(conn: &Connection, it: &Item) -> Result<Option<Item>> {
         return Ok(None);
     }
     let Ok(mut rule) = serde_json::from_value::<crate::repeat::Repeat>(rule.clone()) else { return Ok(None) };
+    // (A repeat made before it kept its own time: the time of this one.)
+    if rule.at.as_deref().and_then(crate::repeat::parse_hhmm).is_none() {
+        rule.at = Some(crate::clock::local_hhmm(due));
+    }
     let Some((next_due, done)) = rule.next_after_done(due, now_ms()) else { return Ok(None) };
     rule.done = done;
     let rule = serde_json::to_value(&rule).map_err(err)?;
@@ -620,8 +747,15 @@ pub fn restore_rows(tx: &Connection, notes: &[Note], items: &[Item], pictures: &
     sorted.sort_by_key(|i| i.parent_id.is_some());
     for i in sorted {
         tx.execute(
-            "INSERT OR REPLACE INTO items (id, note_id, kind, text, due_at, done_at, sort, created_at, parent_id, alarm, rhythm, link, file, repeat)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            // Its reminder as it was too (rung, snoozed, "I'm on it"), so a line brought back
+            // doesn't ring again at once; a line still there keeps its own, which is newer.
+            "INSERT OR REPLACE INTO items (id, note_id, kind, text, due_at, done_at, sort, created_at, parent_id, alarm, rhythm, link, file, repeat,
+                ring_state, rings, last_ring_at, snooze_until, on_it_at, check_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                COALESCE(o.ring_state, ?15), COALESCE(o.rings, ?16), CASE WHEN o.id IS NULL THEN ?17 ELSE o.last_ring_at END,
+                CASE WHEN o.id IS NULL THEN ?18 ELSE o.snooze_until END, CASE WHEN o.id IS NULL THEN ?19 ELSE o.on_it_at END,
+                CASE WHEN o.id IS NULL THEN ?20 ELSE o.check_at END
+             FROM (SELECT 1) LEFT JOIN items o ON o.id = ?1",
             params![
                 i.id,
                 i.note_id,
@@ -636,7 +770,13 @@ pub fn restore_rows(tx: &Connection, notes: &[Note], items: &[Item], pictures: &
                 i.rhythm.as_ref().map(|v| v.to_string()),
                 i.link.as_ref().map(|v| v.to_string()),
                 i.file,
-                i.repeat.as_ref().map(|v| v.to_string())
+                i.repeat.as_ref().map(|v| v.to_string()),
+                i.ring_state,
+                i.rings,
+                i.last_ring_at,
+                i.snooze_until,
+                i.on_it_at,
+                i.check_at
             ],
         )
         .map_err(err)?;
@@ -651,24 +791,32 @@ pub fn restore_rows(tx: &Connection, notes: &[Note], items: &[Item], pictures: &
     Ok(())
 }
 
-/// Every picture file the notes still use.
-pub fn picture_paths(conn: &Connection) -> Vec<String> {
+/// Every picture file the notes still use. A read that fails is an error, never an empty list
+/// (the clean-up at start would take it for "no picture is used": lib.rs `used_files`).
+pub fn picture_paths(conn: &Connection) -> Result<Vec<String>> {
     conn.prepare("SELECT path FROM pictures")
         .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>())
-        .unwrap_or_default()
+        .map_err(err)
 }
 
-/// Link previews' pictures still used: (line id, the picture's file).
-pub fn preview_images(conn: &Connection) -> Vec<(i64, String)> {
-    conn.prepare("SELECT id, link FROM items WHERE link IS NOT NULL")
+/// How many pictures the notes have (a check on `picture_paths`).
+pub fn picture_count(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM pictures", [], |r| r.get(0)).map_err(err)
+}
+
+/// Link previews' pictures still used: (line id, the picture's file). As with `picture_paths`, a
+/// failed read is an error.
+pub fn preview_images(conn: &Connection) -> Result<Vec<(i64, String)>> {
+    Ok(conn
+        .prepare("SELECT id, link FROM items WHERE link IS NOT NULL")
         .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>())
-        .unwrap_or_default()
+        .map_err(err)?
         .into_iter()
         .filter_map(|(id, link)| {
             let v: serde_json::Value = serde_json::from_str(&link).ok()?;
             v.get("image")?.as_str().filter(|s| !s.is_empty()).map(|s| (id, s.to_string()))
         })
-        .collect()
+        .collect())
 }
 
 /// Points a line's preview picture at another file (after a restore from another computer).
@@ -754,6 +902,12 @@ pub fn get_setting(conn: &Connection, key: &str) -> Option<serde_json::Value> {
         .and_then(|v| serde_json::from_str(&v).ok())
 }
 
+/// A setting, where a failed read (or a value that isn't JSON) is an error, not "not set".
+pub fn get_setting_strict(conn: &Connection, key: &str) -> Result<Option<serde_json::Value>> {
+    let raw = conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get::<_, String>(0)).optional().map_err(err)?;
+    raw.map(|v| serde_json::from_str(&v).map_err(err)).transpose()
+}
+
 pub fn set_setting(conn: &Connection, key: &str, value: &serde_json::Value) -> Result<()> {
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -763,6 +917,7 @@ pub fn set_setting(conn: &Connection, key: &str, value: &serde_json::Value) -> R
     Ok(())
 }
 
+#[cfg(test)]
 pub fn note_count(conn: &Connection) -> i64 {
     conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0)).unwrap_or(0)
 }
@@ -1099,13 +1254,22 @@ mod tests {
     }
 
     #[test]
+    fn notes_on_another_computer_use_the_classic_journal() {
+        assert_eq!(journal_mode(Path::new(r"\\server\home\Jo\AppData\Roaming\com.sookera.ztodo\ztodo.sqlite")), "DELETE");
+        assert_eq!(journal_mode(Path::new(r"\\?\UNC\server\home\ztodo.sqlite")), "DELETE");
+        assert_eq!(journal_mode(&std::env::temp_dir().join("ztodo.sqlite")), "WAL");
+        assert_eq!(journal_mode(Path::new(":memory:")), "WAL");
+        assert_eq!(journal_mode(Path::new(r"\\?\C:\x\ztodo.sqlite")), "WAL");
+    }
+
+    #[test]
     fn link_preview_pictures_are_found_and_repointed() {
         let c = temp_db();
         let a = create_note(&c, "Inbox", "work", "soft", "Butter").unwrap();
         let link = serde_json::json!({"url": "https://example.com", "title": "Ex", "image": "C:/old/previews/preview-1.png"});
         let it = create_item(&c, NewItem { link: Some(&link), ..new_item(a.id, "Page", None) }).unwrap();
         create_item(&c, new_item(a.id, "Plain", None)).unwrap();
-        assert_eq!(preview_images(&c), vec![(it.id, "C:/old/previews/preview-1.png".to_string())]);
+        assert_eq!(preview_images(&c).unwrap(), vec![(it.id, "C:/old/previews/preview-1.png".to_string())]);
         set_preview_image(&c, it.id, "D:/here/previews/preview-1.png").unwrap();
         let saved = get_item(&c, it.id).unwrap();
         let l = saved.link.unwrap();
@@ -1174,17 +1338,100 @@ mod tests {
         let it = update_item(&c, &it).unwrap();
         let mut done = it.clone();
         done.done_at = Some(now_ms());
-        let (saved, next) = update_item_full(&c, &done).unwrap();
+        let (saved, next, _) = update_item_full(&c, &done).unwrap();
         let next = next.expect("next occurrence");
         assert_eq!(next.text, "Weekly");
         assert!(next.due_at.unwrap() > due);
         assert!(next.done_at.is_none());
         assert!(saved.repeat.is_none());
         assert_eq!(next.repeat.as_ref().unwrap()["done"], 1);
+        // The repeat keeps its own time of day, from the time it was given.
+        assert_eq!(next.repeat.as_ref().unwrap()["at"], "10:00");
+        // Saved again with the same time but a rule without it (the page made the rule afresh):
+        // still its own; with another time, that one.
+        let again = update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "after", "count": 2}, "done": 1})), ..next.clone() }).unwrap();
+        assert_eq!(again.repeat.as_ref().unwrap()["at"], "10:00");
+        let other = crate::clock::today_at(now_ms(), "11:45").unwrap();
+        let moved = update_item(&c, &Item { due_at: Some(other), ..again.clone() }).unwrap();
+        assert_eq!(moved.repeat.as_ref().unwrap()["at"], "11:45");
+        let next = update_item(&c, &Item { due_at: next.due_at, ..moved }).unwrap();
         // The second one is the last ("after 2").
         let mut done2 = next.clone();
         done2.done_at = Some(now_ms());
         assert!(update_item_full(&c, &done2).unwrap().1.is_none());
+    }
+
+    #[test]
+    fn steps_are_paused_while_their_task_is_done() {
+        use crate::reminders::{Rhythm, apply_ring, due_ring};
+        const MIN: i64 = 60_000;
+        let c = temp_db();
+        let a = create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let now = now_ms();
+        let task = create_item(&c, new_item(a.id, "Move", None)).unwrap();
+        let step = |text: &'static str, parent: i64, due: i64| create_item(&c, NewItem { parent_id: Some(parent), ..new_item(a.id, text, Some(due)) }).unwrap();
+        // One rang just before the task was ticked; one comes while it is done; one (a step of a
+        // step) comes after it is unticked again.
+        let ringing = step("Pack", task.id, now - 2 * MIN);
+        let mut r = get_item(&c, ringing.id).unwrap();
+        apply_ring(&mut r, crate::reminders::Ring::Due, now - 2 * MIN);
+        save_ring(&c, &r).unwrap();
+        let meanwhile = step("Call", task.id, now + 10 * MIN);
+        let later = step("Keys", meanwhile.id, now + 60 * MIN);
+        assert_eq!(timed_items(&c).unwrap().len(), 3);
+        // Ticked: none of them rings, the one ringing stops showing; nothing is deleted.
+        let (_, _, steps) = update_item_at(&c, &Item { done_at: Some(now), ..task.clone() }, now).unwrap();
+        assert_eq!(steps.iter().map(|s| s.id).collect::<Vec<_>>(), vec![ringing.id]);
+        assert_eq!(steps[0].ring_state, "");
+        assert!(timed_items(&c).unwrap().is_empty());
+        assert_eq!(get_item(&c, later.id).unwrap().due_at, Some(now + 60 * MIN));
+        // Unticked 20 minutes later: all three are back…
+        let back = now + 20 * MIN;
+        let (_, _, steps) = update_item_at(&c, &Item { done_at: None, ..get_item(&c, task.id).unwrap() }, back).unwrap();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(timed_items(&c).unwrap().len(), 3);
+        let std = Rhythm::standard();
+        // …the one whose time came meanwhile stays quiet, even after its usual 5-minute rings…
+        let m = get_item(&c, meanwhile.id).unwrap();
+        assert_eq!(m.ring_state, "passed");
+        assert!(due_ring(&m, &std, back).is_none() && due_ring(&m, &std, back + 30 * MIN).is_none());
+        // …(until its time is changed),
+        let moved = update_item_at(&c, &Item { due_at: Some(back + 5 * MIN), ..m }, back).unwrap().0;
+        assert_eq!(due_ring(&moved, &std, back + 5 * MIN).map(|(t, _)| t), Some(back + 5 * MIN));
+        // the one that was ringing goes on with its next ring, not at once,
+        let r = get_item(&c, ringing.id).unwrap();
+        assert!(due_ring(&r, &std, back).is_none());
+        assert_eq!(due_ring(&r, &std, now + 23 * MIN).map(|(t, _)| t), Some(now + 23 * MIN));
+        // and the step of a step rings at its time.
+        let l = get_item(&c, later.id).unwrap();
+        assert!(due_ring(&l, &std, now + 59 * MIN).is_none());
+        assert!(due_ring(&l, &std, now + 60 * MIN).is_some());
+    }
+
+    #[test]
+    fn not_done_on_an_overdue_task_waits_a_minute() {
+        use crate::reminders::{Rhythm, due_ring};
+        const MIN: i64 = 60_000;
+        let c = temp_db();
+        let a = create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let now = now_ms();
+        let std = Rhythm::standard();
+        let late = create_item(&c, new_item(a.id, "Pay", Some(now - 30 * MIN))).unwrap();
+        let done = update_item_at(&c, &Item { done_at: Some(now - 10 * MIN), ..late }, now - 10 * MIN).unwrap().0;
+        let undone = update_item_at(&c, &Item { done_at: None, ..done }, now).unwrap().0;
+        assert_eq!(undone.snooze_until, Some(now + UNDONE_WAIT));
+        assert!(due_ring(&undone, &std, now).is_none());
+        assert!(due_ring(&undone, &std, now + UNDONE_WAIT - 1).is_none());
+        assert_eq!(due_ring(&undone, &std, now + UNDONE_WAIT).map(|(t, _)| t), Some(now + UNDONE_WAIT));
+        // A deadline whose early rings have begun waits too; one still to come rings at its time.
+        let soon = create_item(&c, NewItem { alarm: "deadline", ..new_item(a.id, "Ship", Some(now + 20 * MIN)) }).unwrap();
+        let done = update_item_at(&c, &Item { done_at: Some(now), ..soon }, now).unwrap().0;
+        assert!(update_item_at(&c, &Item { done_at: None, ..done }, now).unwrap().0.snooze_until.is_some());
+        let later = create_item(&c, new_item(a.id, "Call", Some(now + 20 * MIN))).unwrap();
+        let done = update_item_at(&c, &Item { done_at: Some(now), ..later }, now).unwrap().0;
+        let undone = update_item_at(&c, &Item { done_at: None, ..done }, now).unwrap().0;
+        assert_eq!(undone.snooze_until, None);
+        assert_eq!(due_ring(&undone, &std, now + 20 * MIN).map(|(t, _)| t), Some(now + 20 * MIN));
     }
 
     #[test]

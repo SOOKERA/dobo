@@ -17,8 +17,16 @@ export interface Landing {
   from: { x: number; y: number };
   to: { x: number; y: number };
   tilt: number;
+  /** The slip's size as it was carried (the same words: the landing one is as big). */
+  size?: { w: number; h: number } | null;
 }
 let landed = 0;
+
+/** Over the hours, the slip rides higher than elsewhere and a little further right, so the hour
+ * labels under the pointer and the time it would get above it stay in sight (App.svelte). A slip
+ * landing or going back starts from there too. Near the hours' end it moves to the pointer's
+ * left instead (`liftX`), so it never covers Tomorrow as the pointer heads there. */
+export const HOURS_LIFT = { x: 12, y: 34 };
 
 /** A slip going back to its line (the carry was called off with Esc). */
 export interface Back {
@@ -29,6 +37,8 @@ export interface Back {
   idea: boolean;
   from: { x: number; y: number };
   tilt: number;
+  /** Its width, when it was narrowed over the hours (`ItemDrag.cap`). */
+  cap?: number | null;
 }
 
 export interface DropTarget {
@@ -49,6 +59,14 @@ class ItemDrag {
   time = $state<number | null>(null);
   /** Where on screen that time's dot is (the slip shrinks into it when dropped). */
   timeAt = $state<{ x: number; y: number } | null>(null);
+  /** Over the hours, how far right of its usual place the slip rides: HOURS_LIFT.x, or (near
+   * Tomorrow) less than nothing, to the pointer's left (set by the ruler). */
+  liftX = $state(HOURS_LIFT.x);
+  /** Over the hours, the slip's width when the room beside the pointer is less than its words
+   * need (set by the ruler; null: as wide as they need, up to 260 px). */
+  cap = $state<number | null>(null);
+  /** The carried slip's size, as laid out, and the width its words need (App.svelte). */
+  slip: { w: number; h: number; full?: number } | null = null;
   /** Slips landing on the ruler. */
   landings = $state<Landing[]>([]);
   /** Slips going back to their lines (a carry called off with Esc). Several can be in flight. */
@@ -84,10 +102,41 @@ class ItemDrag {
     return null;
   }
 
+  /** A new target only when it is another one: every line and note on the board looks at it, so
+   * the same target given again as a new object would have all of them looked at again. */
+  private setTarget(t: DropTarget | null) {
+    const c = this.target;
+    if (c === t || (c && t && c.kind === t.kind && c.id === t.id && c.space === t.space)) return;
+    this.target = t;
+  }
+
   /** The page moved under a still pointer (the ruler opening or folding): look again at what
    * is under it. */
   recheck() {
-    if (this.item && this.time == null) this.target = this.findTarget(this.x, this.y);
+    if (this.item && this.time == null) this.setTarget(this.findTarget(this.x, this.y));
+  }
+
+  // What is under the pointer is looked at once a frame, however many moves came in it.
+  private aimAt: { x: number; y: number } | null = null;
+  private aimFrame = 0;
+  private aim(x: number, y: number) {
+    this.aimAt = { x, y };
+    if (!this.aimFrame) this.aimFrame = requestAnimationFrame(() => this.hit());
+  }
+  /** Looks under the pointer now (a frame's look still to come is done at once). */
+  private hit() {
+    if (this.aimFrame) cancelAnimationFrame(this.aimFrame);
+    this.aimFrame = 0;
+    const at = this.aimAt;
+    this.aimAt = null;
+    if (!at || !this.item) return;
+    // (Over the ruler, the ruler decides: it set `time` on the same move.)
+    this.setTarget(this.time != null ? null : this.findTarget(at.x, at.y));
+  }
+  private unaim() {
+    if (this.aimFrame) cancelAnimationFrame(this.aimFrame);
+    this.aimFrame = 0;
+    this.aimAt = null;
   }
 
   /** Called on pointerdown on a line's text; the carry starts after a few pixels. */
@@ -128,13 +177,16 @@ class ItemDrag {
       // Over the ruler, the ruler decides (it sets `time`); elsewhere, notes and lines. (Not on
       // the very first move: still on its own line, and asking would force the whole page's
       // style to be worked out twice in the frame the ruler opens.)
-      this.target = this.time != null || first ? null : this.findTarget(ev.clientX, ev.clientY);
+      if (this.time != null || first) {
+        this.unaim();
+        this.setTarget(null);
+      } else this.aim(ev.clientX, ev.clientY);
       skipped = first && this.time == null;
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", key, true);
       document.body.style.cursor = "";
     };
@@ -144,9 +196,20 @@ class ItemDrag {
       if (ev.key !== "Escape" || !started) return;
       ev.preventDefault();
       ev.stopImmediatePropagation();
+      callOff();
+    };
+    // The system took the pointer (a pen or touch gesture, Windows taking it mid-carry): called
+    // off the same way, never dropped on whatever was last under it.
+    const cancel = () => {
+      if (started) callOff();
+      else stop();
+    };
+    const callOff = () => {
       stop();
+      this.unaim();
       this.away = [...this.away, it.id];
-      this.backs = [...this.backs, { key: ++landed, id: it.id, text: it.text, idea: it.kind === "idea", from: { x: this.x, y: this.y }, tilt: this.tilt }];
+      const over = this.time != null;
+      this.backs = [...this.backs, { key: ++landed, id: it.id, text: it.text, idea: it.kind === "idea", from: over ? { x: this.x + this.liftX, y: this.y - HOURS_LIFT.y } : { x: this.x, y: this.y }, tilt: this.tilt, cap: over ? this.cap : null }];
       this.item = null;
       this.target = null;
       this.time = null;
@@ -155,18 +218,19 @@ class ItemDrag {
     const up = async () => {
       stop();
       if (!started) return;
+      this.hit();
       if (skipped && this.time == null) this.target = this.findTarget(this.x, this.y);
       const t = this.target;
       const time = this.time;
       const to = this.timeAt;
-      const from = { x: this.x, y: this.y };
+      const from = time != null ? { x: this.x + this.liftX, y: this.y - HOURS_LIFT.y } : { x: this.x, y: this.y };
       this.item = null;
       this.target = null;
       this.time = null;
       this.timeAt = null;
       if (time != null) {
         // Dropped on an hour: the slip shrinks into its dot, the line gets the time.
-        if (to) this.landings = [...this.landings, { key: ++landed, text: it.text, idea: it.kind === "idea", from, to, tilt: this.tilt }];
+        if (to) this.landings = [...this.landings, { key: ++landed, text: it.text, idea: it.kind === "idea", from, to, tilt: this.tilt, size: this.slip }];
         await store.setDue(it, time);
         return;
       }
@@ -180,7 +244,7 @@ class ItemDrag {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", key, true);
   }
 }

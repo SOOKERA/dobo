@@ -4,6 +4,7 @@
   // A style card: the real background with a little note on it, and its name. Ours fit one
   // line; yours get up to two lines (the full name on hover) and a ⋯ menu.
   import { composing } from "../../../lib/compose";
+  import { focusSelect } from "../../../lib/modal";
   import Icon from "../../Icon.svelte";
   import LookSwatch from "../LookSwatch.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
@@ -37,6 +38,7 @@
   let draft = $state("");
 
   function done(save: boolean) {
+    if (!renaming) return;
     if (save && draft.trim() && draft.trim() !== name) onRename?.(draft.trim());
     renaming = false;
   }
@@ -61,20 +63,22 @@
     <span class="name" class:on={selected} class:hide={renaming}>{name}</span>
   </button>
   {#if renaming}
-    <!-- svelte-ignore a11y_autofocus -->
     <input
       class="rename"
       bind:value={draft}
       maxlength="60"
       aria-label={t("New name")}
-      autofocus
+      use:focusSelect
       onkeydown={(e) => {
         if (composing(e)) return;
+        // (The keyboard goes back to the card.)
+        const card = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>("button.pick");
         if (e.key === "Enter") done(true);
         if (e.key === "Escape") {
           e.stopPropagation();
           done(false);
         }
+        if (e.key === "Enter" || e.key === "Escape") queueMicrotask(() => card?.focus());
       }}
       onblur={() => done(true)}
     />

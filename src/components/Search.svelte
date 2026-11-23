@@ -11,6 +11,7 @@
   import { store } from "../lib/store.svelte";
   import { normalize } from "../lib/capture";
   import { pushLayer } from "../lib/layers";
+  import { modal } from "../lib/modal";
   import { isWindowDrag } from "../lib/windrag";
   import { swatchOf } from "../lib/palette";
   import type { Item, Note } from "../lib/types";
@@ -24,10 +25,7 @@
   let sel = $state(0);
   let input: HTMLInputElement;
 
-  $effect(() => {
-    input?.focus();
-    return pushLayer(onClose);
-  });
+  $effect(() => pushLayer(onClose));
 
   interface Hit {
     key: string;
@@ -105,11 +103,30 @@
     return i < 0 ? [text, "", ""] : [text.slice(0, i), text.slice(i, i + needle.length), text.slice(i + needle.length)];
   }
 
+  /** Jumped: the keyboard goes onto the board, on what was found (its Up / Down go on from there),
+   * not back to what had it before. */
+  let jumped = false;
   function jump(h: Hit | undefined) {
     if (!h) return;
+    jumped = true;
     onClose();
     store.focusNote(h.noteId);
+    const line = h.kind === "note" ? null : Number(h.key.slice(1));
+    // (A line in a folded note: the note opens to show it.)
+    const n = store.notes.find((x) => x.id === h.noteId);
+    if (line != null && n?.folded && !store.inboxIds.has(n.id)) void store.setFolded(n, false);
+    store.focus = { note: h.noteId, item: line };
+    (document.activeElement as HTMLElement | null)?.blur();
   }
+
+  // For screen readers: how many were found, once typing pauses.
+  let count = $state("");
+  $effect(() => {
+    const n = flat.length;
+    const said = q.trim() ? t("{n} results", { n }) : "";
+    const id = setTimeout(() => (count = said), 500);
+    return () => clearTimeout(id);
+  });
 
   function onKey(e: KeyboardEvent) {
     // (A key that finishes a composed character, a dead key's accent or an IME's word, isn't ours.)
@@ -152,7 +169,7 @@
 
 <!-- (Floating, a press on the veil over the top bar moves the window and keeps the search open.) -->
 <div class="veil" aria-hidden="true" data-drag-through onpointerdown={(e) => !isWindowDrag(e) && onClose()} transition:veil|global></div>
-<div class="find" role="dialog" aria-label={t("Search")} transition:pop|global={{ y: -8, scale: 0.99, duration: 260 }}>
+<div class="find" role="dialog" aria-label={t("Search")} transition:pop|global={{ y: -8, scale: 0.99, duration: 260 }} use:modal={{ initial: "#find", restore: () => !jumped }}>
   <div class="head">
     <ViewHeader crumbs={[{ label: t("Search") }]} big={20} onBack={onClose} {onClose}>
       <div class="seg" role="group" aria-label={t("Search in")}>
@@ -164,20 +181,46 @@
   <div class="top">
     <Icon name="search" />
     <label for="find" class="visually-hidden">{t("Jump to a note or find a line")}</label>
-    <input id="find" bind:this={input} bind:value={q} onkeydown={onKey} placeholder={t("Find a note, a task, an idea")} autocomplete="off" spellcheck="false" />
+    <input
+      id="find"
+      bind:this={input}
+      bind:value={q}
+      onkeydown={onKey}
+      placeholder={t("Find a note, a task, an idea")}
+      autocomplete="off"
+      spellcheck="false"
+      role="combobox"
+      aria-expanded={flat.length > 0}
+      aria-controls="find-results"
+      aria-autocomplete="list"
+      aria-activedescendant={flat[sel] ? `hit-${flat[sel].key}` : undefined}
+    />
+    <span class="visually-hidden" aria-live="polite">{count}</span>
   </div>
 
-  <div class="results" bind:this={resultsEl}>
+  <div class="results" id="find-results" role="listbox" aria-label={t("Results")} bind:this={resultsEl}>
     {#if hl}<span class="hl" class:glide={hl.glide} style:transform="translateY({hl.y}px)" style:height="{hl.h}px" aria-hidden="true" transition:fadeQuick={{ duration: 120 }}></span>{/if}
     {#if q.trim() && !flat.length}
       <p class="none" in:fadeQuick={{ delay: 60, duration: 180 }}>{t("Nothing matches “{q}”.", { q: q.trim() })}</p>
     {/if}
     {#each groups as g (g.label)}
-      <div class="label" in:fadeQuick={{ duration: 140 }}>{g.label}</div>
+      <div class="label" role="presentation" in:fadeQuick={{ duration: 140 }}>{g.label}</div>
       {#each g.hits as h (h.key)}
         {@const k = flat.indexOf(h)}
         {@const [a, b, c] = parts(h.text)}
-        <button class="hit {h.kind}" in:fadeQuick={{ duration: 140 }} class:sel={k === sel} class:done={h.done} onclick={() => jump(h)} onpointermove={() => (sel = k)}>
+        <!-- (Options of the search field: Up / Down move through them, the keyboard stays in the field.) -->
+        <button
+          class="hit {h.kind}"
+          id="hit-{h.key}"
+          role="option"
+          aria-selected={k === sel}
+          tabindex="-1"
+          in:fadeQuick={{ duration: 140 }}
+          class:sel={k === sel}
+          class:done={h.done}
+          onclick={() => jump(h)}
+          onpointermove={() => (sel = k)}
+        >
           {#if h.kind === "note"}
             <span class="ndot" style:background={h.dot}></span>
           {:else if h.kind === "task"}
@@ -199,7 +242,7 @@
     <span>{t("Up / Down to move")}</span>
     <span>{t("Enter jumps to it and makes it glow")}</span>
     <span>{t("Esc closes")}</span>
-    <span class="push">{t("Open anytime with")} <b>{keysText(store.shortcuts.search)}</b> {t("or")} <b>/</b></span>
+    <span class="push">{t("Open with")} <b>{keysText(store.shortcuts.search)}</b> {t("or")} <b>/</b> {t("on the board")}</span>
   </div>
 </div>
 
@@ -377,6 +420,13 @@
     background: rgba(233, 196, 106, 0.55);
     color: inherit;
     border-radius: 3px;
+  }
+  /* (A softer amber on the dark card, and a done line's match in readable ink.) */
+  :global(:root[data-mode="dark"]) mark {
+    background: rgba(233, 196, 106, 0.28);
+  }
+  .done mark {
+    color: var(--soft);
   }
   .where {
     display: inline-flex;

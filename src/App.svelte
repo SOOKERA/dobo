@@ -32,24 +32,44 @@
   import { look } from "./lib/look.svelte";
   import { heldBy, lookIsDark } from "./lib/looks";
   import { store, SIZES } from "./lib/store.svelte";
-  import { inTauri } from "./lib/backend";
+  import { inTauri, type EventName } from "./lib/backend";
   import { boardCovered, closeTopLayer, layerBack, layerCount, layerForward, pushLayer } from "./lib/layers";
+  import { copyOffer, menuTargetOf, selectedAt, type CopyOffer, type Point } from "./lib/contextmenu";
+  import { askMenu, atPointer, fromKeys, noteMenuKey, rightClick, swallowed, takeMenu } from "./lib/rightclick.svelte";
+  import { lineText } from "./lib/astext";
+  import { modal } from "./lib/modal";
   import { once, type NavSource } from "./lib/nav";
   import { gridKey } from "./lib/gridkeys";
-  import { boardKey, liveLine, undoKey } from "./lib/keys";
-  import { itemDrag, type Back, type Landing } from "./lib/itemdrag.svelte";
+  import { boardKey, focusWords, isStrip, liveLine, liveNote, undoKey } from "./lib/keys";
+  import { latinKey, sizeKey } from "./lib/keyboard";
+  import { HOURS_LIFT, itemDrag, type Back, type Landing } from "./lib/itemdrag.svelte";
   import { viewer } from "./lib/viewer.svelte";
   import { fileDrop, onFileDrop } from "./lib/filedrop.svelte";
   import { warmStyle } from "./lib/warm";
+  import { rehearse } from "./lib/rehearse";
   import { installWindowDrag } from "./lib/windrag";
   import { arrive, fadeQuick, pop, rise } from "./lib/motion";
   import Icon from "./components/Icon.svelte";
-  import { t, type Key } from "./lib/i18n.svelte";
+  import { keysText, t, type Key } from "./lib/i18n.svelte";
+  import { untrack } from "svelte";
+
+  /** A word from the recovery screen on what it did ("Your notes are back."), or none. */
+  let { welcome = null }: { welcome?: string | null } = $props();
 
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   let shown = $state(false);
   let shownAt = 0;
+  /** The shell is a layer of its own only while it slides or settles in or out: at rest it is
+   * drawn with the page, so its words and the logo are crisp at 100 % (a layer kept from the
+   * start of the slide, or from the floating window's 98.5 % scale, draws them soft). */
+  let sliding = $state(false);
+  $effect(() => {
+    void shown;
+    sliding = true;
+    const done = setTimeout(() => (sliding = false), 600);
+    return () => clearTimeout(done);
+  });
   let settingsOpen = $state(false);
   /** A section Settings opens on (Help or Keyboard, from the "?" menu or F1). */
   let settingsAt = $state<{ key: Key; n: number } | null>(null);
@@ -57,12 +77,72 @@
   let tidyOpen = $state(false);
   let onboarding = $state(false);
   let termsOpen = $state(false);
+  /** The notes are read, and the first-run window and the terms are known. */
+  let started = $state(false);
+  // The recovery screen's word: once the board is in, and not under the first-run window or the
+  // terms (after them, then).
+  let welcomed = false;
+  $effect(() => {
+    if (welcomed || !welcome || !started || onboarding || termsOpen) return;
+    welcomed = true;
+    const word = welcome;
+    setTimeout(() => store.showToast(word, undefined, 8000), 900);
+  });
   let captureInput = $state<HTMLInputElement>();
   let scroller = $state<HTMLElement>();
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
   let hoverNote: number | null = null;
 
   let floating = $derived(store.win.mode === "floating");
+  // A view over the whole board (or the first-run window, the terms): what is under it is inert,
+  // so Tab, typing and clicks never reach it. Under a veiled dialog (Search, a new note) the top
+  // bar stays as it is, for the window to be moved by (its Tab stays in the dialog).
+  let fullCover = $derived(settingsOpen || tidyOpen || viewer.open || !!store.archiveOpen || onboarding || termsOpen);
+  let covered = $derived(fullCover || searchOpen || store.templatesOpen);
+  // (Made inert once the view has arrived: going inert restyles the whole board, about 150 ms on a
+  // big board at a slow CPU, which would stall the view's opening. Meanwhile the view keeps the
+  // keyboard itself (modal.ts) and covers the board. On close it stops at once.)
+  let shellEl = $state<HTMLElement>();
+  let coverSettled = $state(false);
+  const arriving = new Set<Element>();
+  function settleCover() {
+    for (const el of arriving) if (!el.isConnected) arriving.delete(el);
+    if (covered && !arriving.size) coverSettled = true;
+  }
+  $effect(() => {
+    const shell = shellEl;
+    if (!shell) return;
+    // The views' own arrivals: they are the shell's children (a card or a row arriving inside
+    // one doesn't count).
+    const track = (e: Event) => {
+      const el = e.target as Element;
+      if (el.parentElement !== shell) return;
+      if (e.type === "introstart") arriving.add(el);
+      else {
+        arriving.delete(el);
+        settleCover();
+      }
+    };
+    const types = ["introstart", "introend", "outrostart"];
+    for (const ty of types) shell.addEventListener(ty, track, true);
+    return () => types.forEach((ty) => shell.removeEventListener(ty, track, true));
+  });
+  $effect(() => {
+    if (!covered) {
+      coverSettled = false;
+      return;
+    }
+    // (A frame for the arrival to start; then once it ends, or at once without one. Never later
+    // than the longest arrival, whatever happens to it.)
+    const frame = requestAnimationFrame(settleCover);
+    const latest = setTimeout(() => (coverSettled = true), 900);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(latest);
+    };
+  });
+  let boardInert = $derived(covered && coverSettled);
+  let chromeInert = $derived(fullCover && coverSettled);
   let left = $derived(store.win.side === "left");
 
   function appear() {
@@ -104,6 +184,26 @@
     warmStyle();
   });
 
+  // The big views are built once off the page in calm moments (rehearse.ts), so their first open
+  // is as quick as the next ones.
+  $effect(() => {
+    if (!store.loaded || onboarding) return;
+    const none = () => {};
+    const t = setTimeout(
+      () =>
+        void rehearse([
+          [Settings, { onClose: none }],
+          [StylePanel, { onClose: none }],
+          [Tidy, { onClose: none }],
+          [Search, { onClose: none }],
+          [Archive, { from: "board", onBack: none, onClose: none }],
+          [Templates, { onClose: none }],
+        ]),
+      1500,
+    );
+    return () => clearTimeout(t);
+  });
+
   $effect(() => {
     store.init().then(() => {
       onboarding = !store.settings.onboarded;
@@ -111,6 +211,7 @@
       // The terms of use, once, before anything goes online (an installed copy: accepted in
       // Setup). In the browser preview only with ?terms.
       termsOpen = !store.settings.terms_accepted && (inTauri || new URLSearchParams(location.search).has("terms"));
+      started = true;
       watchUpdates();
       store.backend.onEvent("panel-shown", async () => {
         store.peek = false;
@@ -120,25 +221,37 @@
       store.backend.onEvent("panel-hide-request", () => hide());
       // Something asked for elsewhere (a reminder, a notification, the tray) ends the tour first:
       // it would open under its veil, and could reach the tour's sample line.
-      store.backend.onEvent("open-tidy", () => {
-        tour.close();
-        settingsOpen = false;
-        searchOpen = false;
-        tidyOpen = true;
-      });
-      store.backend.onEvent("focus-item", (id) => {
-        tour.close();
-        const it = store.items.find((i) => i.id === id);
-        if (it) store.focusNote(it.note_id);
-      });
+      const asked: Partial<Record<EventName, (payload: unknown) => void>> = {
+        "open-tidy": () => {
+          tour.close();
+          settingsOpen = false;
+          searchOpen = false;
+          tidyOpen = true;
+        },
+        "focus-item": (id) => {
+          tour.close();
+          const it = store.items.find((i) => i.id === id);
+          if (it) store.focusNote(it.note_id);
+        },
+        // (Only for a reminder still ringing: from an old notification, answered or ticked
+        // since, the choices would wait unseen and open by themselves the next time it rings.)
+        "later-item": (id) => {
+          tour.close();
+          if (store.ringing.some((i) => i.id === id)) store.laterFor = id as number;
+        },
+        "open-lookback": (day) => (tour.close(), store.openLookback(typeof day === "number" ? day : null)),
+        "shortcut-taken": (list) => store.sayTakenShortcuts(list),
+      };
+      for (const [name, run] of Object.entries(asked)) store.backend.onEvent(name as EventName, run);
+      // Dobo started by a click on one of its notifications: what it asked came before the page
+      // listened, and is done now.
+      void store.backend.pageReady().then((before) => before.forEach(([name, payload]) => asked[name]?.(payload)));
       store.backend.onEvent("focus-note", (id) => {
         tour.close();
         if (typeof id === "number" && id > 0) store.focusNote(id);
       });
-      store.backend.onEvent("later-item", (id) => (tour.close(), (store.laterFor = id as number)));
       // The mouse's side buttons when mouse software sends them as app commands.
       store.backend.onEvent("nav", (dir) => step(dir === "forward" ? "forward" : "back", "app"));
-      store.backend.onEvent("open-lookback", () => (tour.close(), (store.lookbackOpen = true)));
       store.backend.onEvent("peek-shown", () => {
         tour.close();
         shown = false;
@@ -155,7 +268,10 @@
         if (!focused && !onboarding && store.win.mode === "docked" && !store.pinned && shown && Date.now() - shownAt > 400 && !itemDrag.item && !fileDrop.over) hide();
       });
       store.backend.onFileDrop((e) => void onFileDrop(e));
-      appear();
+      // The first slide-in waits for the board to be laid out as it will show (its notes measured,
+      // the fonts in): its frames are then the slide's alone. (Never more than a moment.)
+      const cap = new Promise<void>((r) => setTimeout(r, 900));
+      void Promise.race([Promise.all([store.whenBoardSettled(), document.fonts?.ready]), cap]).then(() => appear());
     });
   });
 
@@ -175,28 +291,54 @@
   }
 
   function openSearch() {
-    if (onboarding) return;
+    if (onboarding || termsOpen) return;
+    // (Never under another view: the picture viewer, New note and Tidy step away first.)
+    closeOverBoard();
     settingsOpen = false;
-    tidyOpen = false;
     store.archiveOpen = null;
     searchOpen = true;
   }
 
-  /** Note size: Ctrl+wheel, Ctrl + / Ctrl − / Ctrl 0. */
+  /** Note size: Ctrl+wheel, Ctrl + / Ctrl − / Ctrl 0. (Not behind a view over the board, where
+   * the notes can't be seen changing.) */
   function stepSize(dir: -1 | 0 | 1) {
+    if (store.over || onboarding || termsOpen) return;
     const i = SIZES.indexOf(store.size);
     const next = dir === 0 ? "comfortable" : SIZES[Math.max(0, Math.min(SIZES.length - 1, i + dir))];
     if (next !== store.size) store.setSetting("note_size", next);
   }
 
+  // The wheel is listened to without holding up scrolling (a listener that may cancel it makes
+  // every scroll wait for the page's script). Only while Ctrl is held down is the wheel's own
+  // effect (the page zoom) cancelled; a touchpad pinch (a Ctrl+wheel with no key down) changes
+  // the note size the same way, and the window's own zoom is off (Tauri's zoom hotkeys).
   $effect(() => {
     const wheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
-      e.preventDefault();
       stepSize(e.deltaY < 0 ? 1 : -1);
     };
-    window.addEventListener("wheel", wheel, { passive: false });
-    return () => window.removeEventListener("wheel", wheel);
+    const hold = (e: WheelEvent) => e.ctrlKey && e.preventDefault();
+    let held = false;
+    const grip = (on: boolean) => {
+      if (on === held) return;
+      held = on;
+      if (on) window.addEventListener("wheel", hold, { passive: false });
+      else window.removeEventListener("wheel", hold);
+    };
+    const down = (e: KeyboardEvent) => e.key === "Control" && grip(true);
+    const up = (e: KeyboardEvent) => e.key === "Control" && grip(false);
+    const off = () => grip(false);
+    window.addEventListener("wheel", wheel, { passive: true });
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", up, true);
+    window.addEventListener("blur", off);
+    return () => {
+      grip(false);
+      window.removeEventListener("wheel", wheel);
+      window.removeEventListener("keydown", down, true);
+      window.removeEventListener("keyup", up, true);
+      window.removeEventListener("blur", off);
+    };
   });
 
   // ---- Back and Forward, like a browser ----
@@ -204,7 +346,8 @@
   // and Backspace (outside a text field) go one level back or forward in what is open; with
   // nothing open they leave the board alone.
   function step(dir: "back" | "forward", source: NavSource): boolean {
-    if (onboarding || termsOpen) return false;
+    // (Nor in the middle of carrying a line: nothing closes under the slip.)
+    if (onboarding || termsOpen || itemDrag.item) return false;
     if (!once(source, dir, performance.now())) return true;
     return dir === "back" ? layerBack() : layerForward();
   }
@@ -220,14 +363,119 @@
       for (const t of ["mousedown", "mouseup", "auxclick"]) window.removeEventListener(t, side as EventListener, true);
     };
   });
-  /** A selected board line keeps Backspace (task ↔ idea) unless the keyboard is in an open view. */
-  function boardOwnsBackspace(): boolean {
-    if (!store.focus) return false;
-    if (!boardCovered()) return true;
-    if (!look.panelOpen || store.focus.item == null) return false;
+  /** The keyboard is on nothing (no button, field, menu or panel has it): the board's own keys
+   * (its selection, `store.focus`) are the ones that act. */
+  function keyFree(): boolean {
     const a = document.activeElement;
-    return !a || a === document.body || !!scroller?.contains(a);
+    return !a || a === document.body || a === document.documentElement;
   }
+  /** A selected board line keeps Backspace (task ↔ idea) unless the keyboard is elsewhere (in an
+   * open view, a menu, on a button). */
+  function boardOwnsBackspace(): boolean {
+    if (!store.focus || !keyFree()) return false;
+    if (!boardCovered()) return true;
+    return look.panelOpen && store.focus.item != null;
+  }
+  // The keyboard taken elsewhere: the board's selection goes, so its keys never act on a line out
+  // of sight. (Not for the line's or the note's own field, opened by Enter or F2 on it.) Taken by a
+  // view, a menu, the Style panel or the toast, or by the button that opens a menu (a note's or a
+  // line's ⋯), it is only put aside: once that is gone (or that menu closed again) and the
+  // keyboard is back on the board (nowhere, or on that button), the board's place comes back, and
+  // the arrows go on from the line you were on. Taken by a control on the board itself (Tab to a
+  // note's + Add), it goes for good.
+  let parked: { note: number; item: number | null } | null = null;
+  /** The menu's button that put the place aside (pressed or reached), and whether its menu has
+   * had the keyboard since: only then is the keyboard back on that button the menu closing. */
+  let parkedOn: Element | null = null;
+  let menuSeen = false;
+  function park(f: typeof parked, on: Element | null = null) {
+    parked = f;
+    parkedOn = on;
+    menuSeen = false;
+  }
+  // (A place given to the board meanwhile, by Search's Enter for one, is the place now.)
+  $effect(() => {
+    if (store.focus) park(null);
+  });
+  const AWAY = "[role='dialog'], [role='alertdialog'], [role='menu'], aside.panel, [data-modal-also]";
+  /** The buttons that open a menu (a note's ⋯, a line's ⋯, the header's ⋯, Help). */
+  const OPENER = "[aria-haspopup]:not([aria-haspopup='false'])";
+  /** The keyboard on a menu's button, its menu closed again: as good as nowhere for the board's
+   * place (a menu closed by Esc gives the keyboard back to its button). */
+  function onClosedOpener(): HTMLElement | null {
+    const a = document.activeElement as HTMLElement | null;
+    return menuSeen && a?.matches?.(OPENER) && a.getAttribute("aria-expanded") !== "true" ? a : null;
+  }
+  /** A press on the board: its keyboard place goes (a click elsewhere), unless the press is on a
+   * menu's button (a note's or a line's ⋯), or is a right-click, its menu opening: then it is put
+   * aside, back once the menu closes. */
+  function boardPress(e: PointerEvent) {
+    const on = (e.target as Element | null)?.closest?.(OPENER);
+    if (store.focus && (on || e.button === 2)) park(store.focus, on);
+    store.focus = null;
+  }
+  function stillThere(f: { note: number; item: number | null }): boolean {
+    return f.item != null ? store.items.some((i) => i.id === f.item) : isStrip(f.note) || store.notes.some((n) => n.id === f.note && !n.archived);
+  }
+  /** The board's place put aside comes back (the keyboard is on the board again, nothing over it). */
+  function unpark(): boolean {
+    const f = parked;
+    const opener = onClosedOpener();
+    if (!f || store.focus || !(keyFree() || opener) || boardCovered()) return false;
+    park(null);
+    if (!stillThere(f)) return false;
+    // (Off the menu's button: the board's keys are the board's again.)
+    opener?.blur();
+    store.focus = f;
+    return true;
+  }
+  $effect(() => {
+    const moved = (e: FocusEvent) => {
+      const el = e.target as Element | null;
+      if (!el || el === document.body) return;
+      const f = store.focus;
+      if (!f) {
+        // (In a menu or a view: still aside. Back on the menu's button from its menu, the menu
+        // closing: it comes back. On the button just pressed, its menu opening: still aside. On
+        // the board itself: what was put aside goes.)
+        if (!parked) return;
+        if (el.closest(AWAY)) menuSeen = true;
+        else if (el.matches(OPENER) && menuSeen) soon();
+        else if (el !== parkedOn) park(null);
+        return;
+      }
+      const own = document.querySelector(f.item != null ? liveLine(f.item) : isStrip(f.note) ? "[data-inbox-strip]" : liveNote(f.note));
+      // (Its menu's fields, a task's When, are the menu's: put aside, as in any menu.)
+      if (own?.contains(el) && !el.closest(AWAY) && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable)) return;
+      const opener = el.matches(OPENER);
+      park(el.closest(AWAY) || opener ? f : null, opener ? el : null);
+      menuSeen = !!el.closest(AWAY);
+      store.focus = null;
+    };
+    // The keyboard back to nowhere (a view closing gives it back so), or on a menu's button with
+    // its menu closed: the place comes back once the view or the menu is gone.
+    let later = 0;
+    function soon() {
+      clearTimeout(later);
+      let tries = 0;
+      const look = () => {
+        if (unpark() || !parked || !(keyFree() || document.activeElement?.matches(OPENER)) || ++tries > 20) return;
+        later = window.setTimeout(look, 50);
+      };
+      later = window.setTimeout(look, 0);
+    }
+    const left = (e: FocusEvent) => {
+      if (e.relatedTarget || !parked) return;
+      soon();
+    };
+    document.addEventListener("focusin", moved);
+    document.addEventListener("focusout", left);
+    return () => {
+      clearTimeout(later);
+      document.removeEventListener("focusin", moved);
+      document.removeEventListener("focusout", left);
+    };
+  });
   function navKey(e: KeyboardEvent): boolean {
     // (A held key's repeats take no more steps.)
     if (e.key === "BrowserBack" || e.key === "BrowserForward") {
@@ -259,8 +507,9 @@
     look.panelOpen = false;
     viewer.open = false;
     store.templatesOpen = false;
-    store.lookbackOpen = false;
+    store.hideLookback();
     boardMenuAt = null;
+    ideaMenu = null;
     store.focus = null;
     if (store.ruler) store.ruler = null;
     store.toast = null;
@@ -283,6 +532,7 @@
     viewer.open = false;
     store.templatesOpen = false;
     boardMenuAt = null;
+    ideaMenu = null;
     settingsOpen = false;
     // ("See archive" has nothing left to say once it is open.)
     if (store.toast?.more) store.toast = null;
@@ -314,6 +564,7 @@
     viewer.open = false;
     store.templatesOpen = false;
     boardMenuAt = null;
+    ideaMenu = null;
     if (store.ruler?.mode === "click") store.ruler = null;
     settingsAt = { key, n: (settingsAt?.n ?? 0) + 1 };
     settingsOpen = true;
@@ -321,11 +572,14 @@
   /** Once, a moment after the first-run setup: a gentle offer, never started by itself. */
   function offerTour() {
     if (store.settings.tour_offered || store.settings.tour_seen) return;
-    setTimeout(() => {
+    const offer = () => {
       if (tour.open || onboarding) return;
+      // (After a word already showing, the recovery screen's for one: never over it.)
+      if (store.toast) return void setTimeout(offer, 1000);
       void store.setSetting("tour_offered", Date.now());
       store.showToast(() => t("New here? A one-minute tour."), { label: () => t("Take the tour"), run: startTour }, 15_000);
-    }, 1400);
+    };
+    setTimeout(offer, 1400);
   }
 
   /** Once, for someone set up before the tour came: "New: a one-minute tour", on a free board a
@@ -347,17 +601,40 @@
     }, reduce.matches ? 900 : 1600);
   }
 
+  // (Said a moment after the selection rests: a quick run of arrows is one announcement.)
+  let boardSays = $state("");
+  $effect(() => {
+    const words = focusWords();
+    const id = setTimeout(() => (boardSays = words), words ? 150 : 0);
+    return () => clearTimeout(id);
+  });
+
+  /** Tidy, New note and the picture viewer step away (each with its own closing) before Style,
+   * Settings or Search opens: one would otherwise open under them, unseen, with their keys still
+   * live. */
+  function closeOverBoard() {
+    tidyOpen = false;
+    store.templatesOpen = false;
+    viewer.open = false;
+  }
   function toggleStyle() {
+    // (Not under the first-run window or the terms: only they answer then.)
+    if (onboarding || termsOpen) return;
     if (look.panelOpen) look.panelOpen = false;
     else {
+      closeOverBoard();
       look.open("main");
       settingsOpen = false;
+      // (Search too: the panel would open over it while its field kept the keyboard.)
+      searchOpen = false;
       store.archiveOpen = null;
     }
   }
   function toggleSettings() {
+    if (onboarding || termsOpen) return;
     settingsAt = null;
     settingsOpen = !settingsOpen;
+    if (settingsOpen) closeOverBoard();
     searchOpen = false;
     look.panelOpen = false;
     store.archiveOpen = null;
@@ -379,7 +656,12 @@
   function onKey(e: KeyboardEvent) {
     // (A key that finishes a composed character in a field, its Esc included, is the field's.)
     // (Nor while the terms of use wait: only their two buttons answer then.)
-    if (e.defaultPrevented || onboarding || termsOpen || composing(e)) return;
+    if (e.defaultPrevented || composing(e)) return;
+    // (The first-run window's rows of choices still take their arrows.)
+    if (onboarding || termsOpen) {
+      if (gridKey(e)) e.preventDefault();
+      return;
+    }
     // F1: the "?" menu at the board's corner (the tour first); again, or with a view open over
     // the board, Help itself.
     if (e.key === "F1" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
@@ -390,7 +672,12 @@
       else if (!e.repeat) openHelp();
       return;
     }
-    if (navKey(e) || scrollKey(e) || (!store.focus && gridKey(e))) {
+    // A line being carried: nothing opens or closes under the slip, nothing is undone from under
+    // it (Esc, which calls the carry off, is the carry's own).
+    if (itemDrag.item) return;
+    // (A row or grid of choices with the keyboard on it takes its arrows first: a Style grid, the
+    // note colours.)
+    if (navKey(e) || gridKey(e) || scrollKey(e)) {
       e.preventDefault();
       return;
     }
@@ -398,9 +685,9 @@
     // place for Settings. They type nothing, so they work while writing in a note too; again
     // closes.
     const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
-    if (ctrl && e.shiftKey && (e.key.toLowerCase() === "s" || e.key.toLowerCase() === "p")) {
+    if (ctrl && e.shiftKey && (latinKey(e) === "s" || latinKey(e) === "p")) {
       e.preventDefault();
-      if (e.key.toLowerCase() === "s") toggleStyle();
+      if (latinKey(e) === "s") toggleStyle();
       else toggleSettings();
       return;
     }
@@ -409,20 +696,29 @@
       toggleSettings();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && ["=", "+", "-", "_", "0"].includes(e.key)) {
+    const size = (e.ctrlKey || e.metaKey) && !e.altKey ? sizeKey(e) : null;
+    if (size != null) {
       e.preventDefault();
-      stepSize(e.key === "0" ? 0 : e.key === "-" || e.key === "_" ? -1 : 1);
+      stepSize(size);
       return;
     }
-    if (matches(e, store.shortcuts.search) || (e.key === "/" && !typing() && !e.ctrlKey && !e.altKey && !e.metaKey)) {
+    // (/ is a key of the board and the views over it, not of Tidy, the Archive, the picture viewer
+    // or New note: there, with the keyboard on a choice or a card, it would close them by
+    // surprise. The shortcut still opens Search from them, closing them first.)
+    const slash = e.key === "/" && !typing() && !e.ctrlKey && !e.altKey && !e.metaKey && !tidyOpen && !store.archiveOpen && !viewer.open && !store.templatesOpen;
+    if (matches(e, store.shortcuts.search) || slash) {
       e.preventDefault();
       openSearch();
       return;
     }
     if (e.key !== "Escape") {
-      // The board by keyboard (only when nothing is open on top of it).
+      // The board by keyboard (only when nothing is open on top of it, and the keyboard is on the
+      // board itself or the entry line, whose Down steps onto it; elsewhere, only Undo / Redo).
       const over = settingsOpen || searchOpen || tidyOpen || viewer.open || store.templatesOpen;
-      if (!over && !store.archiveOpen && boardKey(e)) e.preventDefault();
+      const a = document.activeElement;
+      // (The place put aside while a view was open, if it hasn't come back yet.)
+      if (!over && !store.archiveOpen && keyFree()) unpark();
+      if (!over && !store.archiveOpen && (keyFree() || a?.id === "capture" ? boardKey(e) : undoKey(e))) e.preventDefault();
       // The Archive page: only Undo / Redo (a deleted note comes back with Ctrl+Z).
       else if (!over && store.archiveOpen && undoKey(e)) e.preventDefault();
       return;
@@ -468,15 +764,81 @@
     hoverNote = card ? Number(card.dataset.dropNote) : null;
   }
 
-  // Right-click an empty spot of the board: "Change background…".
-  let boardMenuAt = $state<{ x: number; y: number } | null>(null);
+  // Right-click on the board (a long press with a finger or a pen too): on a note or a line, its
+  // own menu at the pointer (its ⋯ menu; an idea's short one, below); on an empty spot, the
+  // board's: "Change background…". (Selected words and links keep the Copy menu, fields
+  // WebView2's own; nothing opens while something is carried.) From the keyboard (Shift+F10, the
+  // Menu key, on a button of a note or a line), at its ⋯.
+  let boardMenuAt = $state.raw<Point | null>(null);
   function boardMenu(e: MouseEvent) {
+    // (Selected words or a link: the Copy menu, below, took it.)
+    if (e.defaultPrevented) return;
     const t = e.target as HTMLElement;
-    if (t.closest(".slot, input, textarea, [contenteditable], a, button")) return;
+    // (No menu of Dobo's opens: the board's place, put aside by the press, goes, as on a click.
+    // A right-click inside a menu already open puts nothing aside: the place that menu set aside
+    // when it opened stays, to come back when it closes.)
+    const none = () => void (t.closest(AWAY) || park(null));
+    if (itemDrag.item || rightClick.carrying) return void (e.preventDefault(), none());
+    if (tour.open) return none();
+    const keys = fromKeys(e);
+    const on = menuTargetOf(t);
+    if (on?.kind === "none") return none();
+    if (on) {
+      // (Words selected under it, in the browser preview: the browser's own menu, to copy them.)
+      if (!keys && selectedAt(window.getSelection(), e.clientX, e.clientY)) return none();
+      e.preventDefault();
+      const it = on.kind === "line" ? store.items.find((i) => i.id === on.id) : null;
+      if (on.kind === "line" && !it) return none();
+      // (The board's keyboard place, put aside by the press, moves to what was right-clicked.)
+      if (parked) park({ note: it ? it.note_id : on.id, item: it?.id ?? null });
+      askMenu(on.kind, on.id, keys ? null : { x: e.clientX, y: e.clientY });
+      return;
+    }
+    if (t.closest(".slot, input, textarea, [contenteditable], a, button")) return none();
     e.preventDefault();
-    const shell = (e.currentTarget as HTMLElement).closest(".shell")!.getBoundingClientRect();
-    boardMenuAt = { x: Math.min(e.clientX - shell.left, shell.width - 200), y: Math.min(e.clientY - shell.top, shell.height - 136) };
+    boardMenuAt = { x: e.clientX, y: e.clientY };
   }
+  // The keyboard's right-click for a menu Dobo already opened from the key (Shift+F10 or the Menu
+  // key on the board's selected note or line): set aside, never a second menu over it.
+  $effect(() => {
+    const key = (e: KeyboardEvent) => noteMenuKey(e);
+    const menu = (e: MouseEvent) => {
+      if (!swallowed()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("keyup", key, true);
+    window.addEventListener("contextmenu", menu, true);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("keyup", key, true);
+      window.removeEventListener("contextmenu", menu, true);
+    };
+  });
+  // An idea has no ⋯: its right-click (or Shift+F10, the Menu key) opens a short menu of its own:
+  // Copy text, Make it a task, Delete. From the keyboard, under its words.
+  let ideaMenu = $state.raw<{ id: number; at: Point } | null>(null);
+  const ideaMotion = { y: -4 };
+  $effect(() => {
+    const a = rightClick.ask;
+    if (a?.kind !== "line") return;
+    untrack(() => {
+      const it = store.items.find((i) => i.id === a.id);
+      if (it?.kind !== "idea" || !takeMenu("line", it.id)) return;
+      const words = document.querySelector(`${liveLine(it.id)} .idea-text`)?.getBoundingClientRect();
+      const at = a.at ?? (words ? { x: words.left, y: words.bottom + 4 } : null);
+      if (at) ideaMenu = { id: it.id, at };
+    });
+  });
+  let ideaItem = $derived(ideaMenu ? store.items.find((i) => i.id === ideaMenu!.id) : undefined);
+  $effect(() => {
+    if (ideaMenu && !ideaItem) ideaMenu = null;
+  });
+  $effect(() => {
+    if (!ideaMenu) return;
+    return pushLayer(() => (ideaMenu = null));
+  });
   // The menu is the top layer while it shows: Esc (or Back) closes just it, not what is under it.
   $effect(() => {
     if (!boardMenuAt) return;
@@ -494,8 +856,35 @@
       },
     };
   }
+  // Right-click selected words (a folder's path in Settings, a message, a found line) or a link:
+  // Copy, or Copy link (WebView2's own menu stays in fields only).
+  let copyAt = $state<({ x: number; y: number } & CopyOffer) | null>(null);
+  $effect(() => {
+    const open = (e: MouseEvent) => {
+      // (Only the words right-clicked: words selected elsewhere on the page aren't offered.)
+      const offer = copyOffer(e.target, selectedAt(window.getSelection(), e.clientX, e.clientY));
+      if (!offer || onboarding) return;
+      e.preventDefault();
+      copyAt = { ...offer, x: e.clientX, y: e.clientY };
+    };
+    document.addEventListener("contextmenu", open, true);
+    return () => document.removeEventListener("contextmenu", open, true);
+  });
+  $effect(() => {
+    if (!copyAt) return;
+    return pushLayer(() => (copyAt = null));
+  });
+  /** How the board's menus come in (from above, or below when opened above the pointer). */
+  const boardMotion = { y: -4, duration: 160 };
+  const copyMotion = { y: -4, duration: 160 };
+  async function copyOut(what: string) {
+    copyAt = null;
+    await store.copy(what);
+  }
   /** Arrows, Home / End move through the board's menu, as in the app's other menus. */
   function ctxKeys(e: KeyboardEvent) {
+    // (Tab leaves it: it closes, and Tab goes on.)
+    if (e.key === "Tab") return void ((boardMenuAt = null), (copyAt = null), (ideaMenu = null));
     const list = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("button")];
     const i = list.indexOf(document.activeElement as HTMLElement);
     if (e.key === "ArrowDown") list[(i + 1) % list.length]?.focus();
@@ -539,13 +928,14 @@
       want = Math.round(startW + sign * (ev.screenX - startX));
       if (!frame) frame = requestAnimationFrame(send);
     };
-    const up = async () => {
+    const up = async (e: PointerEvent) => {
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
       if (frame) cancelAnimationFrame(frame);
       resizing = false;
-      await store.resizeDocked(want, true, true);
+      // (The system took the pointer: the width goes back to what it was.)
+      await store.resizeDocked(e.type === "pointercancel" ? startW : want, true, true);
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
@@ -562,10 +952,24 @@
   const edges = ["North", "South", "East", "West", "NorthEast", "NorthWest", "SouthEast", "SouthWest"];
 
   /** A slip dropped on an hour shrinks into that hour's dot (DragAnim). */
+  /** The carried slip's size, as laid out, and the width its words need (up to its 260 px; more
+   * than its size when narrowed over the hours). Read when the browser has them anyway, never
+   * asked for. */
+  function slipSize(node: HTMLElement) {
+    const ro = new ResizeObserver(([e]) => {
+      const b = e.borderBoxSize?.[0];
+      itemDrag.slip = b ? { w: Math.round(b.inlineSize), h: Math.round(b.blockSize), full: Math.min(260, node.scrollWidth + 2) } : null;
+    });
+    ro.observe(node);
+    return { destroy: () => (ro.disconnect(), (itemDrag.slip = null)) };
+  }
+
   function land(node: HTMLElement, l: Landing) {
     const from = `translate(${l.from.x + 14}px, ${l.from.y + 10}px) rotate(${l.tilt}deg) scale(1)`;
-    const w = node.offsetWidth;
-    const h = node.offsetHeight;
+    // (The carried slip's size, known already: the same words in the same slip. Asking the new one
+    // would lay the page out again in the middle of the drop.)
+    const w = l.size?.w ?? node.offsetWidth;
+    const h = l.size?.h ?? node.offsetHeight;
     const to = `translate(${l.to.x - w / 2}px, ${l.to.y - h / 2}px) rotate(0deg) scale(0.15)`;
     node.style.transform = from;
     node.style.transformOrigin = "50% 50%";
@@ -636,42 +1040,22 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="shell"
+  bind:this={shellEl}
   class:floating
   class:docked={!floating}
   class:left
   class:shown
+  class:sliding
   class:preview={!inTauri}
   style:--dock-w="{store.win.width}px"
   onpointerover={onPointerOver}
-  onpointerdown={() => (store.focus = null)}
+  onpointerdown={boardPress}
 >
-  {#if !floating && store.loaded}
-    <!-- The panel's inner edge: drag (or arrow keys) to change its width. A focusable separator is the ARIA window-splitter pattern. -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-    <div
-      class="dock-grip"
-      style:--dock-w="{store.win.width}px"
-      class:left
-      class:dragging={resizing}
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t("Panel width, {n} pixels. Drag, or use the arrow keys.", { n: store.win.width })}
-      aria-valuenow={store.win.width}
-      aria-valuemin={420}
-      aria-valuemax={1200}
-      tabindex="0"
-      data-tip={t("Drag to change the width")} data-tip-keys="Left|Right"
-      onpointerdown={gripDown}
-      onkeydown={gripKey}
-    >
-      <span></span>
-    </div>
-  {/if}
   {#if store.error}
     <p class="error">{t("Couldn’t open your notes: {error}", { error: store.error })}</p>
   {:else if store.loaded}
     <BoardBackground />
-    <div class="chrome">
+    <div class="chrome" inert={chromeInert} data-cover>
       <Header
         onHide={hide}
         onSettings={toggleSettings}
@@ -685,53 +1069,57 @@
       {#if inTauri && store.settings.sticky_imported && !store.settings.sticky_dates_offered}<StickyDates />{/if}
       <NextLine />
     </div>
-    <!-- Today's hours while a task is carried: a card of its own under the top bar. -->
-    <HoursRuler />
-    <!-- svelte-ignore a11y_no_static_element_interactions (right-click: a shortcut to the Style panel, which also has its own button) -->
-    <div
-      class="scroll"
-      bind:this={scroller}
-      class:file-over={fileDrop.over && fileDrop.note == null}
-      class:textured={!["plain", "paper", "dotted"].includes(look.active.bg)}
-      class:dark-board={lookIsDark(look.active)}
-      class:held={heldBy(look.active) !== "none"}
-      class:to-archive-room={store.archived.length > 0 || archiveLeaving}
-      oncontextmenu={boardMenu}
-    >
-      <!-- The evening's look back (or today's, from its button): whole, at the top of the board,
-           which makes room under it (the page scrolls). -->
-      {#if store.lookback}<LookBack day={store.lookback} {scroller} />{/if}
-      <div class="zoom" style:zoom={store.zoom}>
-        <!-- The Inbox: a strip across the board's width, above the notes. -->
-        <InboxStrip />
-        <Board notes={store.boardNotes} {scroller} />
-      </div>
-      {#if !store.boardNotes.length}
-        <p class="nothing" in:arrive={{ delay: 160, duration: 280, y: 6 }} out:fadeQuick={{ duration: 120 }}>{t("No notes here yet. Type a line with #name to start one.")}</p>
-      {/if}
-      <!-- Under the last notes, at the left (clear of the note sizes and "?" at the right corner):
-           the way to the notes put away, while there are some. -->
-      {#if store.archived.length}
-        <div class="to-archive" class:alone={!store.boardNotes.length} transition:rise={{ y: 6, duration: 240 }} onoutrostart={() => (archiveLeaving = true)} onoutroend={() => (archiveLeaving = false)} onintrostart={() => (archiveLeaving = false)}>
-          <button data-tip={t("Open the archive")} onclick={() => openArchive("board")}
-            ><Icon name="archive" size={14} stroke={1.8} /><span>{t("Archive ({n})", { n: store.archived.length })}</span></button
-          >
+    <div class="under" inert={boardInert} data-cover>
+      <!-- Today's hours while a task is carried: a card of its own under the top bar. -->
+      <HoursRuler />
+      <!-- svelte-ignore a11y_no_static_element_interactions (right-click: a shortcut to the Style panel, which also has its own button) -->
+      <div
+        class="scroll"
+        bind:this={scroller}
+        class:file-over={fileDrop.over && fileDrop.note == null}
+        class:textured={!["plain", "paper", "dotted"].includes(look.active.bg)}
+        class:dark-board={lookIsDark(look.active)}
+        class:held={heldBy(look.active) !== "none"}
+        class:to-archive-room={store.archived.length > 0 || archiveLeaving}
+        oncontextmenu={boardMenu}
+      >
+        <!-- The evening's look back (or today's, from its button): whole, at the top of the board,
+             which makes room under it (the page scrolls). -->
+        {#if store.lookback}<LookBack day={store.lookback} {scroller} />{/if}
+        <div class="zoom" style:zoom={store.zoom} data-lang-later>
+          <!-- The Inbox: a strip across the board's width, above the notes. -->
+          <InboxStrip />
+          <Board notes={store.boardNotes} {scroller} />
         </div>
-      {/if}
+        {#if !store.boardNotes.length}
+          <p class="nothing" in:arrive={{ delay: 160, duration: 280, y: 6 }} out:fadeQuick={{ duration: 120 }}>{t("No notes here yet. Type a line with #name to start one.")}</p>
+        {/if}
+        <!-- Under the last notes, at the left (clear of the note sizes and "?" at the right corner):
+             the way to the notes put away, while there are some. -->
+        {#if store.archived.length}
+          <div class="to-archive" class:alone={!store.boardNotes.length} transition:rise={{ y: 6, duration: 240 }} onoutrostart={() => (archiveLeaving = true)} onoutroend={() => (archiveLeaving = false)} onintrostart={() => (archiveLeaving = false)}>
+            <button data-tip={t("Open the archive")} onclick={() => openArchive("board")}
+              ><Icon name="archive" size={14} stroke={1.8} /><span>{t("Archive ({n})", { n: store.archived.length })}</span></button
+            >
+          </div>
+        {/if}
+      </div>
+      <!-- While a task is carried to the hours (or the hours are picked from its menu), the board
+           dims a touch so the ruler stands out; it fades in and out with the ruler. -->
+      <div class="board-dim" class:on={itemDrag.item?.kind === "task" || !!store.ruler || itemDrag.landings.length > 0} aria-hidden="true"></div>
+      <SizeControl />
     </div>
-    <!-- While a task is carried to the hours (or the hours are picked from its menu), the board
-         dims a touch so the ruler stands out; it fades in and out with the ruler. -->
-    <div class="board-dim" class:on={itemDrag.item?.kind === "task" || !!store.ruler || itemDrag.landings.length > 0} aria-hidden="true"></div>
-    <SizeControl />
     <Toast />
+    <!-- Where the board's keyboard is, for screen readers (said once the keys rest). -->
+    <span class="visually-hidden" aria-live="polite">{boardSays}</span>
     {#if fileDrop.over}
       <div class="drop-hint" aria-hidden="true" transition:fadeQuick={{ duration: 160 }}>{fileDrop.note == null ? t("Drop to put it in the Inbox") : t("Drop on this note")}</div>
     {/if}
     {#if boardMenuAt}
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-      <div class="ctx-veil" data-drag-through onpointerdown={() => (boardMenuAt = null)} oncontextmenu={(e) => (e.preventDefault(), (boardMenuAt = null))}></div>
+      <div class="ctx-veil" data-drag-through onpointerdown={() => (boardMenuAt = null)} oncontextmenu={(e) => (e.defaultPrevented || e.preventDefault(), (boardMenuAt = null))}></div>
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="ctx" role="menu" tabindex="-1" transition:pop|global={{ duration: 160 }} style:left="{boardMenuAt.x}px" style:top="{boardMenuAt.y}px" onkeydown={ctxKeys} use:ctxFocus>
+      <div class="ctx" role="menu" tabindex="-1" use:atPointer={{ at: boardMenuAt, motion: boardMotion }} transition:pop|global={boardMotion} onkeydown={ctxKeys} use:ctxFocus>
         <button role="menuitem" onclick={() => ((boardMenuAt = null), look.open("main"), (settingsOpen = false))}>{t("Change background…")}</button>
         <button role="menuitem" onclick={() => openArchive("board")}
           ><span>{t("Archived notes…")}</span>{#if store.archived.length}<span class="count">{store.archived.length}</span>{/if}</button
@@ -740,8 +1128,37 @@
         <button role="menuitem" onclick={() => ((boardMenuAt = null), startTour())}>{t("Take the tour")}</button>
       </div>
     {/if}
+    {#if ideaMenu && ideaItem}
+      {@const idea = ideaItem}
+      <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+      <div class="ctx-veil" data-drag-through onpointerdown={() => (ideaMenu = null)} oncontextmenu={(e) => (e.defaultPrevented || e.preventDefault(), (ideaMenu = null))}></div>
+      <!-- (The keyboard comes in, on its first line, and goes back where it was when it closes.) -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="ctx" role="menu" tabindex="-1" aria-label={t("Idea options")} use:atPointer={{ at: ideaMenu.at, motion: ideaMotion }} transition:pop|global={ideaMotion} onkeydown={ctxKeys} use:modal={{ initial: "button", trap: false }}>
+        <button role="menuitem" onclick={() => (void store.copy(lineText(idea)), (ideaMenu = null))}>{t("Copy text")}</button>
+        <button role="menuitem" onclick={() => ((ideaMenu = null), store.flipKind(idea))}><span>{t("Make it a task")}</span><span class="count">{keysText("Backspace")}</span></button>
+        <hr />
+        <button role="menuitem" class="danger" onclick={() => ((ideaMenu = null), store.deleteItem(idea))}><span>{t("Delete")}</span><span class="count">{keysText("Del")}</span></button>
+      </div>
+    {/if}
     {#if look.panelOpen}
       <StylePanel onClose={() => (look.panelOpen = false)} />
+    {/if}
+    {#if copyAt}
+      {@const offer = copyAt}
+      <!-- (Over everything, the views too: what is copied may be in one of them.) -->
+      <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+      <div class="ctx-veil copy" data-drag-through onpointerdown={() => (copyAt = null)} oncontextmenu={(e) => {
+          // (A right-click on words selected under it: the Copy menu, just opened there, stays.)
+          if (e.defaultPrevented) return;
+          e.preventDefault();
+          copyAt = null;
+        }}></div>
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="ctx copy" role="menu" tabindex="-1" use:atPointer={{ at: offer, motion: copyMotion }} transition:pop|global={copyMotion} onkeydown={ctxKeys} use:ctxFocus>
+        {#if offer.text}<button role="menuitem" onclick={() => copyOut(offer.text)}><span>{t("Copy")}</span><span class="count">Ctrl+C</span></button>{/if}
+        {#if offer.link}<button role="menuitem" onclick={() => copyOut(offer.link!)}>{t("Copy link")}</button>{/if}
+      </div>
     {/if}
     {#if settingsOpen}
       <Settings at={settingsAt} onClose={() => ((settingsOpen = false), (settingsAt = null))} />
@@ -780,6 +1197,31 @@
       <Terms onDone={() => (termsOpen = false)} />
     {/if}
   {/if}
+  {#if !floating && store.loaded}
+    <!-- The panel's inner edge: drag (or arrow keys) to change its width. A focusable separator is
+         the ARIA window-splitter pattern. (Last in the panel, so Tab comes to it after the board,
+         not first; it is fixed, so it shows where it always has.) -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="dock-grip"
+      style:--dock-w="{store.win.width}px"
+      class:left
+      class:dragging={resizing}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t("Panel width, {n} pixels. Drag, or use the arrow keys.", { n: store.win.width })}
+      aria-valuenow={store.win.width}
+      aria-valuemin={420}
+      aria-valuemax={1200}
+      tabindex="0"
+      inert={boardInert}
+      data-tip={t("Drag to change the width")} data-tip-keys="Left|Right"
+      onpointerdown={gripDown}
+      onkeydown={gripKey}
+    >
+      <span></span>
+    </div>
+  {/if}
 </div>
 
 {#if store.peek && store.loaded}
@@ -787,17 +1229,27 @@
 {/if}
 
 {#if itemDrag.item}
-  <div class="slip" class:idea={itemDrag.item.kind === "idea"} style:transform="translate({itemDrag.x + 14}px, {itemDrag.y + 10}px) rotate({itemDrag.tilt}deg)" aria-hidden="true">
+  <!-- (On the pointer's left, it is placed by its own width: narrowed as the pointer moves, it
+       stays put against the pointer, with no glide behind it.) -->
+  <div
+    class="slip"
+    class:idea={itemDrag.item.kind === "idea"}
+    style:transform="translate({itemDrag.x + 14}px, {itemDrag.y + 10}px) rotate({itemDrag.tilt}deg)"
+    style:translate={itemDrag.time != null ? `${itemDrag.liftX === HOURS_LIFT.x ? `${HOURS_LIFT.x}px` : "calc(-100% - 28px)"} -${HOURS_LIFT.y}px` : null}
+    style:max-width={itemDrag.time != null && itemDrag.cap != null ? `${itemDrag.cap}px` : null}
+    aria-hidden="true"
+    use:slipSize
+  >
     {itemDrag.item.text}
   </div>
 {/if}
 {#each itemDrag.backs as b (b.key)}
-  <div class="slip back" class:idea={b.idea} aria-hidden="true" use:goBack={b}>
+  <div class="slip back" class:idea={b.idea} style:max-width={b.cap ? `${b.cap}px` : null} aria-hidden="true" use:goBack={b}>
     {b.text}
   </div>
 {/each}
 {#each itemDrag.landings as l (l.key)}
-  <div class="slip" class:idea={l.idea} aria-hidden="true" use:land={l}>
+  <div class="slip" class:idea={l.idea} style:max-width={l.size ? `${l.size.w}px` : null} aria-hidden="true" use:land={l}>
     {l.text}
   </div>
 {/each}
@@ -821,6 +1273,11 @@
     box-shadow: var(--shell-shadow);
     contain: layout paint;
     container: shell / inline-size;
+  }
+  /* A layer of its own while it slides (it is the whole window: nothing in it is drawn again
+     during the slide), drawn with the page again once it rests, crisp. */
+  .shell.sliding {
+    will-change: transform, opacity;
   }
   /* Docked: slides in from its edge. */
   .shell.docked {
@@ -881,6 +1338,10 @@
     background: color-mix(in srgb, var(--ground) 94%, transparent);
     box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 7%, transparent);
   }
+  /* (Only says what is inert under a view: its parts lay out in the panel as before.) */
+  .under {
+    display: contents;
+  }
   .scroll {
     position: relative;
     z-index: 1;
@@ -931,6 +1392,9 @@
     inset: 0;
     z-index: 60;
   }
+  .ctx-veil.copy {
+    z-index: 90;
+  }
   .ctx {
     position: absolute;
     z-index: 61;
@@ -939,6 +1403,9 @@
     border-radius: var(--r-lg);
     background: var(--card);
     box-shadow: var(--pop-shadow);
+  }
+  .ctx.copy {
+    z-index: 91;
   }
   .ctx button {
     width: 100%;
@@ -961,6 +1428,9 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--s3);
+  }
+  .ctx button.danger {
+    color: var(--late-ink);
   }
   .ctx hr {
     border: 0;
@@ -1059,6 +1529,13 @@
     pointer-events: none;
     transform-origin: 0 0;
     animation: lift 0.16s var(--ease-out);
+    /* (Over the hours it rides a little higher: HOURS_LIFT.) */
+    transition: translate 0.18s var(--ease-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slip {
+      transition: none;
+    }
   }
   .slip.back {
     animation: none;

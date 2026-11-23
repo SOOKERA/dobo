@@ -99,6 +99,14 @@ pub fn weekday(d: u32) -> &'static str {
     if is_fr() { FR[i] } else { EN[i] }
 }
 
+/// A month by number (1 = January), short: "Dec" / "déc.".
+pub fn month_short(m: u32) -> &'static str {
+    const EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const FR: [&str; 12] = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+    let i = (m.clamp(1, 12) - 1) as usize;
+    if is_fr() { FR[i] } else { EN[i] }
+}
+
 /// "10 min", "1 h", "1 h 30" (French) / "1 h 30 min" (English).
 pub fn duration(min: i64) -> String {
     if min < 60 {
@@ -173,6 +181,28 @@ macro_rules! tr {
     };
 }
 
+/// A count takes the singular ("one") form, as in the app (Intl.PluralRules): in English 1 alone,
+/// in French 0 and 1 (« 0 tâche », « 1 tâche », « 2 tâches »).
+pub fn is_one(n: i64) -> bool {
+    if is_fr() {
+        n == 0 || n == 1
+    } else {
+        n == 1
+    }
+}
+
+/// The words for a count, in the language now and in its plural form, as the app's { one, other }
+/// entries: `trn!(n, "{} task", "{} tasks", "{} tâche", "{} tâches", n)`.
+macro_rules! trn {
+    ($n:expr, $en_one:literal, $en_other:literal, $fr_one:literal, $fr_other:literal $(, $arg:expr)* $(,)?) => {
+        if $crate::i18n::is_one(($n) as i64) {
+            tr!($en_one, $fr_one $(, $arg)*)
+        } else {
+            tr!($en_other, $fr_other $(, $arg)*)
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +226,12 @@ mod tests {
         // The user's own words keep their spaces; ours get the French ones.
         assert_eq!(tr!("Due now · {}", "C’est l’heure : {}", "Appel : client ?"), "C’est l’heure\u{a0}: Appel : client ?");
         assert_eq!(fill("{} et {}", &["a".into()]), "a et {}");
+        // Plurals as the app's: French 0 and 1 are singular.
+        let more = |n: usize| trn!(n, "and {} more", "and {} more", "et {} autre", "et {} autres", n);
+        assert_eq!([more(0), more(1), more(2)], ["et 0 autre", "et 1 autre", "et 2 autres"]);
         set("en");
+        let tasks = |n: usize| trn!(n, "{} task", "{} tasks", "{} tâche", "{} tâches", n);
+        assert_eq!([tasks(0), tasks(1), tasks(2)], ["0 tasks", "1 task", "2 tasks"]);
         assert_eq!(resolve("fr"), "fr");
         assert_eq!(resolve("en"), "en");
         assert!(["en", "fr"].contains(&resolve("system")));

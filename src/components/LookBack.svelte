@@ -10,7 +10,9 @@
   import { inMemory } from "../lib/sample";
   import { parseCapture } from "../lib/capture";
   import { formatDueLong } from "../lib/time";
+  import { dayBounds, lookbackAt, lookbackSpan, lookbackTomorrow, spanDay } from "../lib/plan";
   import { pushLayer } from "../lib/layers";
+  import { modal, takeFocus } from "../lib/modal";
   import type { Item } from "../lib/types";
   import { arrive, card, fold, leave, widen } from "../lib/motion";
   import { dayName, t } from "../lib/i18n.svelte";
@@ -20,20 +22,35 @@
 
   // (Not the quick tour's sample lines: "Book the van" is shown done while the tour is on.)
   let real = $derived(store.items.filter((i) => !inMemory(i.id)));
-  let start = $derived(new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime());
-  let end = $derived(start + 86_400_000);
+  // (Calendar days: 23 or 25 hours on the nights the clocks change; a work night that crosses
+  // midnight counts for the day it started, up to its end the next morning. Its notification
+  // counts these three the same way, reminders.rs `lookback_count`: keep them in step.)
+  let dayStart = $derived(dayBounds(day).start);
+  let start = $derived(lookbackSpan(day, store.workHours).start);
+  let end = $derived(lookbackSpan(day, store.workHours).end);
+  let dayBefore = $derived(dayBounds(new Date(dayStart - 1)).start);
   let done = $derived(real.filter((i) => i.done_at != null && i.done_at >= start && i.done_at < end && i.kind === "task").sort((a, b) => (a.done_at ?? 0) - (b.done_at ?? 0)));
-  let open = $derived(real.filter((i) => i.kind === "task" && i.done_at == null && i.due_at != null && i.due_at < end && i.due_at >= start - 86_400_000));
+  let open = $derived(real.filter((i) => i.kind === "task" && i.done_at == null && i.due_at != null && i.due_at < end && i.due_at >= dayBefore));
   let ideas = $derived(real.filter((i) => i.kind === "idea" && i.created_at >= start && i.created_at < end));
-  let isToday = $derived(start === new Date(store.now.getFullYear(), store.now.getMonth(), store.now.getDate()).getTime());
+  /** The day whose span holds now: in the night part of work hours that cross midnight, still
+   * the day that night began. */
+  let isToday = $derived(dayBounds(spanDay(store.now.getTime(), store.workHours)).start === dayStart);
+  /** Opened before the day is over (its look back comes at the end of work hours or of the day):
+   * "Today so far.", and no "See you tomorrow" yet. */
+  let soFar = $derived(isToday && store.now.getTime() < lookbackAt(dayStart, store.day, store.workHours));
+  /** …and after midnight, in the night's work hours: "Tonight so far." */
+  let tonight = $derived(soFar && store.now.getTime() >= dayBounds(day).end);
 
+  let lookEl = $state<HTMLElement>();
   let picking = $state<number | null>(null);
   let pickText = $state("");
+  /** The row whose day picking Esc called off: the keyboard goes back to its "Pick a day". */
+  let pickedBack = $state<number | null>(null);
   let picked = $derived(pickText.trim() ? parseCapture(`x ${pickText}`, "task", store.now).due : null);
 
   // Opened from the menu, Esc closes it. (When it came by itself, Esc still hides the panel.)
   $effect(() => {
-    if (store.lookbackOpen) return pushLayer(() => (store.lookbackOpen = false), undefined, { beside: true });
+    if (store.lookbackOpen) return pushLayer(() => store.hideLookback(), undefined, { beside: true });
   });
 
   // Opened by hand, it opens at the top of the board: a board scrolled down goes up to it, as the
@@ -44,22 +61,29 @@
     scroller.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   });
 
+  // (After midnight the look back still shows the day before: its "Tomorrow" is today.)
   function tomorrow(it: Item) {
-    const d = new Date(it.due_at ?? store.now);
-    const x = new Date(store.now);
-    x.setDate(x.getDate() + 1);
-    x.setHours(d.getHours(), d.getMinutes(), 0, 0);
-    store.setDue(it, x.getTime());
+    store.setDue(it, lookbackTomorrow(it.due_at ?? store.now.getTime(), day, Date.now()));
   }
 </script>
 
-<section class="look" aria-label={t("Look back on the day")} transition:card|global={{ duration: 520, room: 0.9, show: 0.3 }}>
+<!-- Opened by hand, the keyboard comes in (and goes back when it closes); come by itself in the
+     evening, it never takes the keyboard from someone working. -->
+<section
+  class="look"
+  aria-label={t("Look back on the day")}
+  tabindex="-1"
+  bind:this={lookEl}
+  transition:card|global={{ duration: 520, room: 0.9, show: 0.3 }}
+  use:modal={{ initial: untrack(() => store.lookbackOpen) ? "self" : "none", trap: false, restore: () => !!lookEl?.contains(document.activeElement) }}
+>
   <div class="head">
     <div>
-      <h2>{t("That was {day}.", { day: dayName(day.getDay(), true) })}</h2>
+      <h2>{tonight ? t("Tonight so far.") : soFar ? t("Today so far.") : t("That was {day}.", { day: dayName(day.getDay(), true) })}</h2>
       <p>{t("Here is what happened, and what moves on.")}</p>
     </div>
-    <button class="x" aria-label={t("Close the look back")} data-tip={t("Close")} data-tip-keys="Esc" onclick={() => store.dismissLookback()}><Icon name="close" size={16} /></button>
+    <!-- (Esc closes only one opened by hand: the evening's, come by itself, leaves Esc to hide the panel.) -->
+    <button class="x" aria-label={t("Close the look back")} data-tip={t("Close")} data-tip-keys={store.lookbackOpen ? "Esc" : null} onclick={() => store.dismissLookback()}><Icon name="close" size={16} /></button>
   </div>
 
   <div class="cols">
@@ -84,13 +108,22 @@
           {#if picking === o.id}
             <span class="pick" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
               <input
+                use:takeFocus
                 bind:value={pickText}
-                placeholder={t("lundi 9h, friday…")}
+                placeholder={t("Monday 9am, Friday…")}
                 aria-label={t("New day for {text}", { text: o.text })}
                 autocomplete="off"
                 onkeydown={(e) => {
-                  if (e.key === "Enter" && picked && !composing(e)) {
+                  if (composing(e)) return;
+                  if (e.key === "Enter" && picked) {
                     store.setDue(o, picked.getTime());
+                    picking = null;
+                    pickText = "";
+                  } else if (e.key === "Escape") {
+                    // Esc goes back to the three choices (not out of the look back).
+                    e.stopPropagation();
+                    e.preventDefault();
+                    pickedBack = o.id;
                     picking = null;
                     pickText = "";
                   }
@@ -101,7 +134,7 @@
           {:else}
             <span class="btns" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
               <button class="b strong" onclick={() => tomorrow(o)}>{t("Tomorrow")}</button>
-              <button class="b" onclick={() => ((picking = o.id), (pickText = ""))}>{t("Pick a day")}</button>
+              <button class="b" use:takeFocus={pickedBack === o.id} onfocus={() => (pickedBack = null)} onclick={() => ((picking = o.id), (pickText = ""))}>{t("Pick a day")}</button>
               <button class="b plain" onclick={() => store.setDue(o, null)}>{t("No time")}</button>
             </span>
           {/if}
@@ -121,7 +154,7 @@
   {/if}
 
   <div class="foot">
-    <span class="bye">{t("See you tomorrow.")}</span>
+    {#if !soFar}<span class="bye">{t("See you tomorrow.")}</span>{/if}
     <button class="close" onclick={() => store.dismissLookback()}>{t("Close")}</button>
   </div>
 </section>
@@ -335,6 +368,7 @@
     color: var(--muted);
   }
   .close {
+    margin-left: auto;
     height: 40px;
     padding: 0 18px;
     border: 0;
@@ -344,5 +378,8 @@
     font-size: var(--t-base);
     font-weight: 600;
     cursor: pointer;
+  }
+  .look:focus {
+    outline: none;
   }
 </style>

@@ -173,7 +173,7 @@
     font: inherit;
     font-family: var(--sans);
     font-size: 13px;
-    color: color-mix(in srgb, currentColor 58%, transparent);
+    color: color-mix(in srgb, currentColor 64%, transparent);
     cursor: pointer;
     text-align: left;
   }
@@ -213,7 +213,7 @@
     margin-top: 1px;
     font-family: var(--sans);
     font-size: 11.5px;
-    color: color-mix(in srgb, currentColor 58%, transparent);
+    color: color-mix(in srgb, currentColor 64%, transparent);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

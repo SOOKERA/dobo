@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dobo",
   "mainBinaryName": "Dobo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "com.sookera.ztodo",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -87,11 +87,13 @@
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico",
         "languages": [
-          "English"
+          "English",
+          "French"
         ],
         "displayLanguageSelector": false,
         "customLanguageFiles": {
-          "English": "installer/English.nsh"
+          "English": "installer/English.nsh",
+          "French": "installer/French.nsh"
         },
         "installerHooks": "installer/hooks.nsh",
         "template": "installer/installer.nsi"

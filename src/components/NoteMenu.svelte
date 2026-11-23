@@ -2,10 +2,12 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   import { untrack } from "svelte";
+  import { roving } from "../lib/gridkeys";
   import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
   import { swatchesFor, defaultCustom } from "../lib/palette";
   import { pushLayer } from "../lib/layers";
+  import { closeOnLeave, keepInView, modal, takeFocus } from "../lib/modal";
   import { look } from "../lib/look.svelte";
   import { hexToRgb, rgbStrToHex } from "../lib/looks";
   import { saveNotePicture } from "../lib/snapshot";
@@ -13,6 +15,8 @@
   import { fold, pop } from "../lib/motion";
   import { t, tMaybe } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
+  import { atPointer, type Point } from "../lib/rightclick.svelte";
+  import { noteAsText } from "../lib/astext";
 
   const papers: [Paper, "Plain" | "Ruled" | "Grid" | "Antique"][] = [
     ["plain", "Plain"],
@@ -30,17 +34,22 @@
       await new Promise((r) => requestAnimationFrame(() => r(null)));
       await saveNotePicture(card, noteTitle(note));
     } catch (e) {
-      store.showToast(() => t("Couldn't save the picture: {error}", { error: String(e) }));
+      store.showToast(() => t("Couldn’t save the picture: {error}", { error: String(e) }));
     } finally {
       saving = false;
     }
   }
 
-  let { note, onClose }: { note: Note; onClose: () => void } = $props();
+  // (`at`: opened by a right-click, at the pointer; else under its ⋯.)
+  let { note, onClose, at = null }: { note: Note; onClose: () => void; at?: Point | null } = $props();
+  /** How it comes in: from above, or from below when it opens above the pointer. */
+  const motion = { y: -4 };
 
   // Opens on the note's own palette tab.
   let tab = $state<PaletteName>(untrack(() => note.palette));
   let confirmDelete = $state(false);
+  /** "Keep" answered from the keyboard: it goes back to "Delete note…". */
+  let kept = $state(false);
   let editing = $state<number | null>(null);
   let draftName = $state("");
   let draftDot = $state("#c8643c");
@@ -83,17 +92,28 @@
   }
 </script>
 
-<div class="menu" transition:pop|global bind:this={menuEl} role="dialog" aria-label={t("Note options")}>
+<!-- (The keyboard comes in, on the note's colour, and goes back to ⋯ when it closes.) -->
+<div
+  class="menu"
+  use:atPointer={{ at, motion }}
+  transition:pop|global={motion}
+  bind:this={menuEl}
+  role="dialog"
+  aria-label={t("Note options")}
+  use:modal={{ initial: () => menuEl?.querySelector<HTMLElement>(".swatch.on") ?? menuEl?.querySelector<HTMLElement>(".swatch"), trap: false }}
+  use:closeOnLeave={onClose}
+  use:keepInView={confirmDelete}
+>
   <div class="row-head">
     <span class="label">{t("Colour")}</span>
     <span class="picked">{tMaybe(pickedName)}</span>
   </div>
-  <div class="tabs" role="tablist" aria-label={t("Palette")}>
+  <div class="tabs" role="tablist" aria-label={t("Palette")} use:roving>
     {#each [["soft", "Soft"], ["vivid", "Vivid"], ["custom", "Custom"]] as const as [key, label] (key)}
-      <button role="tab" class="tab" class:on={tab === key} aria-selected={tab === key} onclick={() => ((tab = key as PaletteName), (editing = null))}>{t(label)}</button>
+      <button role="tab" id="palette-{key}" aria-controls="palette-swatches" class="tab" class:on={tab === key} aria-selected={tab === key} onclick={() => ((tab = key as PaletteName), (editing = null))}>{t(label)}</button>
     {/each}
   </div>
-  <div class="swatches">
+  <div class="swatches" id="palette-swatches" role="tabpanel" aria-labelledby="palette-{tab}">
     {#each swatches as s, i (s.key)}
       {@const tone = isDark ? s.dark : s.light}
       <button
@@ -103,7 +123,8 @@
         data-tip={tMaybe(s.name)}
         onclick={() => store.setColour(note, tab, s.key)}
         oncontextmenu={(e) => {
-          if (tab !== "custom") return;
+          // (Selected words right-clicked here: the Copy menu took it.)
+          if (tab !== "custom" || e.defaultPrevented) return;
           e.preventDefault();
           startEdit(i);
         }}
@@ -158,7 +179,7 @@
 
   <div class="row-head">
     <span class="label">{t("Paper")}</span>
-    <div class="papers" role="radiogroup" aria-label={t("Paper")}>
+    <div class="papers" role="radiogroup" use:roving aria-label={t("Paper")}>
       {#each papers as [key, label] (key)}
         <button role="radio" aria-checked={(note.paper ?? "plain") === key} class="paper p-{key}" class:on={(note.paper ?? "plain") === key} data-tip={t(label)} aria-label={t(label)} onclick={() => store.setPaper(note, key)}
           ><span></span></button
@@ -202,17 +223,25 @@
   <button
     class="item"
     onclick={() => {
+      void store.copy(noteAsText(noteTitle(note), store.itemsByNote.get(note.id) ?? [], (id) => store.stepsOf.get(id) ?? []));
+      onClose();
+    }}><span>{t("Copy as text")}</span></button
+  >
+  <button
+    class="item"
+    onclick={() => {
       store.archive(note);
       onClose();
     }}><span>{t("Archive note")}</span></button
   >
   {#if !confirmDelete}
-    <button class="item danger" transition:fold={{ duration: 220 }} onclick={() => (confirmDelete = true)}><span>{t("Delete note…")}</span><Icon name="trash" size={14} /></button>
+    <button class="item danger" use:takeFocus={kept} onfocus={() => (kept = false)} transition:fold={{ duration: 220 }} onclick={() => (confirmDelete = true)}><span>{t("Delete note…")}</span><Icon name="trash" size={14} /></button>
   {:else}
     <div class="confirm" transition:fold={{ duration: 260 }}>
       <span>{t("Delete “{name}” and its lines?", { name: noteTitle(note) })}</span>
       <div class="confirm-actions">
-        <button class="small" onclick={() => (confirmDelete = false)}>{t("Keep")}</button>
+        <!-- (The keyboard comes to the safe choice.) -->
+        <button class="small" use:takeFocus onclick={() => ((kept = true), (confirmDelete = false))}>{t("Keep")}</button>
         <button class="small danger-fill" onclick={() => store.deleteNote(note)}>{t("Delete")}</button>
       </div>
     </div>
@@ -509,8 +538,8 @@
     gap: 6px;
   }
   .danger-fill {
-    background: var(--late);
-    border-color: var(--late);
+    background: var(--danger-fill);
+    border-color: var(--danger-fill);
     color: #fff;
   }
 </style>

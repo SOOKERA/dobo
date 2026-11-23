@@ -104,22 +104,21 @@ mod imp {
             wide(s).iter().flat_map(|c| c.to_le_bytes()).collect()
         }
 
-        const PARENT: &str = r"Software\DoboTests";
-
-        /// A key of the test's own, like Windows' CurrentVersion, removed after.
+        /// A key of the test's own, like Windows' CurrentVersion, removed after. (Straight under
+        /// Software, never under a parent shared with other tests: removing a shared parent
+        /// once empty could race with another test making its key there.)
         struct Base(String);
         impl Base {
             fn new(tag: &str) -> Self {
-                Base(format!(r"{PARENT}\rename-{tag}-{}-{:?}", crate::db::now_ms(), std::thread::current().id()))
+                Base(format!(r"Software\DoboTests-rename-{tag}-{}-{:?}", crate::db::now_ms(), std::thread::current().id()))
             }
         }
         impl Drop for Base {
             fn drop(&mut self) {
-                let (k, parent) = (wide(&self.0), wide(PARENT));
+                let k = wide(&self.0);
                 unsafe {
                     let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()));
-                    // (Goes only once empty: another test may still be using it.)
-                    let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(parent.as_ptr()));
+                    let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()));
                 }
             }
         }

@@ -3,8 +3,80 @@
 fn main() {
     terms_page();
     system_dlls_only();
-    tauri_build::build()
+    // Each of Dobo's own commands gets a permission (allow-<command>): a window may call only the
+    // ones its capability lists (capabilities/: the board all of them, the quick dump bar its few).
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS))).expect("Tauri's build step failed");
 }
+
+/// Every command lib.rs hands to Tauri (`generate_handler!`; a test checks they match, and that
+/// the board's capability allows each one).
+const COMMANDS: &[&str] = &[
+    "load_all",
+    "create_note",
+    "update_note",
+    "delete_note",
+    "reorder_notes",
+    "create_item",
+    "update_item",
+    "delete_item",
+    "set_setting",
+    "language_now",
+    "inbox_for",
+    "drop_empty_inbox",
+    "count_sticky_notes",
+    "import_sticky_notes",
+    "window_info",
+    "hide_panel",
+    "apply_window",
+    "set_float_on_top",
+    "list_monitors",
+    "answer_ring",
+    "page_ready",
+    "tidy_answer",
+    "rhythm_presets",
+    "show_dump",
+    "hide_dump",
+    "dump_item",
+    "fetch_preview",
+    "set_item_link",
+    "open_path",
+    "open_url",
+    "save_picture",
+    "add_picture_file",
+    "delete_picture",
+    "make_thumb",
+    "release_picture",
+    "set_shortcut",
+    "shortcuts_taken",
+    "get_autostart",
+    "set_autostart",
+    "restore",
+    "open_note",
+    "end_peek",
+    "save_note_image",
+    "reveal",
+    "backup_now",
+    "backup_list",
+    "backup_restore",
+    "backup_status",
+    "backup_folder",
+    "data_info",
+    "open_data_folder",
+    "dark_mode_now",
+    "export_look",
+    "import_look",
+    "pick_background_picture",
+    "resize_docked",
+    "set_pinned",
+    "accept_terms",
+    "quit_app",
+    "update_status",
+    "update_check",
+    "update_restart",
+    "recovery_state",
+    "recovery_choose",
+    "recovery_continue",
+];
 
 // The Markdown-to-text conversion, shared with Dobo itself (its tests are there).
 #[path = "src/terms.rs"]

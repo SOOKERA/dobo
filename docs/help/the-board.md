@@ -19,7 +19,7 @@ A note shows its tasks first (open ones, then done ones), then its pictures, the
 
 - **Rename a note**: double-click its title, or select it and press **Enter** or **F2**.
 - **Fold it to its title**: the arrow on the note, or **F**. Again to unfold.
-- **Open its menu**: click its coloured dot or the **⋯** on its title.
+- **Open its menu**: click its coloured dot or the **⋯** on its title, or right-click the note (selected: **Shift+F10** or the Menu key).
 
 ## Move notes
 
@@ -37,6 +37,7 @@ Columns stay put while a note grows or shrinks; adding or deleting a note lets t
 - **Make wide** / **Make normal width**, **Fold to its title** / **Unfold**.
 - **Save as a template**: start new notes from it later.
 - **Save as a picture**: a PNG in **Pictures › Dobo**, also copied so you can paste it into a message.
+- **Copy as text**: its title, its tasks as a checklist and its ideas (a line's link or file under it), to paste anywhere. A short "Copied" says it's done.
 - **Archive note**: takes it off the board, to bring it back later (see [Archive](archive.md)).
 - **Delete note…**: asks "Delete "Shopping" and its lines?" first. **Undo** can still bring it back.
 
@@ -49,7 +50,7 @@ Columns stay put while a note grows or shrinks; adding or deleting a note lets t
 
 Each note belongs to a space, **Work** or **Personal**, and each space has its own Inbox. **All · Work · Personal** in the header chooses what the board shows. New lines go to the space on screen (to Work while **All** shows).
 
-To switch by the clock, turn on **Settings › Work hours › Switch between Work and Personal by the clock**, and choose the days and hours (09:00 to 19:00 at first). Reminders from the other space still ring: the board switches to it for that reminder and offers to go back. You can still switch by hand.
+To switch by the clock, turn on **Settings › Work hours › Switch between Work and Personal by the clock**, and choose the days and hours (09:00 to 19:00 at first). Hours can cross midnight, such as 22:00 to 06:00: they end the next morning and count for the day they start, so Saturday 02:00 is still Friday's night. Reminders from the other space still ring: the board switches to it for that reminder and offers to go back. You can still switch by hand.
 
 ## Note size
 

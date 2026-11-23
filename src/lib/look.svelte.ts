@@ -3,6 +3,7 @@
 // The board's look, live: what shows now (the Light or the Dark style), the saved styles,
 // themes, watercolour mixes and colours, the dark-mode switch — and every change to them,
 // each one undoable (Ctrl+Z, or Undo on the little message).
+import { tick } from "svelte";
 import { store } from "./store.svelte";
 import { list, t, tMaybe } from "./i18n.svelte";
 import {
@@ -34,6 +35,7 @@ import {
   type Ref,
   type ThemeRef,
   refFor,
+  refBaseName,
   refName,
   resolveRef,
   themePairOf,
@@ -105,6 +107,10 @@ class LookState {
   nameOf(ref: Ref | null): string | null {
     return refName(ref, this.styles, this.themes);
   }
+  /** The same without a theme half's "· Dark" / "· Light" (shown by its sun or moon). */
+  baseNameOf(ref: Ref | null): string | null {
+    return refBaseName(ref, this.styles, this.themes);
+  }
   /** A theme's name as shown (ours in your language). */
   themeNameOf(ref: ThemeRef | null): string | null {
     const pair = themePairOf(ref, this.themes);
@@ -116,16 +122,28 @@ class LookState {
 
   // ---- Saving (one undoable step per change) ----
 
-  private async apply(changes: Record<string, unknown>) {
-    for (const [k, v] of Object.entries(changes)) await store.setSetting(k, v ?? null);
+  /** `before` runs as the change is made (a crossfade's may wait for the one before it). */
+  private async apply(changes: Record<string, unknown>, before?: () => void) {
+    const run = async () => {
+      before?.();
+      for (const [k, v] of Object.entries(changes)) await store.setSetting(k, v ?? null);
+    };
+    // What the board or the mode looks like changes (a theme, a style, a mix, light or dark, and
+    // their Undo): the old look crossfades into the new one.
+    const seen = "look_board" in changes || ("dark_mode" in changes && (darkBySwitch(readDarkMode(changes.dark_mode), store.now) ?? this.systemDark) !== this.dark);
+    // (Either way after a crossfade's change still on its way: the last one made stays.)
+    return seen ? crossfade(run) : afterMaking(run);
   }
   /** Undo labels are worked out when shown (in the language of that moment), not when recorded. */
   private async put(changes: Record<string, unknown>, label: Label | null, toast?: Label) {
+    // (What it was is read, and the Undo step recorded, as the change is made: after a change
+    // still crossfading in, that one, and its step comes first.)
     const prev: Record<string, unknown> = {};
-    for (const k of Object.keys(changes)) prev[k] = clone(store.settings[k] ?? null);
     const next = clone(changes);
-    await this.apply(next);
-    if (label) store.history.record({ label, undo: () => this.apply(prev), redo: () => this.apply(next) });
+    await this.apply(next, () => {
+      for (const k of Object.keys(changes)) prev[k] = clone(store.settings[k] ?? null);
+      if (label) store.history.record({ label, undo: () => this.apply(prev), redo: () => this.apply(next) });
+    });
     if (toast) store.showToast(toast, { label: () => t("Undo"), run: () => void store.undo() });
   }
 
@@ -367,7 +385,7 @@ class LookState {
     return { palette: v.palette as PaletteName, color: v.color };
   }
   setNewNoteColour(v: { palette: PaletteName; color: string } | null) {
-    return this.put({ new_note_colour: v }, () => t("New notes' colour"));
+    return this.put({ new_note_colour: v }, () => t("New notes’ colour"));
   }
 
   // ---- Export / import ----
@@ -420,6 +438,64 @@ class LookState {
 }
 
 export const look = new LookState();
+
+let fading = false;
+let lastFade = -Infinity;
+/** A crossfade's change until it is made (it waits for the old frame to be kept): a change that
+ * comes meanwhile waits for it, so the last one made is the one that stays. */
+let making: Promise<void> | null = null;
+function afterMaking(update: () => Promise<void>): Promise<void> {
+  if (!making) return update();
+  const run = making.then(update);
+  hold(run);
+  return run;
+}
+function hold(p: Promise<unknown>) {
+  const mine = p.then(
+    () => {},
+    () => {},
+  );
+  making = mine;
+  void mine.then(() => {
+    if (making === mine) making = null;
+  });
+}
+/** A change of look, crossfaded (about 200 ms) where the web view can (View Transitions;
+ * WebView2 can): the old frame stays on screen while the whole page restyles, then fades into the
+ * new one, instead of a frozen frame and a jump. Not with reduced motion, not in a hidden window,
+ * and not for a change that follows another at once (a colour dragged, mixes clicked through):
+ * those just apply. Only ever from a change made by hand (never at start, nor while views are
+ * built off the page). */
+export async function crossfade(update: () => Promise<void>): Promise<void> {
+  const doc = typeof document === "undefined" ? null : (document as Document & { startViewTransition?: (cb: () => Promise<void>) => { finished: Promise<void>; updateCallbackDone: Promise<void> } });
+  const now = performance.now();
+  const quick = fading || now - lastFade < 450;
+  if (!doc?.startViewTransition || quick || doc.visibilityState !== "visible" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (doc && quick) lastFade = now;
+    return afterMaking(update);
+  }
+  fading = true;
+  lastFade = now;
+  let made!: (p: Promise<void>) => void;
+  hold(new Promise<void>((r) => (made = (p) => r(p))));
+  let done: Promise<void> | undefined;
+  const vt = doc.startViewTransition(async () => {
+    done = update();
+    made(done);
+    // The new look drawn (the settings are set at once; saving them may take a moment longer,
+    // and never keeps the old frame up).
+    await Promise.race([done, new Promise((r) => setTimeout(r, 150))]);
+    await tick();
+  });
+  void vt.finished.catch(() => {}).finally(() => (fading = false));
+  await vt.updateCallbackDone.catch(() => {});
+  if (!done) {
+    // (The page never ran it: made now.)
+    done = update();
+    made(done);
+  }
+  await done;
+}
 
 /** Dark mode on the page: the app's chrome, menus and notes switch together. */
 export function applyMode(dark: boolean) {

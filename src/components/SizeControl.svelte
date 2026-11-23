@@ -94,6 +94,12 @@
   .sizes.open {
     opacity: 1;
   }
+  /* While a note's or a task's menu is open, the sizes step aside: the menu may reach down to
+     this corner. */
+  :global(.under:has(.menu-open)) .sizes {
+    opacity: 0;
+    pointer-events: none;
+  }
   .size {
     width: 28px;
     height: 28px;

@@ -57,7 +57,7 @@
   let lookOn = $derived(!!store.lookback);
   function toggleLookBack() {
     if (store.lookback) void store.dismissLookback();
-    else store.lookbackOpen = true;
+    else store.openLookback();
   }
   let lookBack = $derived<MenuItem>({ icon: "sunset", label: lookOn ? t("Close the look back") : t("Look back on today"), run: toggleLookBack });
   let tucked = $derived<MenuItem[]>(
@@ -227,7 +227,7 @@
     {#if !newIn}
     <button class="tool" aria-label={t("New note")} data-tip={t("New note, empty or from a template")} onclick={() => (store.templatesOpen = true)}><Icon name="note-plus" /></button>
     {/if}
-    <button class="tool" aria-label={t("Tidy the inbox, {n} waiting", { n: waiting })} data-tip={waiting ? t("Tidy the inbox ({n} waiting)", { n: waiting }) : t("The inbox is clear")} onclick={onTidy}>
+    <button class="tool" aria-label={t("Tidy the Inbox, {n} waiting", { n: waiting })} data-tip={waiting ? t("Tidy the Inbox ({n} waiting)", { n: waiting }) : t("The Inbox is clear")} onclick={onTidy}>
       <Icon name="inbox" />
       {#if waiting}<span class="badge" transition:blip>{#key waiting}<span in:fadeQuick={{ duration: 160 }}>{waiting > 99 ? "99+" : waiting}</span>{/key}</span>{/if}
     </button>
@@ -483,11 +483,15 @@
     margin: 0 var(--s1);
     background: var(--line);
   }
-  /* Tight: the Style button keeps only its brush (its name is in its tooltip). */
+  /* Tight: the Style button keeps only its brush (its name is in its tooltip), and is a tool like
+     the others beside it: no frame, their size and corners. */
   .bar.tight .style-btn {
     width: 40px;
+    height: 40px;
     padding: 0;
+    border-radius: var(--r-md);
     justify-content: center;
+    box-shadow: none;
   }
   .bar.tight .style-btn span {
     display: none;

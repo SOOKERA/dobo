@@ -27,9 +27,61 @@ export function normalize(s: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
+// French words chrono doesn't know: "midi", "minuit" (never the "midi" of "après-midi") and
+// "après-demain" (else read as "demain", a day early).
+const fr = chrono.fr.casual.clone();
+fr.parsers.push(
+  {
+    pattern: () => /(?<![\p{L}\p{N}-])(midi|minuit)(?![\p{L}\p{N}])/iu,
+    extract: (_c, m) => (m[1].toLowerCase() === "midi" ? { hour: 12, minute: 0 } : { hour: 0, minute: 0 }),
+  },
+  {
+    pattern: () => /(?<![\p{L}\p{N}])apr[eè]s[\s-]?demain(?![\p{L}\p{N}])/iu,
+    extract: (c) => {
+      const d = new Date(c.refDate);
+      d.setDate(d.getDate() + 2);
+      return { day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear() };
+    },
+  },
+);
+
+/** The time a result means. A day without an hour ("tomorrow") is 09:00; a part of the day
+ * ("tonight", "ce soir", "this afternoon") keeps the hour it implies, today's even once that hour
+ * has passed (then the next full hour). A bare "at 3" (no am/pm, no minutes, no "h") is the
+ * afternoon, never 3 in the night. */
+function dueOf(r: chrono.ParsedResult, ref: Date): Date {
+  const d = r.start.date();
+  if (!r.start.isCertain("hour")) {
+    if (!/soir|evening|tonight|night|nuit|apr[eè]s-?midi|afternoon/i.test(r.text)) {
+      d.setHours(9, 0, 0, 0);
+      return d;
+    }
+    d.setMinutes(0, 0, 0);
+    if (/^(?:ce|cet|cette|this)\s|^tonight/i.test(r.text.trim())) {
+      const today = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate(), d.getHours());
+      if (today.getTime() > ref.getTime()) return today;
+      const soon = new Date(ref);
+      soon.setHours(soon.getHours() + 1, 0, 0, 0);
+      return soon;
+    }
+  } else if (!r.start.isCertain("meridiem") && /(?:^|\s)(?:at|@|à|a)\s*[1-6](?:$|\s)/i.test(r.text)) {
+    const h = d.getHours();
+    if (h >= 1 && h <= 6) {
+      // No day written ("call at 3"): today's afternoon while it's still to come.
+      if (!r.start.isCertain("day") && !r.start.isCertain("weekday")) {
+        const today = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate(), h + 12, d.getMinutes());
+        if (today.getTime() <= ref.getTime()) today.setDate(today.getDate() + 1);
+        return today;
+      }
+      d.setHours(h + 12);
+    }
+  }
+  return d;
+}
+
 function bestTime(text: string, ref: Date): chrono.ParsedResult | null {
   const opts = { forwardDate: true };
-  const found = [...chrono.fr.parse(text, ref, opts), ...chrono.en.parse(text, ref, opts)];
+  const found = [...fr.parse(text, ref, opts), ...chrono.en.parse(text, ref, opts)];
   // Bare numbers ("2 bags") are not times.
   const real = found.filter((r) => /[a-zà-ÿ:]/i.test(r.text));
   if (!real.length) return null;
@@ -61,18 +113,15 @@ export function parseCapture(raw: string, kind: Kind, ref = new Date(), { tags =
     }
     const r = bestTime(text, ref);
     if (r) {
-      const d = r.start.date();
-      // A day without an hour ("tomorrow"): 09:00.
-      if (!r.start.isCertain("hour")) d.setHours(9, 0, 0, 0);
-      due = d;
+      due = dueOf(r, ref);
       text = text.slice(0, r.index) + text.slice(r.index + r.text.length);
-      // Leftover joining words: "Call Chanel à" / "Call Chanel at".
-      text = text.replace(/\s+(à|a|at|le|on|pour|for)\s*$/i, "");
+      // Leftover joining words: "Call Chanel à" / "Call Chanel at" (or the whole line: "le").
+      text = text.replace(/(^|\s+)(à|a|at|le|on|pour|for)\s*$/i, "");
     }
     if (repeat) {
       // The first occurrence, at the time typed (else 09:00).
-      const h = r && r.start.isCertain("hour") ? (due as Date).getHours() : 9;
-      const m = r && r.start.isCertain("hour") ? (due as Date).getMinutes() : 0;
+      const h = due ? due.getHours() : 9;
+      const m = due ? due.getMinutes() : 0;
       due = firstOccurrence(repeat, h, m, ref);
       if (repeat.freq === "week" && !repeat.days?.length) repeat = { ...repeat, days: [due.getDay()] };
       if (repeat.freq === "month" && !repeat.monthday) repeat = { ...repeat, monthday: due.getDate() };
@@ -94,9 +143,8 @@ export interface FoundDate {
 export function findDate(text: string, ref = new Date()): FoundDate | null {
   const r = bestTime(text, ref);
   if (!r) return null;
-  const d = r.start.date();
+  const d = dueOf(r, ref);
   const hour = r.start.isCertain("hour");
-  if (!hour) d.setHours(9, 0, 0, 0);
   const day = r.start.isCertain("day") || r.start.isCertain("weekday") || /\b(demain|tomorrow|today|aujourd|ce soir|tonight)/i.test(r.text);
   return { index: r.index, length: r.text.length, due: d, certain: hour && day };
 }

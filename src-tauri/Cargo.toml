@@ -1,6 +1,6 @@
 [package]
 name = "dobo"
-version = "1.0.0"
+version = "1.1.0"
 description = "Dobo by Sookera: to-dos & idea board"
 authors = ["Sookera"]
 license = "GPL-3.0-only"
@@ -20,12 +20,13 @@ tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png"]
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rusqlite = { version = "0.41", features = ["bundled", "backup", "trace"] }
+# Dates and times (clock.rs, repeat.rs). The time zone is Windows' own (its rules for each year,
+# the ones its clock follows), so no time zone database is needed or bundled.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # Link previews: fetches a page's title and picture (small, no async runtime).
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 # Dobo's own updates: each release is signed (Ed25519) and checked (SHA-256, size) before use.
@@ -34,17 +35,25 @@ sha2 = "0.10"
 base64 = "0.22"
 # Version numbers compared the standard way ("1.0.0-beta" comes before "1.0.0").
 semver = "1"
+# Board-size copies of the notes' pictures (thumbs.rs): read, turned and made smaller in pure Rust
+# (the usual picture kinds only), written as WebP by libwebp (built from its sources, as SQLite
+# is: no other tool needed).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+fast_image_resize = { version = "6", default-features = false, features = ["std"] }
+libwebp-sys = "0.14"
 # The usual data folder before Tauri starts (updates, Setup's choices): Tauri's own app_data_dir
 # is dirs' data folder + the identifier.
 dirs = "6"
 
 [target.'cfg(windows)'.dependencies]
-# Start with Windows written by `--install-choices` without the app running: the very entry
-# tauri-plugin-autostart makes (it uses this crate).
+# Start with Windows (install.rs: the app's switch and `--install-choices`), the program quoted.
+# (tauri-plugin-autostart uses this crate too, but writes the program unquoted.)
 auto-launch = "0.6"
 # Update notes sealed for this Windows user (DPAPI), DLLs from System32 only, the single-instance
 # lock: the same calls as Pako's updates (Sookera's reference).
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
+# WebView2's settings (window.rs: its browser keys off), the version Tauri's wry uses.
+webview2-com = "0.39"
 windows = { version = "0.62", features = [
     "Data_Xml_Dom",
     "UI_Notifications",
@@ -61,10 +70,46 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Globalization",
+    "Win32_System_Time",
 ] }
 
 [target.'cfg(not(windows))'.dependencies]
+# The computer's time zone from the system's own files (TZ, /etc/localtime, zoneinfo).
+jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 notify-rust = "4"
+tauri-plugin-autostart = "2"
+
+# Pictures made smaller (thumbs.rs) in a reasonable time in tests and debug builds too.
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+[profile.dev.package.image-webp]
+opt-level = 3
+[profile.dev.package.libwebp-sys]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.gif]
+opt-level = 3
+[profile.dev.package.weezl]
+opt-level = 3
+[profile.dev.package.color_quant]
+opt-level = 3
+
+# The same in the release build (otherwise built for size): a photo made board-size in a blink.
+[profile.release.package.zune-jpeg]
+opt-level = 3
+[profile.release.package.fast_image_resize]
+opt-level = 3
+[profile.release.package.image]
+opt-level = 3
+[profile.release.package.image-webp]
+opt-level = 3
+[profile.release.package.png]
+opt-level = 3
+[profile.release.package.gif]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

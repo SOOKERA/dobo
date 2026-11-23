@@ -4,8 +4,8 @@
 // repeats, the drag ruler's hours, the "Later…" times, the look back window, undo, smart dates.
 import { describe, expect, it } from "vitest";
 import { findRepeat, firstOccurrence, nextAfterDone, nextOccurrence, repeatLabel } from "./repeat";
-import { hourLabelStep, laterChoices, lookbackDay, rulerRange, timeAt } from "./plan";
-import { History } from "./history";
+import { crossesMidnight, hourLabelStep, inWorkHours, laterChoices, lookbackDay, lookbackSpan, rulerRange, spanDay, timeAt } from "./plan";
+import { History, changedKeys, withFields } from "./history";
 import { findDate, parseCapture } from "./capture";
 
 const day = { start: "08:00", end: "22:00" };
@@ -114,6 +114,77 @@ describe("the look back", () => {
   });
 });
 
+describe("work hours that cross midnight (22:00 to 06:00)", () => {
+  // Monday to Friday nights; 16 Nov 2026 is a Monday.
+  const night = { on: true, days: [1, 2, 3, 4, 5], from: "22:00", until: "06:00" };
+  const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).getTime();
+
+  it("count for the day they start", () => {
+    expect(crossesMidnight(night)).toBe(true);
+    expect(crossesMidnight(work)).toBe(false);
+    expect(inWorkHours(night, at(16, 21, 59))).toBe(false);
+    expect(inWorkHours(night, at(16, 22))).toBe(true);
+    expect(inWorkHours(night, at(17, 3))).toBe(true);
+    expect(inWorkHours(night, at(17, 6))).toBe(false);
+    expect(inWorkHours(night, at(17, 12))).toBe(false);
+    // Saturday 02:00 is still Friday's night; Monday 02:00 was Sunday's (not a work day).
+    expect(inWorkHours(night, at(21, 2))).toBe(true);
+    expect(inWorkHours(night, at(21, 22))).toBe(false);
+    expect(inWorkHours(night, at(23, 2))).toBe(false);
+    // Day hours as before; the same start and end is never.
+    expect(inWorkHours(work, wed(12))).toBe(true);
+    expect(inWorkHours(work, wed(20))).toBe(false);
+    expect(inWorkHours({ ...night, until: "22:00" }, at(16, 22))).toBe(false);
+  });
+
+  it("the ruler in Work runs to a little after they end, the next morning", () => {
+    const r = rulerRange(at(16, 20), "work", day, night);
+    expect(r.main.end).toBe(at(17, 7));
+    // In the middle of the night, the night that is on.
+    expect(rulerRange(at(17, 2), "work", day, night).main.end).toBe(at(17, 7));
+    // After it ends, today runs to the end of tonight's; Tomorrow is the next night, from 22:00
+    // to 06:00 the morning after.
+    const r2 = rulerRange(at(17, 6, 50), "work", day, night);
+    expect(r2.main.end).toBe(at(18, 7));
+    expect([r2.next.start, r2.next.end]).toEqual([at(18, 22), at(19, 6)]);
+  });
+
+  it("the look back comes when they end, and shows until the day's own", () => {
+    // Monday's night ends Tuesday 06:00: Monday's look back, all Tuesday until Tuesday's.
+    expect(lookbackDay(at(17, 5, 59), day, night)).toBeNull();
+    expect(lookbackDay(at(17, 6, 1), day, night)?.getDate()).toBe(16);
+    expect(lookbackDay(at(17, 18), day, night)?.getDate()).toBe(16);
+    // Saturday (not a work day) ends with My day: Friday's from Saturday 06:00, then Saturday's.
+    expect(lookbackDay(at(21, 12), day, night)?.getDate()).toBe(20);
+    expect(lookbackDay(at(21, 22, 30), day, night)?.getDate()).toBe(21);
+  });
+
+  it("the look back counts the whole night, once", () => {
+    // Monday (no night before it): from midnight to Tuesday 06:00, when its night ends.
+    expect(lookbackSpan(new Date(2026, 10, 16, 12), night)).toEqual({ start: at(16, 0), end: at(17, 6) });
+    // Tuesday: from where Monday's night ended.
+    expect(lookbackSpan(new Date(2026, 10, 17, 12), night)).toEqual({ start: at(17, 6), end: at(18, 6) });
+    // Saturday (not a work day): from Friday's night's end to its own midnight.
+    expect(lookbackSpan(new Date(2026, 10, 21, 12), night)).toEqual({ start: at(21, 6), end: at(22, 0) });
+    // Day hours: the calendar day.
+    expect(lookbackSpan(new Date(2026, 10, 18, 12), work)).toEqual({ start: new Date(2026, 10, 18).getTime(), end: new Date(2026, 10, 19).getTime() });
+  });
+
+  it("opened in the night, the look back is the night's own day", () => {
+    // Tuesday 03:00, in Monday's night: Monday (what was ticked since 22:00 is in it).
+    expect(spanDay(at(17, 3), night).getDate()).toBe(16);
+    const span = lookbackSpan(spanDay(at(17, 3), night), night);
+    expect(span.start <= at(16, 22) && at(17, 3) < span.end).toBe(true);
+    // From 06:00, Tuesday's.
+    expect(spanDay(at(17, 6), night).getDate()).toBe(17);
+    // Saturday 03:00 (Friday's night): Friday. Sunday 03:00 (no night on Saturday): Sunday.
+    expect(spanDay(at(21, 3), night).getDate()).toBe(20);
+    expect(spanDay(at(22, 3), night).getDate()).toBe(22);
+    // Day hours: always the calendar day.
+    expect(spanDay(at(17, 3), work).getDate()).toBe(17);
+  });
+});
+
 describe("undo", () => {
   it("undoes, redoes, and a new change drops the redo", async () => {
     let v = 0;
@@ -152,6 +223,20 @@ describe("undo", () => {
     h.record({ label: "c", undo: () => Promise.reject(new Error("no")), redo: () => {} });
     await expect(h.undo()).rejects.toThrow("no");
     expect(await h.undo()).toBe("a");
+  });
+
+  it("takes back only what a change made, never what changed meanwhile", () => {
+    const before = { id: 1, text: "Call", done_at: null as number | null, link: null as { url: string } | null, sort: 2 };
+    const edited = { ...before, text: "Call Léa" };
+    const keys = changedKeys(before, edited);
+    expect(keys).toEqual(["text"]);
+    // Meanwhile, with no step of its own: done from its notification, a link's preview arrived.
+    const now = { ...edited, done_at: 99, link: { url: "https://a.b" } };
+    expect(withFields(now, before, keys)).toEqual({ ...now, text: "Call" });
+    expect(withFields(now, edited, keys)).toEqual(now);
+    // Values are compared by what they hold (a rule written again unchanged is no change).
+    expect(changedKeys({ r: { every: 1 }, a: undefined }, { r: { every: 1 }, a: null })).toEqual([]);
+    expect(changedKeys({ r: { every: 1 } }, { r: { every: 2 } })).toEqual(["r"]);
   });
 
   it("forgets everything after a restore", async () => {

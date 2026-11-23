@@ -4,6 +4,7 @@
   // Export & import: a small .ztheme file with your look (never your notes). Importing shows
   // what's inside first; nothing you have is replaced, a name already used gets "(2)".
   import Icon from "../../Icon.svelte";
+  import { roving } from "../../../lib/gridkeys";
   import { look } from "../../../lib/look.svelte";
   import { OUR_THEMES } from "../../../lib/looks";
   import type { ExportScope } from "../../../lib/ztheme";
@@ -11,7 +12,7 @@
   import { fadeQuick, fold } from "../../../lib/motion";
 
   let theme = $derived(look.board.theme);
-  let themeName = $derived(look.themeNameOf(theme) ?? t("This board's pair"));
+  let themeName = $derived(look.themeNameOf(theme) ?? t("This board’s pair"));
   let scope = $state<ExportScope>("theme");
   let busy = $state(false);
 
@@ -19,7 +20,7 @@
     busy = true;
     try {
       // Our theme's name as it is underneath, so the file reads the same in either language.
-      if (scope === "theme") await look.exportLook("theme", { name: look.themePair(theme)?.name ?? t("This board's pair"), light: look.board.light, dark: look.board.dark });
+      if (scope === "theme") await look.exportLook("theme", { name: look.themePair(theme)?.name ?? t("This board’s pair"), light: look.board.light, dark: look.board.dark });
       else await look.exportLook(scope);
     } finally {
       busy = false;
@@ -33,7 +34,7 @@
 <div class="body">
   <section class="sec">
     <span class="lbl">{t("Export")}</span>
-    <div class="opts" role="radiogroup" aria-label={t("What to export")}>
+    <div class="opts" role="radiogroup" use:roving aria-label={t("What to export")}>
       <button role="radio" aria-checked={scope === "theme"} class="opt" class:on={scope === "theme"} onclick={() => (scope = "theme")}>
         <i></i><span><b>{t("This theme")}</b> · {themeName}<small>{t("its two styles and any custom colours they use")}</small></span>
       </button>
@@ -146,9 +147,13 @@
     font-size: 18px;
     font-weight: 500;
   }
+  /* The file, its words beside it, and the button under the words (beside them, in a panel this
+     narrow, the words went down to a word or two a line). */
   .drop {
-    display: flex;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 10px;
     align-items: center;
     padding: 12px;
     border-radius: 12px;
@@ -156,7 +161,7 @@
     background: color-mix(in srgb, var(--chip) 35%, var(--card));
   }
   .file {
-    flex: none;
+    grid-row: 1 / 3;
     width: 38px;
     height: 46px;
     border-radius: 6px;
@@ -170,8 +175,11 @@
     color: var(--muted);
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
   }
+  .drop > .btn2 {
+    grid-column: 2;
+    justify-self: start;
+  }
   .fn {
-    flex: 1;
     min-width: 0;
     font-size: 12.5px;
     line-height: 1.4;

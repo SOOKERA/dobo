@@ -10,7 +10,9 @@
 //!   does (%LOCALAPPDATA%\com.sookera.ztodo\EBWebView).
 //! - **Portable** (no such file): a `data` folder next to the exe, WebView2's data inside it too
 //!   (`data\webview`), so the folder can go on a USB stick and leaves nothing behind. When that
-//!   folder can't be written (Program Files, a read-only drive), the usual data folder instead.
+//!   folder can't be written (Program Files, a read-only drive), the usual data folder instead,
+//!   but never silently: the start asks first (`blocked`; the recovery screen, recovery.rs), so
+//!   notes are never split without a word.
 //!
 //! **Notes already on this computer are never left behind nor split.** Before the portable
 //! mode existed, every copy kept its notes in the usual data folder. So a portable copy whose
@@ -39,6 +41,10 @@ use std::sync::OnceLock;
 
 /// The file the installer writes next to Dobo.exe: this copy is installed, not portable.
 pub const INSTALLED_MARKER: &str = ".dobo-installed";
+/// In the usual data folder: the portable copies that use the notes there (paths that keep using
+/// them, one per line), so uninstalling the installed copy with "Also delete my notes" keeps them
+/// (install.rs `uninstall_cleanup`).
+pub const PORTABLE_MARKER: &str = ".dobo-portable-copies";
 /// The notes' database (its presence is what "this folder holds notes" means). Named before the
 /// app was called Dobo; it keeps that name so the notes already there are found.
 pub const DB_FILE: &str = "ztodo.sqlite";
@@ -98,6 +104,8 @@ pub struct Place {
     pub kept_existing: bool,
     /// Portable, but the folder next to the exe can't be written: the usual data folder.
     pub fallback: bool,
+    /// That folder next to the exe (asked about at start before the usual one is used).
+    pub blocked: Option<PathBuf>,
 }
 
 fn has_marker(dir: &Path) -> bool {
@@ -111,23 +119,25 @@ fn has_notes(dir: &Path) -> bool {
 /// The decision itself (no side effects of its own; `writable` may create the folder it is
 /// asked about). `exe_dir`: the exe's folder; `usual`: the app's usual data folder.
 pub fn decide(exe_dir: Option<&Path>, usual: &Path, writable: impl Fn(&Path) -> bool) -> Place {
-    let at_usual = |kept_existing: bool, fallback: bool, kind: Kind| Place { kind, dir: usual.to_path_buf(), webview: None, kept_existing, fallback };
+    let at_usual = |kept_existing: bool, fallback: bool, kind: Kind| Place { kind, dir: usual.to_path_buf(), webview: None, kept_existing, fallback, blocked: None };
     let Some(exe) = exe_dir else { return at_usual(false, true, Kind::Portable) };
     // Installed: the usual folder, and nothing is ever created next to the exe.
     if has_marker(exe) {
         return at_usual(false, false, Kind::Installed);
     }
     let next = exe.join(DATA);
-    let portable = || Place { kind: Kind::Portable, webview: Some(next.join("webview")), dir: next.clone(), kept_existing: false, fallback: false };
-    // A portable data folder that already holds notes is the one.
-    if has_notes(&next) && writable(&next) {
-        return portable();
+    let portable = || Place { kind: Kind::Portable, webview: Some(next.join("webview")), dir: next.clone(), kept_existing: false, fallback: false, blocked: None };
+    let blocked = || Place { blocked: Some(next.clone()), ..at_usual(false, true, Kind::Portable) };
+    // A portable data folder that already holds notes is the one; when it can't be written (a
+    // locked USB stick), the usual folder only once asked (never a half-working one).
+    if has_notes(&next) {
+        return if writable(&next) { portable() } else { blocked() };
     }
     // Notes already on this computer (from before the portable mode): kept where they are.
     if has_notes(usual) {
         return at_usual(true, false, Kind::Portable);
     }
-    if writable(&next) { portable() } else { at_usual(false, true, Kind::Portable) }
+    if writable(&next) { portable() } else { blocked() }
 }
 
 /// Can files be written in this folder? Creates it when missing; a folder it had to create
@@ -151,7 +161,7 @@ pub fn is_writable(dir: &Path) -> bool {
 fn dev_place() -> Place {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dir = manifest.parent().unwrap_or(&manifest).join(DATA);
-    Place { kind: Kind::Dev, webview: Some(dir.join("webview")), dir, kept_existing: false, fallback: false }
+    Place { kind: Kind::Dev, webview: Some(dir.join("webview")), dir, kept_existing: false, fallback: false, blocked: None }
 }
 
 static PLACE: OnceLock<Place> = OnceLock::new();
@@ -172,6 +182,122 @@ pub fn init(usual: &Path) -> &'static Place {
     })
 }
 
+/// A portable copy (`exe`) that uses the usual data folder (`place`: the notes this computer
+/// already had, or the usual folder chosen at a start): noted there for the uninstaller, once,
+/// with when it was last seen (each start of it: a "# seen <seconds> <path>" line, which Dobo
+/// 1.0 reads as a remark).
+pub fn note_portable_copy(place: &Place, exe: &Path) {
+    if place.kind != Kind::Portable || place.webview.is_some() {
+        return;
+    }
+    note_seen(&place.dir.join(PORTABLE_MARKER), exe, unix_now());
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// What the line `l` says when it says when a copy was last seen: (seconds, the copy).
+fn seen_line(l: &str) -> Option<(u64, &str)> {
+    let (secs, exe) = l.strip_prefix("# seen ")?.split_once(' ')?;
+    Some((secs.parse().ok()?, exe.trim()))
+}
+
+/// How often a copy's "seen" line is written again: once a day is enough to count 180 days.
+const SEEN_EVERY: u64 = 24 * 3600;
+
+/// `exe` noted in `file` (once), seen at `now`. Not written again when it was seen less than a
+/// day ago (`SEEN_EVERY`); else written whole beside it, then put in its place (the uninstaller
+/// reads it: never half-written).
+fn note_seen(file: &Path, exe: &Path, now: u64) {
+    let had = std::fs::read_to_string(file).unwrap_or_default();
+    let line = exe.to_string_lossy();
+    let line = line.trim();
+    let noted = had.lines().any(|l| l.trim().eq_ignore_ascii_case(line));
+    let lately = had.lines().filter_map(seen_line).any(|(t, e)| e.eq_ignore_ascii_case(line) && t <= now && now - t < SEEN_EVERY);
+    if noted && lately {
+        return;
+    }
+    let mut out = String::new();
+    if had.trim().is_empty() {
+        out.push_str("# Portable copies of Dobo that use the notes in this folder: uninstalling the installed Dobo keeps them.\r\n");
+    }
+    let mut listed = false;
+    for l in had.lines() {
+        // (Its own line saying when it was seen: written again below.)
+        if seen_line(l).is_some_and(|(_, e)| e.eq_ignore_ascii_case(line)) || l.trim().is_empty() {
+            continue;
+        }
+        listed |= l.trim().eq_ignore_ascii_case(line);
+        out.push_str(l);
+        out.push_str("\r\n");
+    }
+    if !listed {
+        out.push_str(&format!("{line}\r\n"));
+    }
+    out.push_str(&format!("# seen {now} {line}\r\n"));
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = file.with_file_name(format!("{name}.tmp"));
+    if std::fs::write(&tmp, out).and_then(|()| std::fs::rename(&tmp, file)).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// How long a copy noted (`note_portable_copy`) but not found still counts, when its drive is gone
+/// or can be taken out (a USB stick in a drawer): 180 days since it was last seen.
+const STILL_COUNTS: u64 = 180 * 24 * 3600;
+
+/// Is the drive of `path` gone (a USB stick pulled out, a share not there), or one that can be
+/// taken out?
+fn drive_away_or_removable(path: &Path) -> bool {
+    let Some(std::path::Component::Prefix(prefix)) = path.components().next() else { return false };
+    let mut root = PathBuf::from(prefix.as_os_str());
+    root.push("\\");
+    if !root.exists() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = root.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: a NUL-terminated path.
+        let kind = unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) };
+        kind == windows_sys::Win32::System::WindowsProgramming::DRIVE_REMOVABLE
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// The portable copies noted in `dir` (`note_portable_copy`) that still use its notes: the copy
+/// is still there, isn't the installed one, and hasn't a data folder with notes of its own. One
+/// that isn't found counts all the same when its drive is gone or can be taken out (a USB stick
+/// not plugged in now), until 180 days after it was last seen.
+pub fn portable_copies_using(dir: &Path) -> Vec<PathBuf> {
+    portable_copies_using_at(dir, unix_now(), drive_away_or_removable)
+}
+
+fn portable_copies_using_at(dir: &Path, now: u64, away: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let file = dir.join(PORTABLE_MARKER);
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    // (A copy noted before the "seen" lines: when the file was last written.)
+    let written = std::fs::metadata(&file).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    let seen = |exe: &str| text.lines().filter_map(seen_line).filter(|(_, e)| e.eq_ignore_ascii_case(exe)).map(|(s, _)| s).max().unwrap_or(written);
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| {
+            let exe = Path::new(l);
+            if exe.is_file() {
+                return exe.parent().is_some_and(|d| !has_marker(d) && !has_notes(&d.join(DATA)));
+            }
+            away(exe) && now.saturating_sub(seen(l)) < STILL_COUNTS
+        })
+        .map(PathBuf::from)
+        .collect()
+}
+
 /// Where the data is (set by `init` at start).
 pub fn place() -> Option<&'static Place> {
     PLACE.get()
@@ -179,7 +305,7 @@ pub fn place() -> Option<&'static Place> {
 
 /// The data folder: the database, pictures, previews, backgrounds, backups (by default).
 pub fn data_dir() -> Result<PathBuf, String> {
-    place().map(|p| p.dir.clone()).ok_or_else(|| "The data folder isn't known yet.".to_string())
+    place().map(|p| p.dir.clone()).ok_or_else(|| "The data folder isn’t known yet.".to_string())
 }
 
 /// A folder inside the data folder ("pictures", "previews", "backgrounds", "backups").
@@ -225,7 +351,7 @@ mod tests {
         let (root, exe, usual) = setup("installed");
         std::fs::write(exe.join(INSTALLED_MARKER), b"Installed by Dobo Setup.").unwrap();
         let p = decide(Some(&exe), &usual, |_| panic!("an installed copy must not try the exe folder"));
-        assert_eq!(p, Place { kind: Kind::Installed, dir: usual.clone(), webview: None, kept_existing: false, fallback: false });
+        assert_eq!(p, Place { kind: Kind::Installed, dir: usual.clone(), webview: None, kept_existing: false, fallback: false, blocked: None });
         // Old notes there: the same (that's where they already are).
         put_notes(&usual);
         assert_eq!(decide(Some(&exe), &usual, |_| panic!()).dir, usual);
@@ -258,7 +384,7 @@ mod tests {
     fn a_portable_copy_that_cannot_write_next_to_itself_uses_the_usual_folder() {
         let (root, exe, usual) = setup("readonly");
         let p = decide(Some(&exe), &usual, |_| false);
-        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: false, fallback: true });
+        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: false, fallback: true, blocked: Some(exe.join(DATA)) });
         // Really unwritable: "data" can't be made where a file of that name stands.
         std::fs::write(exe.join(DATA), b"a file, not a folder").unwrap();
         assert!(!is_writable(&exe.join(DATA)));
@@ -272,7 +398,7 @@ mod tests {
         let (root, exe, usual) = setup("kept");
         put_notes(&usual);
         let p = decide(Some(&exe), &usual, is_writable);
-        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false });
+        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false, blocked: None });
         assert!(!exe.join(DATA).exists(), "no empty data folder is made beside them");
         assert!(usual.join(DB_FILE).is_file(), "nothing is moved");
         // The next start decides the same.
@@ -301,7 +427,7 @@ mod tests {
         }
         std::fs::create_dir_all(usual.join("backups")).unwrap();
         let p = decide(Some(&exe), &usual, |d| panic!("must not try to write in {d:?}"));
-        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false });
+        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false, blocked: None });
         assert_eq!(p.dir.join(DB_FILE), usual.join("ztodo.sqlite"));
         for (sub, want) in [("pictures", "pictures"), ("previews", "previews"), ("backgrounds", "backgrounds"), ("backups", "backups")] {
             assert_eq!(p.dir.join(sub), usual.join(want));
@@ -354,7 +480,7 @@ mod tests {
         std::fs::write(exe.join(".ztodo-installed"), b"x").unwrap();
         put_notes(&usual);
         let p = decide(Some(&exe), &usual, is_writable);
-        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false });
+        assert_eq!(p, Place { kind: Kind::Portable, dir: usual.clone(), webview: None, kept_existing: true, fallback: false, blocked: None });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -368,8 +494,10 @@ mod tests {
         // Even with notes in the usual folder too (a portable folder brought from another PC).
         put_notes(&usual);
         assert_eq!(decide(Some(&exe), &usual, is_writable).dir, exe.join(DATA));
-        // Unless it can't be written (a read-only stick): the usual folder, never a half-working one.
-        assert_eq!(decide(Some(&exe), &usual, |_| false).dir, usual);
+        // Unless it can't be written (a read-only stick): the usual folder, never a half-working
+        // one, and only once asked (`blocked`: the notes would be split otherwise).
+        let ro = decide(Some(&exe), &usual, |_| false);
+        assert_eq!((ro.dir, ro.fallback, ro.kept_existing, ro.blocked), (usual.clone(), true, false, Some(exe.join(DATA))));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -379,6 +507,81 @@ mod tests {
         let p = decide(None, &usual, |_| panic!());
         assert_eq!(p.dir, usual);
         assert!(p.fallback);
+        assert_eq!(p.blocked, None, "no folder next to it to speak of");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A portable copy using the usual folder leaves its path there for the uninstaller; one
+    /// that is gone, installed since, or has notes of its own next to it no longer counts.
+    #[test]
+    fn portable_copies_using_the_usual_folder_are_noted_for_the_uninstaller() {
+        let (root, exe, usual) = setup("marker");
+        put_notes(&usual);
+        let dobo = exe.join("Dobo.exe");
+        std::fs::write(&dobo, b"MZ").unwrap();
+        let p = decide(Some(&exe), &usual, is_writable);
+        assert!(p.kept_existing);
+        note_portable_copy(&p, &dobo);
+        note_portable_copy(&p, &dobo);
+        let text = std::fs::read_to_string(usual.join(PORTABLE_MARKER)).unwrap();
+        assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 1, "once");
+        assert_eq!(portable_copies_using(&usual), vec![dobo.clone()]);
+        // A portable copy with its own data folder, or a development build: nothing noted.
+        let own = Place { kind: Kind::Portable, dir: exe.join(DATA), webview: Some(exe.join(DATA).join("webview")), kept_existing: false, fallback: false, blocked: None };
+        note_portable_copy(&own, &root.join("Other").join("Dobo.exe"));
+        assert!(!usual.join(DATA).join(PORTABLE_MARKER).exists() && !exe.join(DATA).join(PORTABLE_MARKER).exists());
+        // Notes of its own next to it since: no longer.
+        put_notes(&exe.join(DATA));
+        assert!(portable_copies_using(&usual).is_empty());
+        std::fs::remove_dir_all(exe.join(DATA)).unwrap();
+        // Installed there since, or gone: no longer.
+        std::fs::write(exe.join(INSTALLED_MARKER), b"x").unwrap();
+        assert!(portable_copies_using(&usual).is_empty());
+        std::fs::remove_file(exe.join(INSTALLED_MARKER)).unwrap();
+        assert_eq!(portable_copies_using(&usual).len(), 1);
+        std::fs::remove_file(&dobo).unwrap();
+        assert!(portable_copies_using(&usual).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A copy noted that isn't found counts when its drive is gone or can be taken out (a USB
+    /// stick in a drawer), for 180 days after it was last seen; on a fixed drive, not at all.
+    #[test]
+    fn a_portable_copy_on_a_stick_that_is_out_still_counts_for_a_while() {
+        let root = temp("stick");
+        let usual = root.join("usual");
+        std::fs::create_dir_all(&usual).unwrap();
+        let file = usual.join(PORTABLE_MARKER);
+        let (stick, fixed) = (Path::new(r"Q:\Dobo\Dobo.exe"), root.join("Gone").join("Dobo.exe"));
+        let day = 24 * 3600;
+        note_seen(&file, stick, 1_000 * day);
+        note_seen(&file, &fixed, 1_000 * day);
+        note_seen(&file, stick, 1_010 * day);
+        // Seen again within the day: not written again (nor ever half-written: no .tmp left).
+        let before = std::fs::read_to_string(&file).unwrap();
+        note_seen(&file, stick, 1_010 * day + 3600);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        assert!(!file.with_file_name(format!("{PORTABLE_MARKER}.tmp")).exists());
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text.lines().filter(|l| !l.starts_with('#')).count(), 2, "{text}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("# seen ")).count(), 2, "one each, the last: {text}");
+        let on_stick = |p: &Path| p.starts_with("Q:\\");
+        assert_eq!(portable_copies_using_at(&usual, 1_100 * day, on_stick), vec![stick.to_path_buf()]);
+        assert_eq!(portable_copies_using_at(&usual, 1_189 * day, on_stick), vec![stick.to_path_buf()]);
+        assert!(portable_copies_using_at(&usual, 1_191 * day, on_stick).is_empty(), "not seen for 180 days");
+        // (The temp folder's own drive, fixed: never away; a path with no drive neither.)
+        assert!(!drive_away_or_removable(&root.join("x.exe")));
+        assert!(!drive_away_or_removable(Path::new("relative.exe")));
+        // A drive letter with no drive: away (when Q: isn't one here).
+        if !Path::new("Q:\\").exists() {
+            assert!(drive_away_or_removable(stick));
+        }
+        // Dobo 1.0's file (no "seen" lines): counts from when the file was last written, for 180
+        // days.
+        std::fs::write(&file, format!("# Portable copies\r\n{}\r\n", stick.display())).unwrap();
+        assert_eq!(portable_copies_using_at(&usual, unix_now(), on_stick), vec![stick.to_path_buf()]);
+        assert_eq!(portable_copies_using_at(&usual, unix_now() + 179 * day, on_stick), vec![stick.to_path_buf()]);
+        assert!(portable_copies_using_at(&usual, unix_now() + 181 * day, on_stick).is_empty(), "written 180 days ago");
         let _ = std::fs::remove_dir_all(&root);
     }
 

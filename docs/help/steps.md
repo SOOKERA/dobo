@@ -21,3 +21,7 @@ Ticking the task itself puts its ring away.
 ## Change steps
 
 Steps are lines like any other: tick them, edit them with a double-click, delete them, or drag them out to make them lines of their own. **Undo** brings back what you change.
+
+## Steps with a time
+
+A step can have its own time, and rings like any task. Once you tick the task, its steps stop ringing (their times are kept, and their notifications go). Untick the task, and they ring again, except a step whose time came while the task was done: it stays quiet until you give it a new time.

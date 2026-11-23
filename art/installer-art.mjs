@@ -11,6 +11,12 @@
 // rest PNG. Every picture is drawn on its own opaque background colour: Windows' picture controls
 // don't blend, and 32-bit pictures make Windows keep a copy each time one is swapped (a GDI leak),
 // so nothing is transparent. The number of slides must match APP_SLIDES in app.nsh.
+//
+// French (template 1.1.0, for an app with APP_FRENCH 1): give every slide `fr: { title, desc }`
+// and the script also makes the French set: slideN-d-fr.jpg / slideN-l-fr.jpg ("1 sur 5") and the
+// buttons with their French words, b-<name>-<state>-<look>-fr.png. Setup shows them when French is
+// picked. Write the French with its typography (a no-break space before : and inside « », a
+// narrow one before ; ! ?, ’ for the apostrophe), as in nsis/French.nsh.
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync, statSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -31,9 +37,10 @@ const looks = {
   d: { bg: "#14171b", pane: "#0f1114", text: "#e9eaee", mut: "#8b919c", ln: "#262a31", off: "#343a44", ra: "#1b1f24", btn: "#20242a", btnLine: "#3a404a", btnHover: "#272c33", shadow: "rgba(0,0,0,.5)", ...(cfg.looks?.d ?? {}) },
   l: { bg: "#ffffff", pane: "#f6f7f9", text: "#17181c", mut: "#6b7280", ln: "#e2e7ee", off: "#cdd4de", ra: "#f3f5f8", btn: "#ffffff", btnLine: "#828b9b", btnHover: "#f1f3f6", shadow: "rgba(23,24,28,.18)", ...(cfg.looks?.l ?? {}) },
 };
-// [APP] An accent per look: cfg.accentDark for the dark one when the app's colour is too dark to
-// read there (Dobo: ink on paper, paper on dark), with the words and the switch's knob on it in
-// cfg.onAccent / cfg.onAccentDark (white by default). Same as ui.nsh's APP_ACCENT_DARK.
+// An accent per look (template 1.1.1): cfg.accentDark (and accentDarkHover) for the dark one when
+// the app's colour is too dark to read there (Dobo: ink on paper, paper on dark), with the words
+// and the switch's knob on it in cfg.onAccent / cfg.onAccentDark (white by default). Same as
+// APP_ACCENT_DARK in app.nsh.
 const accentOf = (k) => (k === "d" && cfg.accentDark ? cfg.accentDark : cfg.accent);
 const hoverOf = (k) => (k === "d" && cfg.accentDark ? (cfg.accentDarkHover ?? cfg.accentDark) : (cfg.accentHover ?? cfg.accent));
 const onAccentOf = (k) => (k === "d" ? (cfg.onAccentDark ?? "#ffffff") : (cfg.onAccent ?? "#ffffff"));
@@ -44,21 +51,32 @@ const fontDisplay = `"Segoe UI Variable Display", "Segoe UI", system-ui, sans-se
 export const dataUrl = (file) =>
   `data:${file.endsWith(".svg") ? "image/svg+xml" : file.endsWith(".jpg") ? "image/jpeg" : "image/png"};base64,${readFileSync(file).toString("base64")}`;
 
-const slides = cfg.slides; // [{ title, desc, main: (k) => ({ src, fit? }), card?: (k) => ({ src, side, width }) }]
+const slides = cfg.slides; // [{ title, desc, fr?: { title, desc }, main: (k, dataUrl, lang) => ({ src, fit? }), card?: (k, dataUrl, lang) => ({ src, side, width }) }]
+// French: all the slides or none (Setup would show a slide without words otherwise).
+const withFr = slides.filter((s) => s.fr);
+if (withFr.length && withFr.length < slides.length) {
+  const missing = slides.map((s, i) => (s.fr ? null : i + 1)).filter(Boolean);
+  console.error(`Slides ${missing.join(", ")} have no fr: { title, desc } (every slide needs one, or none).`);
+  process.exit(1);
+}
+const french = withFr.length > 0;
 
 // The left panel: 530 × 540. Dots start at x 28 (7 wide, the current one 20, 6 apart), centre
 // y 514; the arrows are 26 × 26 boxes at x 448 and 476, y 501.
-function slideHtml(i, k) {
+function slideHtml(i, k, lang = "en") {
   const c = looks[k];
   const s = slides[i];
-  const m = s.main(k, dataUrl);
-  const card = s.card?.(k, dataUrl);
+  const words = lang === "fr" ? s.fr : s;
+  // The slide's language too ("en" / "fr"), so French slides can show the app in French (Dobo:
+  // art/shots-fr). A config whose main / card don't take it works as before.
+  const m = s.main(k, dataUrl, lang);
+  const card = s.card?.(k, dataUrl, lang);
   const dots = slides
     .map((_, j) => `<span style="width:${j === i ? 20 : 7}px;background:${j === i ? accentOf(k) : c.off}"></span>`)
     .join("");
   const chevron = (d) =>
     `<svg width="26" height="26" viewBox="0 0 26 26"><path d="${d}" fill="none" stroke="${c.mut}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><style>
     html,body{margin:0;width:530px;height:540px;overflow:hidden;background:${c.pane};font-family:${font};-webkit-font-smoothing:antialiased}
     .k{position:absolute;left:28px;top:28px;font-size:12px;color:${accentOf(k)};letter-spacing:.02em;margin:0}
     h2{position:absolute;left:28px;top:46px;right:28px;margin:0;font:600 20px/26px ${fontDisplay};color:${c.text}}
@@ -70,9 +88,9 @@ function slideHtml(i, k) {
     .dots span{height:7px;border-radius:4px;display:block}
     .nav{position:absolute;top:501px;left:448px;display:flex;gap:2px}
   </style></head><body>
-    <p class="k">${i + 1} of ${slides.length}</p>
-    <h2>${s.title}</h2>
-    <p class="d">${s.desc}</p>
+    <p class="k">${i + 1} ${lang === "fr" ? "sur" : "of"} ${slides.length}</p>
+    <h2>${words.title}</h2>
+    <p class="d">${words.desc}</p>
     <div class="shot"><img class="main" src="${m.src}">${card ? `<img class="card" src="${card.src}">` : ""}</div>
     <div class="dots">${dots}</div>
     <div class="nav">${chevron("M15 8 L10 13 L15 18")}${chevron("M11 8 L16 13 L11 18")}</div>
@@ -127,6 +145,18 @@ const buttons = [
   ["cancel", "Cancel", 200, "second"],
   ["close", "Close", 412, "second"],
 ];
+// Their French words (the same names, pictures ending in -fr).
+const buttonsFr = {
+  install: "Installer",
+  update: "Mettre à jour",
+  again: "Réinstaller",
+  older: "Installer cette version",
+  open: `Ouvrir ${cfg.name}`,
+  done: "Fermer",
+  uninstall: "Désinstaller",
+  cancel: "Annuler",
+  close: "Fermer",
+};
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ deviceScaleFactor: 2 });
@@ -143,6 +173,7 @@ async function render(name, html, w, h, type = "png") {
 
 for (const k of ["d", "l"]) {
   for (let i = 0; i < slides.length; i++) await render(`slide${i + 1}-${k}`, slideHtml(i, k), 530, 540, "jpeg");
+  if (french) for (let i = 0; i < slides.length; i++) await render(`slide${i + 1}-${k}-fr`, slideHtml(i, k, "fr"), 530, 540, "jpeg");
   await render(`logo-${k}`, logoHtml(k), 160, 44);
   await render(`on-${k}`, sw(k, true), 32, 18);
   await render(`off-${k}`, sw(k, false), 32, 18);
@@ -150,6 +181,7 @@ for (const k of ["d", "l"]) {
   for (const [name, label, width, kind] of buttons) {
     for (const st of kind === "main" ? ["n", "h", "x"] : ["n", "h"]) {
       await render(`b-${name}-${st}-${k}`, button(k, label, width, kind, st), width, 40);
+      if (french) await render(`b-${name}-${st}-${k}-fr`, button(k, buttonsFr[name], width, kind, st), width, 40);
     }
   }
 }
@@ -159,5 +191,5 @@ await browser.close();
 const keep = new Set([...written.map((f) => f.split(/[\\/]/).pop()), "README.md"]);
 for (const f of readdirSync(out)) if (!keep.has(f)) console.warn(`not made any more (delete it): ${f}`);
 const total = written.reduce((n, f) => n + statSync(f).size, 0);
-console.log(`${written.length} pictures, ${(total / 1024).toFixed(0)} KB in ${out} (${slides.length} slides: APP_SLIDES must be ${slides.length})`);
+console.log(`${written.length} pictures, ${(total / 1024).toFixed(0)} KB in ${out} (${slides.length} slides: APP_SLIDES must be ${slides.length}${french ? "; French too: APP_FRENCH 1" : ""})`);
 writeFileSync(join(out, "README.md"), "Made by the installer template's art/installer-art.mjs: don't edit these by hand.\n");

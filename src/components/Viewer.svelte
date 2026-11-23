@@ -7,8 +7,10 @@
   import ViewHeader from "./ViewHeader.svelte";
   import { fadeQuick, veil } from "../lib/motion";
   import { store } from "../lib/store.svelte";
+  import { thumbs } from "../lib/thumbs.svelte";
   import { viewer } from "../lib/viewer.svelte";
   import { pushLayer } from "../lib/layers";
+  import { isTopModal, modal, takeFocus } from "../lib/modal";
   import { t, words, type Words } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
 
@@ -17,6 +19,7 @@
   let name = $derived(pic ? (pic.path.startsWith("data:") ? t("Picture") : pic.path.split(/[\\/]/).pop()) : "");
   let msg = $state<Words>("");
   let confirm = $state(false);
+  let viewerEl = $state<HTMLElement>();
 
   function go(d: number) {
     const n = viewer.pictures.length;
@@ -29,8 +32,9 @@
 
   $effect(() => {
     const key = (e: KeyboardEvent) => {
-      // Alt+Left / Alt+Right are Back / Forward (they close the viewer), not browsing.
-      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      // Alt+Left / Alt+Right are Back / Forward (they close the viewer), not browsing. (Nor
+      // while something opened over it has the keyboard.)
+      if (e.altKey || e.ctrlKey || e.metaKey || !isTopModal(viewerEl)) return;
       if (e.key === "ArrowRight") go(1);
       else if (e.key === "ArrowLeft") go(-1);
     };
@@ -49,7 +53,7 @@
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
       msg = () => t("Copied");
     } catch {
-      msg = () => t("Couldn't copy");
+      msg = () => t("Couldn’t copy");
     }
     setTimeout(() => (msg = ""), 1600);
   }
@@ -72,7 +76,7 @@
 </script>
 
 {#if pic}
-  <div class="viewer" role="dialog" aria-label={t("Picture viewer")} transition:veil|global={{ duration: 240 }}>
+  <div class="viewer" role="dialog" aria-label={t("Picture viewer")} tabindex="-1" bind:this={viewerEl} transition:veil|global={{ duration: 240 }} use:modal={{ initial: "self" }}>
     <div class="bar" data-drag-area={store.win.mode === "floating" || undefined}>
       <ViewHeader crumbs={[{ label: note ? noteTitle(note) : t("Note"), go: close }, { label: name ?? t("Picture") }]} sub={t("{a} of {b}", { a: viewer.index + 1, b: viewer.pictures.length }) + (msg ? ` · ${words(msg)}` : "")} big={17} onBack={close} onClose={close}>
         <button class="tool" aria-label={t("Copy picture")} data-tip={t("Copy picture")} onclick={copy}><Icon name="copy" /></button>
@@ -80,7 +84,7 @@
           <button class="tool" aria-label={t("Open with the system viewer")} data-tip={t("Open in Photos")} onclick={() => store.backend.openPath(pic.path)}><Icon name="external" /></button>
         {/if}
         {#if confirm}
-          <button class="tool danger" in:fadeQuick={{ duration: 180 }} onclick={remove}>{t("Remove")}</button>
+          <button class="tool danger" use:takeFocus in:fadeQuick={{ duration: 180 }} onclick={remove}>{t("Remove")}</button>
         {:else}
           <button class="tool" in:fadeQuick={{ duration: 180 }} aria-label={t("Remove from the note")} data-tip={t("Remove from the note")} onclick={() => (confirm = true)}><Icon name="trash" /></button>
         {/if}
@@ -98,7 +102,7 @@
     <div class="strip">
       {#each viewer.pictures as p, k (p.id)}
         <button class="thumb" class:on={k === viewer.index} aria-label={t("Picture {n}", { n: k + 1 })} onclick={() => (viewer.index = k)}>
-          <img src={store.src(p.path)} alt="" draggable="false" />
+          <img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
         </button>
       {/each}
       <span class="hint">{t("Left / Right to browse · Esc to close")}</span>
@@ -148,7 +152,7 @@
     background: #2a2622;
   }
   .tool.danger {
-    background: #c2410c;
+    background: var(--danger-fill);
     color: #fff;
     font-size: var(--t-md);
     font-weight: 600;
@@ -240,5 +244,9 @@
     .stage img {
       animation: none;
     }
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .viewer:focus {
+    outline: none;
   }
 </style>

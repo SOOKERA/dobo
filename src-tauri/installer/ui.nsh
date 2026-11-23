@@ -11,6 +11,19 @@
 ; scripts/installer-art.mjs (art/), drawn at twice the size and scaled here to the screen.
 ; Silent (/S) and passive (/P) installs never show any of this.
 
+; Template 1.1.1's optional colours, also here (hooks.nsh sets them first; a hooks.nsh kept from
+; 1.1.0 doesn't): the dark look's accent and the language not shown.
+!ifndef APP_ACCENT_DARK
+  !define APP_ACCENT_DARK ${APP_ACCENT}
+!endif
+; The terms in French (template 1.1.3): the same page unless the app has a French one.
+!ifndef APP_TERMS_URL_FR
+  !define APP_TERMS_URL_FR "${APP_TERMS_URL}"
+!endif
+!ifndef APP_LANG_OTHER_COLOR
+  !define APP_LANG_OTHER_COLOR ACCENT
+!endif
+
 !define APP_ART "${__FILEDIR__}\art"
 
 !ifndef SS_NOTIFY
@@ -37,6 +50,105 @@
 ReserveFile "${APP_ART}\*.jpg"
 ReserveFile "${APP_ART}\*.png"
 
+; [APP] French (app.nsh: APP_FRENCH 1) needs the art script's French pictures too (a slide's `fr`
+; in the art config makes slideN-d-fr.jpg, the buttons' b-<name>-<state>-d-fr.png...).
+!if ${APP_FRENCH} == 1
+  !if ! /FileExists "${APP_ART}\slide1-d-fr.jpg"
+    !error "APP_FRENCH is on but art\slide1-d-fr.jpg is missing: give every slide its fr: { title, desc } in the art config and run art/installer-art.mjs again."
+  !endif
+  !if ! /FileExists "${APP_ART}\b-install-n-d-fr.png"
+    !error "APP_FRENCH is on but art\b-install-n-d-fr.png is missing: run art/installer-art.mjs again (with fr in the slides)."
+  !endif
+!endif
+
+; ---------- the words, in English or French ----------
+; [APP] English.nsh and French.nsh give each text twice: as Tauri's LangString (what $(name) reads,
+; always in the language Setup started in: NSIS fixes it once .onInit is over) and as a define,
+; AppEn_<name> / AppFr_<name>. Setup's own code reads the define for the language shown ($AppLang)
+; through AppT, so the window can switch languages while it is open. The uninstaller and silent or
+; passive runs know their language from the start, so both ways give the same words there.
+Var AppLang          ; en or fr: the language Setup's window speaks
+Var AppTx            ; AppT's text, for the line that uses it next
+!if ${APP_FRENCH} == 1
+Var AppTxExtract     ; NSIS's own "Copying " (^Extract) in the language shown (English.nsh)
+!endif
+Var AppArtSfx        ; "" or "-fr": the pictures with words in them, in the language shown
+!define APP_LANG_EN_NAME "English"
+!define APP_LANG_FR_NAME "Français"
+
+!macro AppEn KEY TEXT
+  !define AppEn_${KEY} "${TEXT}"
+  LangString ${KEY} ${LANG_ENGLISH} "${TEXT}"
+!macroend
+!macro AppFr KEY TEXT
+  !define AppFr_${KEY} "${TEXT}"
+  LangString ${KEY} ${LANG_FRENCH} "${TEXT}"
+!macroend
+
+; OUT = the text KEY in the language shown. Only after English.nsh and French.nsh (installer.nsi
+; includes them after the pages): code before that calls a function that uses it (AppRunTexts).
+!macro AppT OUT KEY
+  !ifndef AppEn_${KEY}
+    !error "No English text ${KEY} (English.nsh), or AppT is used before the language files are included."
+  !endif
+  !if ${APP_FRENCH} == 1
+    !ifndef AppFr_${KEY}
+      !error "No French text ${KEY} in French.nsh."
+    !endif
+    ${If} $AppLang == "fr"
+      StrCpy ${OUT} "${AppFr_${KEY}}"
+    ${Else}
+      StrCpy ${OUT} "${AppEn_${KEY}}"
+    ${EndIf}
+  !else
+    StrCpy ${OUT} "${AppEn_${KEY}}"
+  !endif
+!macroend
+
+; .onInit (installer.nsi): Setup speaks English until the window's choice says otherwise; it never
+; follows Windows' language. Over an installed ${APP_NAME} the window opens in the language saved
+; for it (AppGuiInit). A silent or passive install (no window, no choice) keeps the language
+; saved before, so that the uninstaller keeps it too.
+!macro APP_LANG_INIT
+  StrCpy $AppLang "en"
+  StrCpy $AppArtSfx ""
+  !if ${APP_FRENCH} == 1
+    !if "${DISPLAYLANGUAGESELECTOR}" == "true"
+      !error "With APP_FRENCH, Setup's window asks the language itself: set displayLanguageSelector to false in tauri.conf.json."
+    !endif
+    StrCpy $LANGUAGE ${LANG_ENGLISH}
+    ${If} ${Silent}
+    ${OrIf} $PassiveMode = 1
+      ReadRegStr $AppTx ${MUI_LANGDLL_REGISTRY_ROOT} "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+      ${If} $AppTx == ${LANG_FRENCH}
+        StrCpy $AppLang "fr"
+        StrCpy $LANGUAGE ${LANG_FRENCH}
+        StrCpy $AppArtSfx "-fr"
+      ${EndIf}
+    ${EndIf}
+    Call AppLangTexts
+  !endif
+!macroend
+
+; un.onInit (installer.nsi): the uninstaller speaks the language Setup ran in (saved by Setup as
+; the app's "Installer Language", 1033 or 1036). Missing (installed before template 1.1.0) or
+; anything else: English. Never Windows' language dialog.
+!macro APP_UN_LANG_INIT
+  StrCpy $AppLang "en"
+  StrCpy $AppArtSfx ""
+  !if ${APP_FRENCH} == 1
+    StrCpy $LANGUAGE ${LANG_ENGLISH}
+    ReadRegStr $AppTx ${MUI_LANGDLL_REGISTRY_ROOT} "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+    ${If} $AppTx == ${LANG_FRENCH}
+      StrCpy $AppLang "fr"
+      StrCpy $LANGUAGE ${LANG_FRENCH}
+      StrCpy $AppArtSfx "-fr"
+    ${EndIf}
+  !else
+    !insertmacro MUI_UNGETLANGUAGE
+  !endif
+!macroend
+
 Var AppDpi
 Var AppLook          ; d(ark) or l(ight)
 Var AppCBg
@@ -58,6 +170,22 @@ Var AppS2
 Var AppS3
 Var AppS4
 Var AppS5
+; [APP] AppS1..5 are the slides of the language shown: the English ones (AppSE) are read before
+; the window shows, the French ones (AppSF) one by one while the window is idle (AppTick), or at
+; once when French is picked before that.
+Var AppSE1
+Var AppSE2
+Var AppSE3
+Var AppSE4
+Var AppSE5
+!if ${APP_FRENCH} == 1
+Var AppSF1
+Var AppSF2
+Var AppSF3
+Var AppSF4
+Var AppSF5
+Var AppSFReady       ; how many French slides are read
+!endif
 Var AppSlide         ; 1..${APP_SLIDES}
 Var AppAuto          ; 1 = moves on by itself
 Var AppIdleT0        ; when the slide last changed or the mouse was last on it (ms)
@@ -118,6 +246,7 @@ Var AppHeld          ; 1 = Install can't be clicked (the folder won't do)
 Var AppRunning       ; 1 = ${APP_NAME} is open (said in the window)
 Var AppAgreedClose   ; 1 = ${APP_NAME} may be closed without asking again (it was said)
 Var AppPassiveKeep
+Var AppOwnCheck      ; 1 = AppCheckRunning uses its own words (see there)
 Var AppPassiveOrig
 Var AppOpen          ; done page: 1 = start ${APP_NAME} on the way out
 Var AppFolderMsg
@@ -132,6 +261,22 @@ Var AppPxB2
 Var AppPxDesk
 Var AppPxStart
 Var AppPxBrow
+Var AppPxTerms
+Var AppPxPrev        ; the slides' ‹ and ›, and the line beside them (they stay on a language switch)
+Var AppPxNext
+Var AppSepCtl
+; [APP] The language choice (top right of the main page): its two words and their stand-ins
+; (radio buttons: Tab reaches the one chosen, the arrows move between them, Narrator reads
+; "English, radio button, selected").
+!if ${APP_FRENCH} == 1
+Var AppLangEnCtl
+Var AppLangFrCtl
+Var AppPxEn
+Var AppPxFr
+Var AppLangNext      ; the language just clicked (applied a moment later: AppLangApply)
+Var AppLangFocus     ; which control had the keyboard when it was clicked
+Var AppLangPicked    ; 1 = a language was picked in the window (even the one shown)
+!endif
 ; [APP] Uninstaller: 1 = "Also delete Private mode's files" (never in a silent or passive run).
 Var AppDeletePrivate
 ; The focus ring (4 thin lines), shown around what the keyboard is on.
@@ -216,13 +361,10 @@ Var AppRet
 !define APP_D_LN 0x262a31
 !define APP_D_RA 0x1b1f24
 !define APP_D_WARN 0xff7a7b
-; [APP] An accent of its own for the dark look (APP_ACCENT_DARK in app.nsh), for an app whose
-; colour is too dark to read there (Dobo: ink on paper). Else the same in both.
-!ifdef APP_ACCENT_DARK
+; [APP] The dark look's accent: APP_ACCENT_DARK (template 1.1.1; hooks.nsh makes it APP_ACCENT when
+; app.nsh leaves it out), for an app whose colour is too dark to read there (Dobo: ink on paper,
+; paper on dark). The art config's accentDark says the same.
 !define APP_D_ACCENT ${APP_ACCENT_DARK}
-!else
-!define APP_D_ACCENT ${APP_ACCENT}
-!endif
 !define APP_L_BG 0xffffff
 !define APP_L_PANE 0xf6f7f9
 !define APP_L_TEXT 0x17181c
@@ -330,8 +472,9 @@ Var AppRet
       StrCpy $AppFailName "${NAME}"
       Pop $1
       Pop $0
-      !insertmacro AppFail "$(appFailFile)"
-      Abort "$(appFailFile)"
+      !insertmacro AppT $AppTx appFailFile
+      !insertmacro AppFail $AppTx
+      Abort $AppTx
     ${EndIf}
     Sleep 500
   ${Loop}
@@ -348,13 +491,23 @@ Var AppRet
   ${If} $AppAgreedClose = 1
     StrCpy $PassiveMode 1
   ${EndIf}
-  ${If} $AppInFiles = 1
-    nsis_tauri_utils::StrReplace "$(appRunning)" "{{product_name}}" "${PRODUCTNAME}"
-    Pop $R1
-    nsis_tauri_utils::StrReplace "$(appRunningOkKill)" "{{product_name}}" "${PRODUCTNAME}"
-    Pop $R2
-    nsis_tauri_utils::StrReplace "$(failedToKillApp)" "{{product_name}}" "${PRODUCTNAME}"
-    Pop $R3
+  ; [APP] With French on, also when the window's main page is left (PageLeaveReinstall), so that
+  ; its question is in the language shown (Tauri's check reads its LangStrings: the language
+  ; Setup started in). Silent and passive runs keep Tauri's.
+  StrCpy $AppOwnCheck $AppInFiles
+  !if ${APP_FRENCH} == 1
+  ${IfNot} ${Silent}
+  ${AndIf} $AppPassiveOrig <> 1
+    StrCpy $AppOwnCheck 1
+  ${EndIf}
+  !endif
+  ${If} $AppOwnCheck = 1
+    ; (A function: this macro is also used before the language files are included.)
+    !ifdef __UNINSTALL__
+      Call un.AppRunTexts
+    !else
+      Call AppRunTexts
+    !endif
     !insertmacro RestartManager_StartSession $R0
     ${If} $R0 != ""
       !insertmacro RestartManager_RegisterFile $R0 "${EXE}"
@@ -391,6 +544,19 @@ Var AppRet
 
 ; ---------- the functions (installer and uninstaller each get their own copy) ----------
 !macro APP_UI_COMMON UN
+
+; [APP] AppCheckRunning's three messages, in the language shown -> $R1, $R2, $R3.
+Function ${UN}AppRunTexts
+  !insertmacro AppT $AppTx appRunning
+  nsis_tauri_utils::StrReplace "$AppTx" "{{product_name}}" "${PRODUCTNAME}"
+  Pop $R1
+  !insertmacro AppT $AppTx appRunningOkKill
+  nsis_tauri_utils::StrReplace "$AppTx" "{{product_name}}" "${PRODUCTNAME}"
+  Pop $R2
+  !insertmacro AppT $AppTx failedToKillApp
+  nsis_tauri_utils::StrReplace "$AppTx" "{{product_name}}" "${PRODUCTNAME}"
+  Pop $R3
+FunctionEnd
 
 ; Colours, fonts and the screen's scale; GDI+ for the pictures.
 Function ${UN}AppLookInit
@@ -793,24 +959,25 @@ Function ${UN}AppFocusTick
   Pop $0
 FunctionEnd
 
-; $AppA1 = a button's name (art/b-<name>-<state>-<look>.png), $AppA2 = its width at 100 %
-; -> its pictures in $AppB1N/H/X (AppLoadButton2: $AppB2N/H).
+; $AppA1 = a button's name (art/b-<name>-<state>-<look>[-fr].png: its words are in the picture,
+; in the language shown), $AppA2 = its width at 100 % -> its pictures in $AppB1N/H/X
+; (AppLoadButton2: $AppB2N/H).
 Function ${UN}AppLoadButton1
   Push $0
   Push $1
   StrCpy $0 $AppA1
   StrCpy $1 $AppA2
   StrCpy $AppA3 40
-  StrCpy $AppA1 "b-$0-n-$AppLook.png"
+  StrCpy $AppA1 "b-$0-n-$AppLook$AppArtSfx.png"
   Call ${UN}AppImage
   StrCpy $AppB1N $AppRet
-  StrCpy $AppA1 "b-$0-h-$AppLook.png"
+  StrCpy $AppA1 "b-$0-h-$AppLook$AppArtSfx.png"
   StrCpy $AppA2 $1
   Call ${UN}AppImage
   StrCpy $AppB1H $AppRet
   StrCpy $AppB1X 0
-  ${If} ${FileExists} "$PLUGINSDIR\art\b-$0-x-$AppLook.png"
-    StrCpy $AppA1 "b-$0-x-$AppLook.png"
+  ${If} ${FileExists} "$PLUGINSDIR\art\b-$0-x-$AppLook$AppArtSfx.png"
+    StrCpy $AppA1 "b-$0-x-$AppLook$AppArtSfx.png"
     StrCpy $AppA2 $1
     Call ${UN}AppImage
     StrCpy $AppB1X $AppRet
@@ -826,10 +993,10 @@ Function ${UN}AppLoadButton2
   StrCpy $0 $AppA1
   StrCpy $1 $AppA2
   StrCpy $AppA3 40
-  StrCpy $AppA1 "b-$0-n-$AppLook.png"
+  StrCpy $AppA1 "b-$0-n-$AppLook$AppArtSfx.png"
   Call ${UN}AppImage
   StrCpy $AppB2N $AppRet
-  StrCpy $AppA1 "b-$0-h-$AppLook.png"
+  StrCpy $AppA1 "b-$0-h-$AppLook$AppArtSfx.png"
   StrCpy $AppA2 $1
   Call ${UN}AppImage
   StrCpy $AppB2H $AppRet
@@ -888,7 +1055,7 @@ Function ${UN}AppStyleProgress
   StrCpy $AppA1 $AppCRa
   Call ${UN}AppColorRef
   SendMessage $4 0x2001 0 $AppRet ; PBM_SETBKCOLOR
-  ; [APP] The look's own accent (APP_D_ACCENT / APP_L_ACCENT).
+  ; The look's own accent (APP_D_ACCENT / APP_L_ACCENT).
   ${If} $AppLook == "d"
     StrCpy $AppA1 ${APP_D_ACCENT}
   ${Else}
@@ -947,7 +1114,8 @@ Function ${UN}AppFailClose
   System::Call "user32::GetWindowLongW(p $AppFailBtn, i -16) i .r4"
   IntOp $4 $4 | 0x04000000
   System::Call "user32::SetWindowLongW(p $AppFailBtn, i -16, i r4)"
-  SendMessage $AppFailBtn ${WM_SETTEXT} 0 "STR:$(appClose)"
+  !insertmacro AppT $AppTx appClose
+  SendMessage $AppFailBtn ${WM_SETTEXT} 0 "STR:$AppTx"
   !insertmacro AppScale $4 $1
   !insertmacro AppScale $5 $2
   !insertmacro AppScale $AppW $3
@@ -983,10 +1151,86 @@ FunctionEnd
   ShowWindow $2 ${SW_HIDE}
 !macroend
 
+; One slide's picture: N (1..5), SFX ("" or "-fr") -> VAR.
+!macro AppSlideRead N SFX VAR
+  StrCpy $AppA1 "slide${N}-$AppLook${SFX}.jpg"
+  StrCpy $AppA2 530
+  StrCpy $AppA3 540
+  Call AppImage
+  StrCpy ${VAR} $AppRet
+!macroend
+
 ; ---------- the installer's pages ----------
 !macro APP_UI_FUNCTIONS
+!ifndef AppEn_appInstallIn
+  !error 'English.nsh is from template 1.0.x (plain LangStrings): write each line as !insertmacro AppEn <name> "<text>" (see CHANGELOG, Template 1.1.0: Updating an app from 1.0.x).'
+!endif
 !insertmacro APP_UI_COMMON ""
 !insertmacro APP_UI_COMMON "un."
+
+!if ${APP_FRENCH} == 1
+!ifndef APP_FRENCH_TEXTS
+  !error 'APP_FRENCH is on but French.nsh is not included: tauri.conf.json needs "languages": ["English", "French"] and "customLanguageFiles": { "English": "installer/English.nsh", "French": "installer/French.nsh" }.'
+!endif
+
+; [APP] NSIS's own words that only read the language Setup started in (English.nsh: ^Extract),
+; in the language shown.
+Function AppLangTexts
+  !insertmacro AppT $AppTxExtract appExtract
+FunctionEnd
+
+; [APP] Reads the next French slide (AppTick: one at a time while the window is idle, so the
+; first switch to French shows its slides at once).
+Function AppReadFrSlide
+  ${If} $AppSFReady == ""
+    StrCpy $AppSFReady 0
+  ${EndIf}
+  ${If} $AppSFReady >= ${APP_SLIDES}
+    Return
+  ${EndIf}
+  IntOp $AppSFReady $AppSFReady + 1
+  ${If} $AppSFReady = 1
+    !insertmacro AppSlideRead 1 "-fr" $AppSF1
+  ${ElseIf} $AppSFReady = 2
+    !insertmacro AppSlideRead 2 "-fr" $AppSF2
+  ${ElseIf} $AppSFReady = 3
+    !insertmacro AppSlideRead 3 "-fr" $AppSF3
+  ${ElseIf} $AppSFReady = 4
+    !insertmacro AppSlideRead 4 "-fr" $AppSF4
+  ${Else}
+    !insertmacro AppSlideRead 5 "-fr" $AppSF5
+  ${EndIf}
+FunctionEnd
+!endif
+
+; [APP] installer.nsi (PageLeaveReinstall): the installed version's uninstaller failed.
+Function AppUnableToUninstall
+  !insertmacro AppT $AppTx unableToUninstall
+  MessageBox MB_ICONEXCLAMATION $AppTx
+FunctionEnd
+
+; [APP] $AppS1..5 = the slides of the language shown.
+Function AppUseSlides
+  !if ${APP_FRENCH} == 1
+  ${If} $AppLang == "fr"
+    ${Do}
+      ${IfThen} $AppSFReady >= ${APP_SLIDES} ${|} ${Break} ${|}
+      Call AppReadFrSlide
+    ${Loop}
+    StrCpy $AppS1 $AppSF1
+    StrCpy $AppS2 $AppSF2
+    StrCpy $AppS3 $AppSF3
+    StrCpy $AppS4 $AppSF4
+    StrCpy $AppS5 $AppSF5
+    Return
+  ${EndIf}
+  !endif
+  StrCpy $AppS1 $AppSE1
+  StrCpy $AppS2 $AppSE2
+  StrCpy $AppS3 $AppSE3
+  StrCpy $AppS4 $AppSE4
+  StrCpy $AppS5 $AppSE5
+FunctionEnd
 
 ; MUI_CUSTOMFUNCTION_GUIINIT (hooks.nsh): the window, before it shows.
 Function AppGuiInit
@@ -1007,32 +1251,30 @@ Function AppGuiInit
   StrCpy $AppA2 540
   Call AppWindow
   Call AppDetect
-  ; The slides, once for every page.
-  StrCpy $AppA1 "slide1-$AppLook.jpg"
-  StrCpy $AppA2 530
-  StrCpy $AppA3 540
-  Call AppImage
-  StrCpy $AppS1 $AppRet
-  StrCpy $AppA1 "slide2-$AppLook.jpg"
-  StrCpy $AppA2 530
-  StrCpy $AppA3 540
-  Call AppImage
-  StrCpy $AppS2 $AppRet
-  StrCpy $AppA1 "slide3-$AppLook.jpg"
-  StrCpy $AppA2 530
-  StrCpy $AppA3 540
-  Call AppImage
-  StrCpy $AppS3 $AppRet
-  StrCpy $AppA1 "slide4-$AppLook.jpg"
-  StrCpy $AppA2 530
-  StrCpy $AppA3 540
-  Call AppImage
-  StrCpy $AppS4 $AppRet
-  StrCpy $AppA1 "slide5-$AppLook.jpg"
-  StrCpy $AppA2 530
-  StrCpy $AppA3 540
-  Call AppImage
-  StrCpy $AppS5 $AppRet
+  !if ${APP_FRENCH} == 1
+  ; [APP] Over an installed ${APP_NAME} (update, reinstall, an older version): the window opens in
+  ; the language saved for it ("Installer Language": the one Setup last ran in, which the
+  ; installed app updates when its own language changes, README: The app's language). A first
+  ; install opens in English. Either way the choice in the window still works, and only a pick
+  ; counts as a pick (the app gets --lang only then, hooks.nsh).
+  ${If} $AppMode != "install"
+    ReadRegStr $AppTx ${MUI_LANGDLL_REGISTRY_ROOT} "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+    ${If} $AppTx == ${LANG_FRENCH}
+      StrCpy $AppLang "fr"
+      StrCpy $LANGUAGE ${LANG_FRENCH}
+      StrCpy $AppArtSfx "-fr"
+      Call AppLangTexts
+    ${EndIf}
+  ${EndIf}
+  !endif
+  ; The slides, once for every page (English ones; the French ones are read while the window is
+  ; idle, AppTick, or at once when it opens in French: AppUseSlides).
+  !insertmacro AppSlideRead 1 "" $AppSE1
+  !insertmacro AppSlideRead 2 "" $AppSE2
+  !insertmacro AppSlideRead 3 "" $AppSE3
+  !insertmacro AppSlideRead 4 "" $AppSE4
+  !insertmacro AppSlideRead 5 "" $AppSE5
+  Call AppUseSlides
   StrCpy $AppA1 "logo-$AppLook.png"
   StrCpy $AppA2 160
   StrCpy $AppA3 44
@@ -1062,20 +1304,27 @@ FunctionEnd
 ; The window's title on every page (Windows sets "${APP_NAME} Setup" again on each one).
 Function AppSetTitle
   ${If} $AppMode == "update"
-    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$(appUpdateTitle)"
+    !insertmacro AppT $AppTx appUpdateTitle
+    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$AppTx"
+  !if ${APP_FRENCH} == 1
+  ${Else}
+    ; [APP] NSIS's own title ("<App> Setup") is in the language Setup started in.
+    !insertmacro AppT $AppTx appSetupTitle
+    SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$AppTx"
+  !endif
   ${EndIf}
 FunctionEnd
 
 ; The line under the logo for what this Setup does -> $AppRet.
 Function AppModeTag
   ${If} $AppMode == "update"
-    StrCpy $AppRet "$(appTagUpdate)"
+    !insertmacro AppT $AppRet appTagUpdate
   ${ElseIf} $AppMode == "same"
-    StrCpy $AppRet "$(appTagSame)"
+    !insertmacro AppT $AppRet appTagSame
   ${ElseIf} $AppMode == "older"
-    StrCpy $AppRet "$(appTagOlder)"
+    !insertmacro AppT $AppRet appTagOlder
   ${Else}
-    StrCpy $AppRet "$(appTag)"
+    !insertmacro AppT $AppRet appTag
   ${EndIf}
 FunctionEnd
 
@@ -1102,7 +1351,8 @@ Function AppDetect
     ${If} "$R0$R1" == ""
       ; [APP] A portable copy that already starts with Windows keeps doing so: Windows has one
       ; "${PRODUCTNAME}" start-up entry, and a new install switched on would take it over. Its
-      ; entry is "<exe in quotes>" [args]; one whose exe is gone doesn't count.
+      ; entry is "<exe in quotes>" [args], or the exe unquoted then args (tauri-plugin-autostart
+      ; writes `C:\...\App.exe --hidden`); one whose exe is gone doesn't count.
       ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
       StrCpy $R1 $0 1
       ${If} $R1 == '"'
@@ -1119,8 +1369,8 @@ Function AppDetect
           StrCpy $AppStart 0
         ${EndIf}
       ${ElseIf} $0 != ""
-        ; [APP] Dobo's own entry (tauri-plugin-autostart, rename.rs) is the exe unquoted, then
-        ; " --hidden": the program is everything up to the first ".exe" (as install.rs reads it).
+        ; Unquoted: the exe is everything up to the first ".exe" (from Dobo, 832fbaf). [APP] Dobo
+        ; 1.0 wrote it so; 1.1 writes it quoted and quotes an old one at start (install.rs).
         StrCpy $R0 0
         ${Do}
           StrCpy $R1 $0 4 $R0
@@ -1191,11 +1441,13 @@ Function AppSlidePanel
   Call AppSlideInit
   ${NSD_OnClick} $AppSlideCtl AppSlideClick
   ; ‹ and › for the keyboard (the mouse clicks them on the slide).
-  !insertmacro AppProxy $0 ${APP_PUSH} 444 492 30 40 "$(appPrevSlide)"
-  ${NSD_OnClick} $0 AppPrevSlide
-  !insertmacro AppProxy $0 ${APP_PUSH} 474 492 34 40 "$(appNextSlide)"
-  ${NSD_OnClick} $0 AppNextSlide
-  !insertmacro AppLabel $0 530 0 1 540 ${APP_LABEL} $AppFBody LN LN ""
+  !insertmacro AppT $AppTx appPrevSlide
+  !insertmacro AppProxy $AppPxPrev ${APP_PUSH} 444 492 30 40 $AppTx
+  ${NSD_OnClick} $AppPxPrev AppPrevSlide
+  !insertmacro AppT $AppTx appNextSlide
+  !insertmacro AppProxy $AppPxNext ${APP_PUSH} 474 492 34 40 $AppTx
+  ${NSD_OnClick} $AppPxNext AppNextSlide
+  !insertmacro AppLabel $AppSepCtl 530 0 1 540 ${APP_LABEL} $AppFBody LN LN ""
   Pop $0
 FunctionEnd
 
@@ -1573,6 +1825,18 @@ Function AppTick
     ${IfThen} $AppSlide > ${APP_SLIDES} ${|} StrCpy $AppSlide 1 ${|}
     Call AppShowSlide
   ${EndIf}
+  !if ${APP_FRENCH} == 1
+  ; [APP] The French slides are read one per tick, never while a slide moves (a picture takes a
+  ; few hundredths of a second), so the first switch to French is instant.
+  ${If} $AppSFReady < ${APP_SLIDES}
+  ${AndIf} $AppIntro <> 1
+    IntOp $1 $0 - $AppFadeT0
+    ${If} $1 > 800
+    ${OrIf} $1 < 0
+      Call AppReadFrSlide
+    ${EndIf}
+  ${EndIf}
+  !endif
   Call AppButtonsTick
   Pop $2
   Pop $1
@@ -1586,7 +1850,8 @@ Function AppHeader
   Push $1
   StrCpy $1 $AppA1
   !insertmacro AppPicture $0 615 34 160 44 $AppBmpLogo
-  !insertmacro AppLabel $0 554 80 282 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
+  !insertmacro AppT $AppTx appVersion
+  !insertmacro AppLabel $0 554 80 282 16 0x50000081 $AppFTiny MUT BG $AppTx
   !insertmacro AppLabel $0 554 104 282 18 0x50000081 $AppFSmall MUT BG $1
   Pop $1
   Pop $0
@@ -1609,6 +1874,21 @@ Function AppMainPage
   StrCpy $AppB1Ctl 0
   StrCpy $AppB2Ctl 0
   Call AppSlidePanel
+  StrCpy $AppCanMove 0
+  Call AppMainBuild
+  Call AppCheckRunning
+  ${NSD_CreateTimer} AppTick 100
+  ${NSD_SetFocus} $AppPxB1
+  nsDialogs::Show
+FunctionEnd
+
+; [APP] The right side of the main page, in the language shown (made again in the other one when
+; the language changes: AppLangApply). Everything it shows comes from the state ($INSTDIR, the
+; switches, $AppMode, $AppRunning...), so nothing the user set is lost.
+Function AppMainBuild
+  !if ${APP_FRENCH} == 1
+  Call AppLangChoice
+  !endif
   ; What this Setup does, under the logo.
   Call AppModeTag
   StrCpy $AppA1 $AppRet
@@ -1616,56 +1896,72 @@ Function AppMainPage
   !insertmacro AppLabel $0 554 132 282 1 ${APP_LABEL} $AppFBody LN LN ""
   ; Install in: the folder, and Change. Over an installed ${APP_NAME} it stays where it is (no Change),
   ; unless that folder won't do any more: then Change moves it (AppCheckFolder).
-  !insertmacro AppLabel $0 554 144 282 18 ${APP_LABEL} $AppFBody TEXT BG "$(appInstallIn)"
+  !insertmacro AppT $AppTx appInstallIn
+  !insertmacro AppLabel $0 554 144 282 18 ${APP_LABEL} $AppFBody TEXT BG $AppTx
   !insertmacro AppPicture $0 554 168 282 32 $AppBmpField
   !insertmacro AppLabel $AppPathCtl 584 176 190 16 0x50008080 $AppFSmall TEXT RA $INSTDIR
-  !insertmacro AppLabel $AppChangeCtl 776 176 50 16 0x50000182 $AppFSmall ACCENT RA "$(appChange)"
+  !insertmacro AppT $AppTx appChange
+  !insertmacro AppLabel $AppChangeCtl 776 176 50 16 0x50000182 $AppFSmall ACCENT RA $AppTx
   ${NSD_OnClick} $AppChangeCtl AppChangeFolder
-  !insertmacro AppProxy $AppPxChange ${APP_PUSH} 776 176 50 16 "$(appChangeName)"
+  !insertmacro AppT $AppTx appChangeName
+  !insertmacro AppProxy $AppPxChange ${APP_PUSH} 776 176 50 16 $AppTx
   ${NSD_OnClick} $AppPxChange AppChangeFolder
+  !if ${APP_FRENCH} == 1
+  ; [APP] The language choice's radio buttons are a group of their own (the arrows move between
+  ; English and Français only): the next stand-in starts the next group (WS_GROUP).
+  System::Call "user32::GetWindowLongW(p $AppPxChange, i -16) i .r1"
+  IntOp $1 $1 | 0x00020000
+  System::Call "user32::SetWindowLongW(p $AppPxChange, i -16, i r1)"
+  !endif
   !insertmacro AppLabel $0 554 214 282 1 ${APP_LABEL} $AppFBody LN LN ""
   ; The switches (the words can be clicked too).
-  !insertmacro AppLabel $0 554 225 240 18 0x50000180 $AppFBody TEXT BG "$(appDesktop)"
+  !insertmacro AppT $AppTx appDesktop
+  !insertmacro AppLabel $0 554 225 240 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 AppToggleDesk
   !insertmacro AppPicture $AppSwDesk 804 225 32 18 $AppBmpOff
   ${NSD_OnClick} $AppSwDesk AppToggleDesk
-  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 804 225 32 18 "$(appDesktop)"
+  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 804 225 32 18 $AppTx
   ${NSD_OnClick} $AppPxDesk AppToggleDesk
   !insertmacro AppLabel $0 554 254 282 1 ${APP_LABEL} $AppFBody LN LN ""
-  !insertmacro AppLabel $0 554 265 240 18 0x50000180 $AppFBody TEXT BG "$(appStartWithWindows)"
+  !insertmacro AppT $AppTx appStartWithWindows
+  !insertmacro AppLabel $0 554 265 240 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 AppToggleStart
   !insertmacro AppPicture $AppSwStart 804 265 32 18 $AppBmpOff
   ${NSD_OnClick} $AppSwStart AppToggleStart
-  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 804 265 32 18 "$(appStartWithWindows)"
+  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 804 265 32 18 $AppTx
   ${NSD_OnClick} $AppPxStart AppToggleStart
   !if ${APP_BROWSER_SWITCH} == 1
   ; [APP] Optional third switch (APP_BROWSER_SWITCH in app.nsh): the browser connection.
   !insertmacro AppLabel $0 554 294 282 1 ${APP_LABEL} $AppFBody LN LN ""
-  !insertmacro AppLabel $0 554 304 240 18 0x50000180 $AppFBody TEXT BG "$(appBrowsers)"
+  !insertmacro AppT $AppTx appBrowsers
+  !insertmacro AppLabel $0 554 304 240 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 AppToggleBrowsers
-  !insertmacro AppLabel $0 554 323 240 16 0x50000180 $AppFTiny MUT BG "$(appBrowsersSub)"
+  StrCpy $1 $AppTx
+  !insertmacro AppT $AppTx appBrowsersSub
+  !insertmacro AppLabel $0 554 323 240 16 0x50000180 $AppFTiny MUT BG $AppTx
   ${NSD_OnClick} $0 AppToggleBrowsers
   !insertmacro AppPicture $AppSwBrow 804 313 32 18 $AppBmpOff
   ${NSD_OnClick} $AppSwBrow AppToggleBrowsers
-  !insertmacro AppProxy $AppPxBrow ${APP_CHECK} 804 313 32 18 "$(appBrowsers)"
+  !insertmacro AppProxy $AppPxBrow ${APP_CHECK} 804 313 32 18 $1
   ${NSD_OnClick} $AppPxBrow AppToggleBrowsers
   !endif
   Call AppShowSwitches
   ; Said here when something stands in the way (the folder) or will happen (${APP_NAME} is open).
-  !insertmacro AppLabel $AppNoteCtl 554 360 282 72 ${APP_LABEL} $AppFSmall WARN BG ""
+  ; [APP] 84 high (up to five lines, also at 150 %: French is longer), ending 4 px over Install.
+  !insertmacro AppLabel $AppNoteCtl 554 356 282 84 ${APP_LABEL} $AppFSmall WARN BG ""
   ; Install (Update, Install again, Install this version).
   ${If} $AppMode == "update"
     StrCpy $AppA1 "update"
-    StrCpy $1 "Update"
+    !insertmacro AppT $1 appBtnUpdate
   ${ElseIf} $AppMode == "same"
     StrCpy $AppA1 "again"
-    StrCpy $1 "Install again"
+    !insertmacro AppT $1 appBtnAgain
   ${ElseIf} $AppMode == "older"
     StrCpy $AppA1 "older"
-    StrCpy $1 "Install this version"
+    !insertmacro AppT $1 appBtnOlder
   ${Else}
     StrCpy $AppA1 "install"
-    StrCpy $1 "Install"
+    !insertmacro AppT $1 appBtnInstall
   ${EndIf}
   StrCpy $AppA2 282
   Call AppLoadButton1
@@ -1676,7 +1972,6 @@ Function AppMainPage
   ; By installing, you accept the terms of use (a link). No admin rights needed.
   Call AppTermsLine
   !insertmacro AppRingMake
-  StrCpy $AppCanMove 0
   Call AppCheckFolder
   ; Over an installed ${APP_NAME} whose folder will do: it stays there (no Change).
   ${If} $AppMode != "install"
@@ -1688,11 +1983,237 @@ Function AppMainPage
     System::Call "user32::SetWindowPos(p $AppPathCtl, p 0, i 0, i 0, i r1, i r2, i 0x16)"
     !insertmacro AppColors $AppPathCtl MUT RA
   ${EndIf}
-  Call AppCheckRunning
-  ${NSD_CreateTimer} AppTick 100
-  ${NSD_SetFocus} $AppPxB1
-  nsDialogs::Show
 FunctionEnd
+
+!if ${APP_FRENCH} == 1
+; [APP] The language choice, top right: "English | Français", right-aligned with the switches. The
+; one shown in the text colour, the other in the accent like the window's links, or in grey
+; (APP_LANG_OTHER "grey": for an accent close to the text colour). The mouse clicks the word. Under each word its radio button for the keyboard and screen readers: Tab reaches the
+; one chosen, the arrows or Space pick, the focus ring shows around the word.
+Function AppLangChoice
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  StrCpy $AppA1 $AppFTiny
+  StrCpy $AppA2 "${APP_LANG_EN_NAME}"
+  Call AppTextWidth
+  IntOp $1 $AppRet + 1
+  StrCpy $AppA2 "${APP_LANG_FR_NAME}"
+  Call AppTextWidth
+  IntOp $2 $AppRet + 1
+  ; Right to left: Français ends at 836, 8 px, a 1 px line, 8 px, English.
+  !insertmacro AppScale $3 836
+  IntOp $3 $3 - $2            ; Français' left
+  !insertmacro AppScale $4 9
+  IntOp $4 $3 - $4            ; the line's left
+  !insertmacro AppScale $5 8
+  IntOp $5 $4 - $5
+  IntOp $5 $5 - $1            ; English's left
+  !insertmacro AppScale $6 10 ; top
+  !insertmacro AppScale $0 16 ; height
+  ; (pixels already: nsDialogs takes them as they are)
+  nsDialogs::CreateControl STATIC 0x50000180 0 $5 $6 $1 $0 "${APP_LANG_EN_NAME}"
+  Pop $AppLangEnCtl
+  SendMessage $AppLangEnCtl ${WM_SETFONT} $AppFTiny 1
+  ${NSD_OnClick} $AppLangEnCtl AppLangClickEn
+  nsDialogs::CreateControl STATIC 0x50000180 0 $3 $6 $2 $0 "${APP_LANG_FR_NAME}"
+  Pop $AppLangFrCtl
+  SendMessage $AppLangFrCtl ${WM_SETFONT} $AppFTiny 1
+  ${NSD_OnClick} $AppLangFrCtl AppLangClickFr
+  ${If} $AppLang == "fr"
+    !insertmacro AppColors $AppLangEnCtl ${APP_LANG_OTHER_COLOR} BG
+    !insertmacro AppColors $AppLangFrCtl TEXT BG
+  ${Else}
+    !insertmacro AppColors $AppLangEnCtl TEXT BG
+    !insertmacro AppColors $AppLangFrCtl ${APP_LANG_OTHER_COLOR} BG
+  ${EndIf}
+  ; The stand-ins (BS_AUTORADIOBUTTON; the first starts the group; only the chosen one is a Tab
+  ; stop, as in Windows' own radio groups), under the words, the same size.
+  ${If} $AppLang == "fr"
+    StrCpy $AppA2 0x54020009    ; WS_GROUP
+    StrCpy $AppA3 0x54010009    ; WS_TABSTOP
+  ${Else}
+    StrCpy $AppA2 0x54030009    ; WS_GROUP | WS_TABSTOP
+    StrCpy $AppA3 0x54000009
+  ${EndIf}
+  nsDialogs::CreateControl BUTTON $AppA2 0 $5 $6 $1 $0 "${APP_LANG_EN_NAME}"
+  Pop $AppPxEn
+  SendMessage $AppPxEn ${WM_SETFONT} $AppFSmall 1
+  System::Call "user32::SetWindowPos(p $AppPxEn, p 1, i 0, i 0, i 0, i 0, i 0x13)"
+  ${NSD_OnClick} $AppPxEn AppLangClickEn
+  nsDialogs::CreateControl BUTTON $AppA3 0 $3 $6 $2 $0 "${APP_LANG_FR_NAME}"
+  Pop $AppPxFr
+  SendMessage $AppPxFr ${WM_SETFONT} $AppFSmall 1
+  System::Call "user32::SetWindowPos(p $AppPxFr, p 1, i 0, i 0, i 0, i 0, i 0x13)"
+  ${NSD_OnClick} $AppPxFr AppLangClickFr
+  ${If} $AppLang == "fr"
+    SendMessage $AppPxFr ${BM_SETCHECK} ${BST_CHECKED} 0
+  ${Else}
+    SendMessage $AppPxEn ${BM_SETCHECK} ${BST_CHECKED} 0
+  ${EndIf}
+  ; The line between the words, 10 px high, centred on them.
+  !insertmacro AppScale $6 13
+  !insertmacro AppScale $0 10
+  !insertmacro AppScale $1 1
+  nsDialogs::CreateControl STATIC ${APP_LABEL} 0 $4 $6 $1 $0 ""
+  Pop $0
+  !insertmacro AppColors $0 LN LN
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; A word or a radio button: the language changes a moment later, once Windows is done with the
+; click (the control it came from is made again).
+Function AppLangClickEn
+  Pop $0
+  ; A pick, even of the language shown (English over a saved French): it is the user's choice.
+  StrCpy $AppLangPicked 1
+  StrCpy $AppLangNext "en"
+  ${NSD_CreateTimer} AppLangApply 1
+FunctionEnd
+Function AppLangClickFr
+  Pop $0
+  StrCpy $AppLangPicked 1
+  StrCpy $AppLangNext "fr"
+  ${NSD_CreateTimer} AppLangApply 1
+FunctionEnd
+
+; The window in the other language, at once: every word of Setup's own, the pictures with words in
+; them (the slide shown, the button) and the window's title. The right side is made again by the
+; same builder (AppMainBuild), hidden until it is whole (no flash, no jump); the slides, their
+; arrows and their timers go on, and the keyboard stays where it was.
+Function AppLangApply
+  ${NSD_KillTimer} AppLangApply
+  ${If} $AppLangNext == $AppLang
+    Return
+  ${EndIf}
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  StrCpy $AppLang $AppLangNext
+  ; $LANGUAGE is what Setup saves for the uninstaller once it is done (MUI_LANGDLL_SAVELANGUAGE).
+  ${If} $AppLang == "fr"
+    StrCpy $LANGUAGE ${LANG_FRENCH}
+    StrCpy $AppArtSfx "-fr"
+  ${Else}
+    StrCpy $LANGUAGE ${LANG_ENGLISH}
+    StrCpy $AppArtSfx ""
+  ${EndIf}
+  Call AppLangTexts
+  Call AppUseSlides
+  ; Where the keyboard is (that control is made again).
+  ; (In a variable: AppMainBuild uses $0 to $2.)
+  System::Call "user32::GetFocus() p .r0"
+  StrCpy $AppLangFocus ""
+  ${If} $0 = $AppPxEn
+  ${OrIf} $0 = $AppPxFr
+    StrCpy $AppLangFocus "lang"
+  ${ElseIf} $0 = $AppPxChange
+    StrCpy $AppLangFocus "change"
+  ${ElseIf} $0 = $AppPxDesk
+    StrCpy $AppLangFocus "desk"
+  ${ElseIf} $0 = $AppPxStart
+    StrCpy $AppLangFocus "start"
+  ${ElseIf} $0 = $AppPxB1
+    StrCpy $AppLangFocus "b1"
+  ${ElseIf} $0 = $AppPxTerms
+    StrCpy $AppLangFocus "terms"
+  !if ${APP_BROWSER_SWITCH} == 1
+  ${ElseIf} $0 = $AppPxBrow
+    StrCpy $AppLangFocus "brow"
+  !endif
+  ${EndIf}
+  ; Kept on a control that stays while the others go (a destroyed control's focus is lost).
+  ${If} $AppLangFocus != ""
+    System::Call "user32::SetFocus(p $AppPxNext)"
+  ${EndIf}
+  SendMessage $AppDialog ${WM_SETREDRAW} 0 0
+  ; Every control of the right side goes; the slide, its arrows and the line beside it stay.
+  System::Call "user32::GetWindow(p $AppDialog, i 5) p .r2" ; GW_CHILD
+  ${DoWhile} $2 <> 0
+    System::Call "user32::GetWindow(p r2, i 2) p .r3"      ; GW_HWNDNEXT
+    ${If} $2 <> $AppSlideCtl
+    ${AndIf} $2 <> $AppPxPrev
+    ${AndIf} $2 <> $AppPxNext
+    ${AndIf} $2 <> $AppSepCtl
+      System::Call "user32::DestroyWindow(p r2)"
+    ${EndIf}
+    StrCpy $2 $3
+  ${Loop}
+  ; Whether the focus ring shows (Windows hides it again while controls are made).
+  SendMessage $AppDialog 0x129 0 0 $3 ; WM_QUERYUISTATE
+  ; The big button's pictures (AppMainBuild reads the new language's).
+  System::Call "gdi32::DeleteObject(p $AppB1N)"
+  System::Call "gdi32::DeleteObject(p $AppB1H)"
+  ${If} $AppB1X <> 0
+    System::Call "gdi32::DeleteObject(p $AppB1X)"
+  ${EndIf}
+  Call AppMainBuild
+  !insertmacro AppT $AppTx appPrevSlide
+  SendMessage $AppPxPrev ${WM_SETTEXT} 0 "STR:$AppTx"
+  !insertmacro AppT $AppTx appNextSlide
+  SendMessage $AppPxNext ${WM_SETTEXT} 0 "STR:$AppTx"
+  Call AppSetTitle
+  ; The slide shown, in the new language: one coming in goes on (and ends on it), one standing is
+  ; swapped at once. (The first one, still to come in, comes in in the new language.)
+  ${If} $AppIntro <> 1
+    Call AppSlideBmp
+    StrCpy $AppA1 $AppRet
+    StrCpy $AppA2 $AppDcTo
+    Call AppCopyIn
+    System::Call "kernel32::GetTickCount() i .r0"
+    IntOp $0 $0 - $AppFadeT0
+    ${If} $0 >= 650
+    ${OrIf} $0 < 0
+      StrCpy $AppA1 1000
+      Call AppSlideDraw
+    ${EndIf}
+  ${EndIf}
+  SendMessage $AppDialog ${WM_SETREDRAW} 1 0
+  ; RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME
+  System::Call "user32::RedrawWindow(p $AppDialog, p 0, p 0, i 0x585)"
+  ${If} $AppLangFocus == "lang"
+    ${If} $AppLang == "fr"
+      SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxFr 1
+    ${Else}
+      SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxEn 1
+    ${EndIf}
+  ${ElseIf} $AppLangFocus == "change"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxChange 1
+  ${ElseIf} $AppLangFocus == "desk"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxDesk 1
+  ${ElseIf} $AppLangFocus == "start"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxStart 1
+  ${ElseIf} $AppLangFocus == "b1"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxB1 1
+  ${ElseIf} $AppLangFocus == "terms"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxTerms 1
+  !if ${APP_BROWSER_SWITCH} == 1
+  ${ElseIf} $AppLangFocus == "brow"
+    SendMessage $HWNDPARENT ${WM_NEXTDLGCTL} $AppPxBrow 1
+  !endif
+  ${EndIf}
+  IntOp $3 $3 & 1 ; UISF_HIDEFOCUS
+  ${If} $3 = 0
+    SendMessage $HWNDPARENT 0x127 0x10002 0 ; WM_CHANGEUISTATE, UIS_CLEAR UISF_HIDEFOCUS
+  ${EndIf}
+  Call AppButtonsTick
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+!endif
 
 Function AppShowSwitches
   ${If} $AppDesktop = 1
@@ -1749,18 +2270,20 @@ Function AppTermsLine
   Push $5
   Push $6
   ${If} $AppMode == "update"
-    StrCpy $4 "$(appTermsAUpdate)"
+    !insertmacro AppT $4 appTermsAUpdate
   ${Else}
-    StrCpy $4 "$(appTermsA)"
+    !insertmacro AppT $4 appTermsA
   ${EndIf}
   StrCpy $AppA1 $AppFTiny
   StrCpy $AppA2 $4
   Call AppTextWidth
   StrCpy $1 $AppRet
-  StrCpy $AppA2 "$(appTermsLink)"
+  !insertmacro AppT $AppTx appTermsLink
+  StrCpy $AppA2 $AppTx
   Call AppTextWidth
   StrCpy $2 $AppRet
-  StrCpy $AppA2 "$(appTermsB)"
+  !insertmacro AppT $AppTx appTermsB
+  StrCpy $AppA2 $AppTx
   Call AppTextWidth
   StrCpy $3 $AppRet
   ; Left edge of the line: the middle of the right side, less half the line.
@@ -1780,25 +2303,28 @@ Function AppTermsLine
   IntOp $5 $5 + $1
   IntOp $5 $5 - 1
   IntOp $2 $2 + 1
-  nsDialogs::CreateControl STATIC 0x50000180 0 $5 $6 $2 $0 "$(appTermsLink)"
+  !insertmacro AppT $AppTx appTermsLink
+  nsDialogs::CreateControl STATIC 0x50000180 0 $5 $6 $2 $0 $AppTx
   Pop $4
   SendMessage $4 ${WM_SETFONT} $AppFTiny 1
   !insertmacro AppColors $4 ACCENT BG
   ${NSD_OnClick} $4 AppOpenTerms
   ; Its stand-in for the keyboard (see AppProxy).
-  nsDialogs::CreateControl BUTTON ${APP_PUSH} 0 $5 $6 $2 $0 "$(appTermsLink)"
-  Pop $4
-  System::Call "user32::SetWindowPos(p r4, p 1, i 0, i 0, i 0, i 0, i 0x13)"
-  ${NSD_OnClick} $4 AppOpenTerms
+  nsDialogs::CreateControl BUTTON ${APP_PUSH} 0 $5 $6 $2 $0 $AppTx
+  Pop $AppPxTerms
+  System::Call "user32::SetWindowPos(p $AppPxTerms, p 1, i 0, i 0, i 0, i 0, i 0x13)"
+  ${NSD_OnClick} $AppPxTerms AppOpenTerms
   IntOp $5 $5 + $2
   IntOp $5 $5 - 1
   IntOp $3 $3 + 1
-  nsDialogs::CreateControl STATIC ${APP_LABEL} 0 $5 $6 $3 $0 "$(appTermsB)"
+  !insertmacro AppT $AppTx appTermsB
+  nsDialogs::CreateControl STATIC ${APP_LABEL} 0 $5 $6 $3 $0 $AppTx
   Pop $4
   SendMessage $4 ${WM_SETFONT} $AppFTiny 1
   !insertmacro AppColors $4 MUT BG
   ${If} $AppMode == "install"
-    !insertmacro AppLabel $4 554 512 282 16 0x50000081 $AppFTiny MUT BG "$(appNoAdmin)"
+    !insertmacro AppT $AppTx appNoAdmin
+    !insertmacro AppLabel $4 554 512 282 16 0x50000081 $AppFTiny MUT BG $AppTx
   ${EndIf}
   Pop $6
   Pop $5
@@ -1811,13 +2337,19 @@ FunctionEnd
 
 Function AppOpenTerms
   Pop $0
+  ; The terms in the language shown (APP_TERMS_URL_FR in French, template 1.1.3).
+  StrCpy $0 "${APP_TERMS_URL}"
+  ${If} $AppLang == "fr"
+    StrCpy $0 "${APP_TERMS_URL_FR}"
+  ${EndIf}
   ; As the Windows user, never with Setup's rights (Setup may run as administrator).
-  nsis_tauri_utils::RunAsUser "${APP_TERMS_URL}" ""
+  nsis_tauri_utils::RunAsUser $0 ""
 FunctionEnd
 
 Function AppChangeFolder
   Pop $0
-  nsDialogs::SelectFolderDialog "$(appPickFolder)" $INSTDIR
+  !insertmacro AppT $AppTx appPickFolder
+  nsDialogs::SelectFolderDialog $AppTx $INSTDIR
   Pop $0
   ${If} $0 == error
   ${OrIf} $0 == ""
@@ -1845,20 +2377,20 @@ Function AppCheckFolder
   StrCpy $AppHeld 0
   StrCpy $AppFolderMsg ""
   ${If} $INSTDIR == ""
-    StrCpy $AppFolderMsg "$(appFolderPick)"
+    !insertmacro AppT $AppFolderMsg appFolderPick
   ${Else}
     ; [APP] Where the installed ${APP_NAME} keeps its notes, and WebView2's data (app.nsh).
     ${If} $INSTDIR == "${APP_DATA_DIR}"
-      StrCpy $AppFolderMsg "$(appFolderData)"
+      !insertmacro AppT $AppFolderMsg appFolderData
     ${ElseIf} $INSTDIR == "${APP_WEBVIEW_DIR}"
-      StrCpy $AppFolderMsg "$(appFolderWebview)"
+      !insertmacro AppT $AppFolderMsg appFolderWebview
     ${EndIf}
     ; A portable ${APP_NAME}'s folder: installing there would leave its notes behind.
     ; [APP] Dobo's portable notes: data\ztodo.sqlite next to the exe (paths.rs).
     ${If} $AppFolderMsg == ""
     ${AndIfNot} ${FileExists} "$INSTDIR\${APP_MARKER}"
       ${If} ${FileExists} "$INSTDIR\data\ztodo.sqlite"
-        StrCpy $AppFolderMsg "$(appFolderPortable)"
+        !insertmacro AppT $AppFolderMsg appFolderPortable
       ${EndIf}
     ${EndIf}
     ; A folder this Windows user can't change (or only administrators can), a drive or network
@@ -1866,20 +2398,20 @@ Function AppCheckFolder
     ${If} $AppFolderMsg == ""
       Call AppCheckDir
       ${If} $AppDirProblem == "admin"
-        StrCpy $AppFolderMsg "$(appFolderAdmin)"
+        !insertmacro AppT $AppFolderMsg appFolderAdmin
       ${ElseIf} $AppDirProblem != ""
         ${If} $AppDirWhy == "missing"
-          StrCpy $AppFolderMsg "$(appFolderMissing)"
+          !insertmacro AppT $AppFolderMsg appFolderMissing
         ${ElseIf} $AppDirWhy == "long"
-          StrCpy $AppFolderMsg "$(appFolderLong)"
+          !insertmacro AppT $AppFolderMsg appFolderLong
         ${Else}
           Push $INSTDIR
           Call AppIsAdminFolder
           Pop $0
           ${If} $0 = 1
-            StrCpy $AppFolderMsg "$(appFolderAdmin)"
+            !insertmacro AppT $AppFolderMsg appFolderAdmin
           ${Else}
-            StrCpy $AppFolderMsg "$(appFolderWrite)"
+            !insertmacro AppT $AppFolderMsg appFolderWrite
           ${EndIf}
         ${EndIf}
       ${EndIf}
@@ -1894,7 +2426,8 @@ Function AppCheckFolder
       StrCpy $AppMoved 1
     ${ElseIf} $AppFolderMsg != ""
       StrCpy $AppCanMove 1
-      StrCpy $AppFolderMsg "$AppFolderMsg $(appMoveHint)"
+      !insertmacro AppT $AppTx appMoveHint
+      StrCpy $AppFolderMsg "$AppFolderMsg $AppTx"
     ${EndIf}
   ${EndIf}
   ${If} $AppFolderMsg != ""
@@ -1944,14 +2477,16 @@ Function AppShowNote
     SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$AppFolderMsg"
   ${ElseIf} $AppMoved = 1
     !insertmacro AppColors $AppNoteCtl MUT BG
+    !insertmacro AppT $AppTx appMoveNote
     ${If} $AppRunning = 1
-      SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appMoveNote)$\r$\n$(appIsOpen)"
-    ${Else}
-      SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appMoveNote)"
+      !insertmacro AppT $AppRet appIsOpen
+      StrCpy $AppTx "$AppTx$\r$\n$AppRet"
     ${EndIf}
+    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$AppTx"
   ${ElseIf} $AppRunning = 1
     !insertmacro AppColors $AppNoteCtl MUT BG
-    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$(appIsOpen)"
+    !insertmacro AppT $AppTx appIsOpen
+    SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:$AppTx"
   ${Else}
     SendMessage $AppNoteCtl ${WM_SETTEXT} 0 "STR:"
   ${EndIf}
@@ -1974,6 +2509,18 @@ Function AppMainLeave
   ${If} $AppHeld = 1
     Abort
   ${EndIf}
+  !if ${APP_FRENCH} == 1
+  ; [APP] With the language untouched (the window starts in English on a first install, in
+  ; the saved language over an installed ${APP_NAME}: AppGuiInit), a saved French stays, also after
+  ; an uninstall that kept it or over a portable copy: $LANGUAGE is what Setup saves once the
+  ; install is done (MUI_LANGDLL_SAVELANGUAGE), and the app gets no --lang (hooks.nsh).
+  ${If} $AppLangPicked <> 1
+    ReadRegStr $AppTx ${MUI_LANGDLL_REGISTRY_ROOT} "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+    ${If} $AppTx == ${LANG_FRENCH}
+      StrCpy $LANGUAGE ${LANG_FRENCH}
+    ${EndIf}
+  ${EndIf}
+  !endif
   ; Over an installed ${APP_NAME}: what Tauri's reinstall page did with its first (recommended)
   ; choice: the same version is installed again over itself; another one is replaced (its
   ; uninstaller removes only its files, see PageLeaveReinstall).
@@ -2023,7 +2570,8 @@ Function AppInstShow
   !insertmacro AppColors $1 LN LN
   !insertmacro AppRaw $1 $0 STATIC ${APP_PIC} 615 34 160 44 ""
   SendMessage $1 ${STM_SETIMAGE} 0 $AppBmpLogo
-  !insertmacro AppRaw $1 $0 STATIC 0x50000081 554 80 282 16 "$(appVersion)"
+  !insertmacro AppT $AppTx appVersion
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 554 80 282 16 $AppTx
   SendMessage $1 ${WM_SETFONT} $AppFTiny 1
   !insertmacro AppColors $1 MUT BG
   Call AppModeTag
@@ -2031,13 +2579,13 @@ Function AppInstShow
   SendMessage $1 ${WM_SETFONT} $AppFSmall 1
   !insertmacro AppColors $1 MUT BG
   ${If} $AppMode == "update"
-    StrCpy $2 "$(appUpdating)"
+    !insertmacro AppT $2 appUpdating
   ${ElseIf} $AppMode == "same"
-    StrCpy $2 "$(appInstallingAgain)"
+    !insertmacro AppT $2 appInstallingAgain
   ${ElseIf} $AppMode == "older"
-    StrCpy $2 "$(appInstallingOlder)"
+    !insertmacro AppT $2 appInstallingOlder
   ${Else}
-    StrCpy $2 "$(appInstalling)"
+    !insertmacro AppT $2 appInstalling
   ${EndIf}
   !insertmacro AppRaw $1 $0 STATIC 0x50000080 554 210 282 24 $2
   SendMessage $1 ${WM_SETFONT} $AppFTitle 1
@@ -2047,7 +2595,7 @@ Function AppInstShow
   StrCpy $3 282
   Call AppStyleProgress
   ; Close, for when something goes wrong (AppFail).
-  StrCpy $AppA1 "b-done-n-$AppLook.png"
+  StrCpy $AppA1 "b-done-n-$AppLook$AppArtSfx.png"
   StrCpy $AppA2 282
   StrCpy $AppA3 40
   Call AppImage
@@ -2083,29 +2631,30 @@ Function AppDonePage
   StrCpy $AppOpen 1
   StrCpy $AppInFiles 0
   Call AppSlidePanel
-  StrCpy $AppA1 "$(appTag)"
+  !insertmacro AppT $AppA1 appTag
   Call AppHeader
   ${If} $AppMode == "update"
-    StrCpy $1 "$(appDoneUpdate)"
+    !insertmacro AppT $1 appDoneUpdate
   ${ElseIf} $AppMode == "same"
-    StrCpy $1 "$(appDoneAgain)"
+    !insertmacro AppT $1 appDoneAgain
   ${ElseIf} $AppMode == "older"
-    StrCpy $1 "$(appDoneOlder)"
+    !insertmacro AppT $1 appDoneOlder
   ${Else}
-    StrCpy $1 "$(appDone)"
+    !insertmacro AppT $1 appDone
   ${EndIf}
   !insertmacro AppLabel $0 554 210 282 24 ${APP_LABEL} $AppFTitle TEXT BG $1
   ${If} $AppDesktop = 1
-    StrCpy $1 "$(appDoneWhereDesktop)"
+    !insertmacro AppT $1 appDoneWhereDesktop
   ${Else}
-    StrCpy $1 "$(appDoneWhere)"
+    !insertmacro AppT $1 appDoneWhere
   ${EndIf}
   !insertmacro AppLabel $0 554 242 282 40 ${APP_LABEL} $AppFBody MUT BG $1
   ; ${APP_EXE} couldn't take the window's choices (start with Windows, the browser connection).
   ${If} $AppChoicesOk == "0"
     ${If} $AppStart = 1
     ${OrIf} $AppBrowsers = 1
-      !insertmacro AppLabel $0 554 292 282 54 ${APP_LABEL} $AppFSmall WARN BG "$(appChoicesFailed)"
+      !insertmacro AppT $AppTx appChoicesFailed
+      !insertmacro AppLabel $0 554 292 282 72 ${APP_LABEL} $AppFSmall WARN BG $AppTx
     ${EndIf}
   ${EndIf}
   StrCpy $AppA1 "open"
@@ -2113,11 +2662,14 @@ Function AppDonePage
   Call AppLoadButton1
   !insertmacro AppPicture $AppB1Ctl 554 444 282 40 $AppB1N
   ${NSD_OnClick} $AppB1Ctl AppOpenClick
-  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 554 444 282 40 "$(appOpenName)"
+  !insertmacro AppT $AppTx appOpenName
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 554 444 282 40 $AppTx
   ${NSD_OnClick} $AppPxB1 AppOpenClick
-  !insertmacro AppLabel $0 665 496 60 18 0x50000181 $AppFSmall MUT BG "$(appClose)"
+  !insertmacro AppT $AppTx appClose
+  !insertmacro AppLabel $0 665 496 60 18 0x50000181 $AppFSmall MUT BG $AppTx
   ${NSD_OnClick} $0 AppCloseClick
-  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 665 496 60 18 "$(appClose)"
+  !insertmacro AppT $AppTx appClose
+  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 665 496 60 18 $AppTx
   ${NSD_OnClick} $AppPxB2 AppCloseClick
   !insertmacro AppRingMake
   ; The window's ✕ and Esc close without opening ${APP_NAME}: with Cancel off (as Windows leaves it
@@ -2188,7 +2740,8 @@ Function un.AppGuiInit
 FunctionEnd
 
 Function un.AppSetTitle
-  SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$(appUnTitle)"
+  !insertmacro AppT $AppTx appUnTitle
+  SendMessage $HWNDPARENT ${WM_SETTEXT} 0 "STR:$AppTx"
 FunctionEnd
 
 Function un.AppTick
@@ -2212,36 +2765,45 @@ Function un.AppUnPage
   StrCpy $DeleteAppDataCheckboxState 0
   StrCpy $AppDeletePrivate 0
   !insertmacro AppPicture $0 150 18 160 44 $AppBmpLogo
-  !insertmacro AppLabel $0 24 64 412 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
-  !insertmacro AppLabel $0 24 84 412 24 0x50000081 $AppFTitle TEXT BG "$(appUnTitle)"
-  !insertmacro AppLabel $0 24 112 412 36 0x50000081 $AppFBody MUT BG "$(appUnText)"
+  !insertmacro AppT $AppTx appVersion
+  !insertmacro AppLabel $0 24 64 412 16 0x50000081 $AppFTiny MUT BG $AppTx
+  !insertmacro AppT $AppTx appUnTitle
+  !insertmacro AppLabel $0 24 84 412 24 0x50000081 $AppFTitle TEXT BG $AppTx
+  !insertmacro AppT $AppTx appUnText
+  !insertmacro AppLabel $0 24 112 412 39 0x50000081 $AppFBody MUT BG $AppTx
   !insertmacro AppLabel $0 24 152 412 1 ${APP_LABEL} $AppFBody LN LN ""
   ; [APP] Two switches: the settings and lists, and Private mode's files apart (they can't be
   ; downloaded again, and the first switch never deletes them).
-  !insertmacro AppLabel $0 24 164 350 18 0x50000180 $AppFBody TEXT BG "$(deleteAppData)"
+  !insertmacro AppT $AppTx deleteAppData
+  !insertmacro AppLabel $0 24 164 350 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 un.AppToggleData
-  ; [APP] Without the second switch the room under it is free: the line under the switch may
-  ; wrap to three lines (Dobo says exactly which backups go).
+  !insertmacro AppT $AppTx appUnDataSub
+  ; [APP] Without the second switch the room under it is free: the line may wrap to three lines
+  ; (from Dobo; French is longer).
   !if ${APP_EXTRA_DATA_SWITCH} == 1
-  !insertmacro AppLabel $0 24 183 350 16 0x50000180 $AppFTiny MUT BG "$(appUnDataSub)"
+  !insertmacro AppLabel $0 24 183 350 16 0x50000180 $AppFTiny MUT BG $AppTx
   !else
-  !insertmacro AppLabel $0 24 183 350 46 0x50000180 $AppFTiny MUT BG "$(appUnDataSub)"
+  !insertmacro AppLabel $0 24 183 350 46 0x50000180 $AppFTiny MUT BG $AppTx
   !endif
   ${NSD_OnClick} $0 un.AppToggleData
   !insertmacro AppPicture $AppSwDesk 404 172 32 18 $AppBmpOff
   ${NSD_OnClick} $AppSwDesk un.AppToggleData
-  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 404 172 32 18 "$(deleteAppData)"
+  !insertmacro AppT $AppTx deleteAppData
+  !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 404 172 32 18 $AppTx
   ${NSD_OnClick} $AppPxDesk un.AppToggleData
   !if ${APP_EXTRA_DATA_SWITCH} == 1
   ; [APP] Optional second switch (APP_EXTRA_DATA_SWITCH in app.nsh): a data folder the first one
   ; never deletes (Pako: Private mode's encrypted files), deleted only when asked for here.
-  !insertmacro AppLabel $0 24 208 350 18 0x50000180 $AppFBody TEXT BG "$(appUnPrivate)"
+  !insertmacro AppT $AppTx appUnPrivate
+  !insertmacro AppLabel $0 24 208 350 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 un.AppTogglePrivate
-  !insertmacro AppLabel $0 24 227 350 16 0x50000180 $AppFTiny MUT BG "$(appUnPrivateSub)"
+  !insertmacro AppT $AppTx appUnPrivateSub
+  !insertmacro AppLabel $0 24 227 350 16 0x50000180 $AppFTiny MUT BG $AppTx
   ${NSD_OnClick} $0 un.AppTogglePrivate
   !insertmacro AppPicture $AppSwStart 404 216 32 18 $AppBmpOff
   ${NSD_OnClick} $AppSwStart un.AppTogglePrivate
-  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 404 216 32 18 "$(appUnPrivate)"
+  !insertmacro AppT $AppTx appUnPrivate
+  !insertmacro AppProxy $AppPxStart ${APP_CHECK} 404 216 32 18 $AppTx
   ${NSD_OnClick} $AppPxStart un.AppTogglePrivate
   !endif
   StrCpy $AppA1 "cancel"
@@ -2249,14 +2811,16 @@ Function un.AppUnPage
   Call un.AppLoadButton2
   !insertmacro AppPicture $AppB2Ctl 24 262 200 40 $AppB2N
   ${NSD_OnClick} $AppB2Ctl un.AppCancelClick
-  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 24 262 200 40 "Cancel"
+  !insertmacro AppT $AppTx appCancel
+  !insertmacro AppProxy $AppPxB2 ${APP_PUSH} 24 262 200 40 $AppTx
   ${NSD_OnClick} $AppPxB2 un.AppCancelClick
   StrCpy $AppA1 "uninstall"
   StrCpy $AppA2 200
   Call un.AppLoadButton1
   !insertmacro AppPicture $AppB1Ctl 236 262 200 40 $AppB1N
   ${NSD_OnClick} $AppB1Ctl un.AppGoClick
-  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 236 262 200 40 "Uninstall"
+  !insertmacro AppT $AppTx appUninstall
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 236 262 200 40 $AppTx
   ${NSD_OnClick} $AppPxB1 un.AppGoClick
   !insertmacro AppRingMake
   ${NSD_CreateTimer} un.AppTick 100
@@ -2321,10 +2885,12 @@ Function un.AppInstShow
   Call un.AppPageFill
   !insertmacro AppRaw $1 $0 STATIC ${APP_PIC} 150 32 160 44 ""
   SendMessage $1 ${STM_SETIMAGE} 0 $AppBmpLogo
-  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 78 412 16 "$(appVersion)"
+  !insertmacro AppT $AppTx appVersion
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 78 412 16 $AppTx
   SendMessage $1 ${WM_SETFONT} $AppFTiny 1
   !insertmacro AppColors $1 MUT BG
-  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 120 412 24 "$(appRemoving)"
+  !insertmacro AppT $AppTx appRemoving
+  !insertmacro AppRaw $1 $0 STATIC 0x50000081 24 120 412 24 $AppTx
   SendMessage $1 ${WM_SETFONT} $AppFTitle 1
   !insertmacro AppColors $1 TEXT BG
   StrCpy $1 24
@@ -2332,7 +2898,7 @@ Function un.AppInstShow
   StrCpy $3 412
   Call un.AppStyleProgress
   ; Close, for when something goes wrong (AppFail).
-  StrCpy $AppA1 "b-close-n-$AppLook.png"
+  StrCpy $AppA1 "b-close-n-$AppLook$AppArtSfx.png"
   StrCpy $AppA2 412
   StrCpy $AppA3 40
   Call un.AppImage
@@ -2364,15 +2930,19 @@ Function un.AppDonePage
   !insertmacro AppColors $AppDialog TEXT BG
   StrCpy $AppB2Ctl 0
   !insertmacro AppPicture $0 150 32 160 44 $AppBmpLogo
-  !insertmacro AppLabel $0 24 78 412 16 0x50000081 $AppFTiny MUT BG "$(appVersion)"
-  !insertmacro AppLabel $0 24 100 412 24 0x50000081 $AppFTitle TEXT BG "$(appUnDone)"
-  !insertmacro AppLabel $0 24 130 412 36 0x50000081 $AppFBody MUT BG "$(appUnDoneText)"
+  !insertmacro AppT $AppTx appVersion
+  !insertmacro AppLabel $0 24 78 412 16 0x50000081 $AppFTiny MUT BG $AppTx
+  !insertmacro AppT $AppTx appUnDone
+  !insertmacro AppLabel $0 24 100 412 24 0x50000081 $AppFTitle TEXT BG $AppTx
+  !insertmacro AppT $AppTx appUnDoneText
+  !insertmacro AppLabel $0 24 130 412 39 0x50000081 $AppFBody MUT BG $AppTx
   StrCpy $AppA1 "close"
   StrCpy $AppA2 412
   Call un.AppLoadButton1
   !insertmacro AppPicture $AppB1Ctl 24 256 412 40 $AppB1N
   ${NSD_OnClick} $AppB1Ctl un.AppGoClick
-  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 24 256 412 40 "$(appClose)"
+  !insertmacro AppT $AppTx appClose
+  !insertmacro AppProxy $AppPxB1 ${APP_PUSH} 24 256 412 40 $AppTx
   ${NSD_OnClick} $AppPxB1 un.AppGoClick
   !insertmacro AppRingMake
   StrCpy $AppInFiles 0

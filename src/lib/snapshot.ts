@@ -17,7 +17,7 @@ export async function saveNotePicture(card: HTMLElement, title: string) {
     style: { margin: "0", transform: "none", boxShadow: "none" },
     filter: (node) => !(node instanceof HTMLElement && SKIP.some((c) => node.classList.contains(c))),
   });
-  if (!blob) throw new Error(t("Couldn't draw the note."));
+  if (!blob) throw new Error(t("Couldn’t draw the note."));
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const path = await store.backend.saveNoteImage(bytes, title);
   let copied = false;

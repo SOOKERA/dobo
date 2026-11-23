@@ -5,7 +5,7 @@ export type SpaceView = Space | "all";
 export type Kind = "task" | "idea";
 export type PaletteName = "soft" | "vivid" | "custom";
 export type Alarm = "reminder" | "deadline" | "off";
-export type RingState = "" | "early" | "ringing" | "check" | "on_it" | "snoozed";
+export type RingState = "" | "early" | "ringing" | "check" | "on_it" | "snoozed" | "passed";
 export type PresetName = "gentle" | "normal" | "insistent" | "custom";
 
 export interface Note {
@@ -43,6 +43,9 @@ export interface Repeat {
   ends: Ends;
   /** Occurrences already done. */
   done?: number;
+  /** Its own time of day ("02:30"), set by the backend from the time it is given: every
+   * occurrence is at that time, also after the clocks change. */
+  at?: string;
 }
 
 export interface Rhythm {
@@ -105,6 +108,15 @@ export interface Picture {
   path: string;
   sort: number;
   created_at: number;
+  /** Its board-size copy, when it has one (thumbs.svelte.ts). */
+  thumb?: Thumb;
+}
+
+/** A picture's board-size copy (thumbs.rs): its file, its size in pixels. */
+export interface Thumb {
+  path: string;
+  w: number;
+  h: number;
 }
 
 export interface Everything {

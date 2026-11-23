@@ -6,21 +6,51 @@ import type { Entry } from "../i18n.svelte";
 export const settings = {
   "Search: {q}": "Recherche : {q}",
   "Open or hide {app}, from anywhere": "Ouvrir ou masquer {app}, depuis n’importe où",
-  "Quick dump into the Inbox, from anywhere": "Déposer vite dans « À trier », depuis n’importe où",
+  "Quick dump into the Inbox, from anywhere": "Dépôt rapide dans « À trier », depuis n’importe où",
+  "{keys} is taken by another app, so it does nothing now. Choose another.": "{keys} est déjà pris par une autre appli : il ne fait rien pour l’instant. Choisissez-en un autre.",
+  "{keys} is taken by another app, so it does nothing now. Choose another in Settings › Keyboard":
+    "{keys} est déjà pris par une autre appli : il ne fait rien pour l’instant. Choisissez-en un autre dans Paramètres › Clavier",
+  "Add Ctrl, Alt or Win so it doesn’t fire while you type (Shift alone isn’t enough).":
+    "Ajoutez Ctrl, Alt ou Win pour qu’il ne se déclenche pas quand vous écrivez (Maj seule ne suffit pas).",
+  "{keys} is Windows’ menu key: it opens the menu in every app. Try another one.":
+    "{keys} est la touche de menu de Windows : elle ouvre le menu dans toutes les applis. Essayez-en un autre.",
   "Search, inside the panel (also /)": "Rechercher, dans le panneau (aussi /)",
   "Backing up…": "Sauvegarde…",
   "Backed up ({size}).": "Sauvegardé ({size}).",
-  "Couldn't back up: {error}": "Sauvegarde impossible : {error}",
+  "Couldn’t back up: {error}": "Sauvegarde impossible : {error}",
   "Restoring…": "Restauration…",
   "Restored. Your notes from before are kept as a backup too.": "Restauré. Vos notes d’avant sont gardées en sauvegarde, elles aussi.",
-  "Couldn't restore: {error}": "Restauration impossible : {error}",
+  "Couldn’t restore: {error}": "Restauration impossible : {error}",
+  "The automatic backup didn’t work ({when}): {error}": "La sauvegarde automatique n’a pas marché ({when}) : {error}",
+  "Today’s backup didn’t work: {error}. Settings › Backups": "La sauvegarde du jour n’a pas marché : {error}. Paramètres › Sauvegardes",
+  "The backup made before the restore misses the changes made during it ({error}). They are kept in {path}.":
+    "La sauvegarde faite avant la restauration n’a pas les changements faits pendant celle-ci ({error}). Ils sont gardés dans {path}.",
+  "The backup made before {app} {version} first opened your notes is in {path}: the backups folder you chose ({chosen}) didn’t answer in time.":
+    "La sauvegarde faite avant que {app} {version} n’ouvre vos notes pour la première fois est dans {path} : le dossier des sauvegardes que vous avez choisi ({chosen}) n’a pas répondu à temps.",
+  "The backup made before {app} {version} first opened your notes is in {path}: the backups folder you chose ({chosen}) can’t be written to.":
+    "La sauvegarde faite avant que {app} {version} n’ouvre vos notes pour la première fois est dans {path} : le dossier des sauvegardes que vous avez choisi ({chosen}) ne peut pas être modifié.",
+  "The backup made before {app} {version} first opened your notes is in {path}: the drive of the backups folder you chose ({chosen}) is full.":
+    "La sauvegarde faite avant que {app} {version} n’ouvre vos notes pour la première fois est dans {path} : le disque du dossier des sauvegardes que vous avez choisi ({chosen}) est plein.",
+  "The backup made before {app} {version} first opened your notes is in {path}: the backups folder you chose ({chosen}) couldn’t be used.":
+    "La sauvegarde faite avant que {app} {version} n’ouvre vos notes pour la première fois est dans {path} : le dossier des sauvegardes que vous avez choisi ({chosen}) n’a pas pu être utilisé.",
+  "No backup could be made before {app} {version} first opened your notes: {error}":
+    "Aucune sauvegarde n’a pu être faite avant que {app} {version} n’ouvre vos notes pour la première fois : {error}",
+  "No backup could be made before {app} {version} first opened your notes: the drive is full.":
+    "Aucune sauvegarde n’a pu être faite avant que {app} {version} n’ouvre vos notes pour la première fois : le disque est plein.",
+  "No backup could be made before {app} {version} first opened your notes: the data folder can’t be written to.":
+    "Aucune sauvegarde n’a pu être faite avant que {app} {version} n’ouvre vos notes pour la première fois : le dossier des données ne peut pas être modifié.",
+  "in the data folder": "dans le dossier des données",
   Daily: "Quotidienne",
   "By hand": "À la main",
   "Before a restore": "Avant une restauration",
+  "Before an update": "Avant une mise à jour",
+  "the last {n} are kept": "les {n} dernières sont gardées",
+  "Kept with your notes, on the same drive. A folder on another drive keeps them safe if this one fails.":
+    "Gardées avec vos notes, sur le même disque. Un dossier sur un autre disque les protège si celui-ci lâche.",
   "Reading Sticky Notes…": "Lecture de Pense-bêtes…",
   "Added {n} notes from Sticky Notes.": { one: "{n} note ajoutée depuis Pense-bêtes.", other: "{n} notes ajoutées depuis Pense-bêtes." },
-  "No sticky notes found on this computer.": "Aucun pense-bête trouvé sur cet ordinateur.",
-  "Couldn't read Sticky Notes: {error}": "Impossible de lire Pense-bêtes : {error}",
+  "Couldn’t read Sticky Notes: {error}": "Impossible de lire Pense-bêtes : {error}",
+  "it took too long": "c’était trop long",
   "Always light": "Toujours clair",
   "Always dark": "Toujours sombre",
   "Light or dark like Windows": "Clair ou sombre, comme Windows",
@@ -30,12 +60,12 @@ export const settings = {
   "Light or dark, like Windows.": "Clair ou sombre, comme Windows.",
   "Dark between these two times, light the rest of the day.": "Sombre entre ces deux heures, clair le reste de la journée.",
   "Dark mode darkens the app and the notes; the board keeps its own look unless your theme has a Dark style (Style › Themes).":
-    "Le mode sombre assombrit l’app et les notes ; le tableau garde son style, sauf si votre thème a un style sombre (Style › Thèmes).",
+    "Le mode sombre assombrit l’appli et les notes ; le tableau garde son style, sauf si votre thème a un style sombre (Style › Thèmes).",
   "Search settings": "Rechercher dans les paramètres",
   "Search settings · Ctrl+F": "Rechercher · Ctrl+F",
   "Clear the search": "Effacer la recherche",
   Clear: "Effacer",
-  "Nothing in Settings matches “{q}”. Try one word, like “dark”, “shortcut”, “backup” or “rappel”.":
+  "Nothing in Settings matches “{q}”. Try one word, like “dark”, “shortcut”, “backup” or “reminder”.":
     "Rien ne correspond à « {q} ». Essayez un seul mot, comme « sombre », « raccourci », « sauvegarde » ou « langue ».",
   Appearance: "Apparence",
   "Dark from": "Sombre de",
@@ -43,8 +73,8 @@ export const settings = {
   "Dark until": "Sombre jusqu’à",
   Language: "Langue",
   "Language / Langue": "Langue / Language",
-  "Now in French, like Windows.": "En français pour l’instant, comme Windows.",
-  "Now in English, like Windows.": "En anglais pour l’instant, comme Windows.",
+  "Now in French, like Windows.": "En français, comme Windows.",
+  "Now in English, like Windows.": "En anglais, comme Windows.",
   Window: "Fenêtre",
   "Docked to the edge": "Ancrée au bord",
   "Slides in with the shortcut, hides when you click away.": "Glisse depuis le bord avec le raccourci, se cache quand vous cliquez ailleurs.",
@@ -75,15 +105,20 @@ export const settings = {
   "Normal (size)": "Normale",
   "Large (size)": "Grande",
   "Dates written in a note": "Dates écrites dans une note",
-  "“Call the client demain 9h”: the date gets a dotted line and can become a reminder.":
+  "“Call the client tomorrow 9am”: the date gets a dotted line and can become a reminder.":
     "« Appeler le client demain 9h » : la date est soulignée en pointillé et peut devenir un rappel.",
   Ask: "Demander",
   Automatic: "Automatique",
-  "Automatic adds the reminder only when the date is certain (a day and an hour, like “lundi 14h30”).":
+  "Automatic adds the reminder only when the date is certain (a day and an hour, like “Monday 2:30pm”).":
     "Automatique n’ajoute le rappel que si la date est sûre (un jour et une heure, comme « lundi 14h30 »).",
   "My day": "Ma journée",
   "Starts at": "Commence à",
-  "ends at": "finit à",
+  "Ends at": "Finit à",
+  "My day starts at": "Ma journée commence à",
+  "My day ends at": "Ma journée finit à",
+  Hours: "Heures",
+  Minutes: "Minutes",
+  "AM or PM": "AM ou PM",
   "Used for “Later… this evening / tomorrow morning”, the hours shown when you drag a task onto a time, and the evening look back (at the end of work hours on work days, else at the end of your day).":
     "Sert pour « Plus tard… ce soir / demain matin », pour les heures proposées quand vous faites glisser une tâche sur une heure, et pour le bilan du soir (à la fin des heures de travail les jours travaillés, sinon à la fin de votre journée).",
   Screen: "Écran",
@@ -99,23 +134,26 @@ export const settings = {
   "Switch between Work and Personal by the clock": "Passer de Travail à Perso selon l’heure",
   Days: "Jours",
   "Work from": "Travail de",
+  "Work until": "Travail jusqu’à",
   "then Personal": "puis Perso",
+  "These hours cross midnight: work ends the next day at {time}.": "Ces heures passent minuit : le travail finit le lendemain à {time}.",
   "Reminders always ring. When one from the other space rings, the board switches to it. You can still switch by hand; the clock takes over again at its next change.":
     "Les rappels sonnent toujours. Quand un rappel de l’autre espace sonne, le tableau y passe. Vous pouvez toujours changer à la main ; l’horloge reprend la main à son prochain changement.",
   Reminders: "Rappels",
   "Default rhythm for deadlines": "Rythme par défaut des échéances",
-  "End a line with ! to make a deadline.": "Finissez une ligne par ! pour en faire une échéance.",
+  "End a line with\u00a0! to make a deadline.": "Finissez une ligne par « ! » pour en faire une échéance.",
   "Default rhythm": "Rythme par défaut",
   Gentle: "Doux",
   Normal: "Normal",
   Insistent: "Insistant",
   Custom: "Sur mesure",
-  "Starts {start} min before, again at {pre} min before, then every {every} min after the time, at most {max} times. After “I'm on it”, asks “Really done?” {checkin} min later; after “Not yet”, {notyet} min later.":
+  "Starts {start} min before, again at {pre} min before, then every {every} min after the time, at most {max} times. After “I’m on it”, asks “Really done?” {checkin} min later; after “Not yet”, {notyet} min later.":
     "Commence {start} min avant, puis à {pre} min avant, ensuite toutes les {every} min après l’heure, {max} fois au plus. Après « Je m’en occupe », demande « Vraiment fini ? » {checkin} min plus tard ; après « Pas encore », {notyet} min plus tard.",
   "A simple reminder rings at the time, then again every 5 min until you answer, at most 6 times.":
     "Un simple rappel sonne à l’heure, puis toutes les 5 min jusqu’à votre réponse, 6 fois au plus.",
-  "Tidy the inbox": "Faire le tri",
+  "Tidy the Inbox": "Faire le tri",
   "Every day at": "Chaque jour à",
+  "Tidy every day at": "Trier chaque jour à",
   When: "Quand",
   "things wait": "choses attendent",
   Keyboard: "Clavier",
@@ -124,7 +162,7 @@ export const settings = {
   Change: "Changer",
   Reset: "Réinitialiser",
   "Add a task · an idea · a deadline": "Ajouter une tâche · une idée · une échéance",
-  "Enter · Shift+Enter · end with !": "Entrée · Maj+Entrée · finir par !",
+  "Enter · Shift+Enter · end with\u00a0!": "Entrée · Maj+Entrée · finir par « ! »",
   "On the board": "Sur le tableau",
   "from the empty entry line: onto the board": "depuis la ligne de saisie vide : sur le tableau",
   "Up / Down": "Haut / Bas",
@@ -176,9 +214,10 @@ export const settings = {
   "Folder for the backups": "Dossier des sauvegardes",
   "Restoring first backs up the notes you have now, so nothing is lost.": "Avant de restaurer, vos notes actuelles sont sauvegardées : rien ne se perd.",
   Start: "Démarrage",
-  "Start {app} with the computer": "Lancer {app} avec l’ordinateur",
+  "Start {app} with {os}": "Démarrer {app} avec {os}",
+  "For {app} {version}": "Pour {app} {version}",
   "Reminders only ring while it runs; it waits in the tray.": "Les rappels ne sonnent que s’il tourne ; il attend dans la zone de notification.",
-  "Bring in the notes from Windows Sticky Notes again": "Reprendre les notes de Pense-bêtes (Windows)",
+  "Bring in the notes from Windows Sticky Notes": "Récupérer les notes de Pense-bêtes (Windows)",
   Import: "Importer",
   // About: this copy and where its notes are.
   About: "À propos",
@@ -211,7 +250,7 @@ export const settings = {
   "{app} {version} is ready": "{app} {version} est prêt",
   "{app} {version} is out": "{app} {version} est disponible",
   "{app} is up to date": "{app} est à jour",
-  "It starts the next time {app} opens, or now with Restart now.": "Cette version démarre à la prochaine ouverture de {app}, ou tout de suite avec Redémarrer maintenant.",
+  "It starts the next time {app} opens, or now with Restart now.": "Elle s’ouvrira au prochain démarrage de {app}, ou tout de suite avec Redémarrer maintenant.",
   "Version {version} · last checked {when}": "Version {version} · dernière recherche : {when}",
   "Version {version} · not checked yet": "Version {version} · pas encore de recherche",
   "Last checked {when}": "Dernière recherche : {when}",

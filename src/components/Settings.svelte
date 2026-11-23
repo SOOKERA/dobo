@@ -2,14 +2,19 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   import { composing } from "../lib/compose";
+  import { roving } from "../lib/gridkeys";
   import { tick, untrack } from "svelte";
   import Icon from "./Icon.svelte";
   import Logo from "./Logo.svelte";
   import ViewHeader, { type Crumb } from "./ViewHeader.svelte";
   import RhythmFields from "./RhythmFields.svelte";
+  import TimeField from "./TimeField.svelte";
   import { store, defaultShortcuts, SIZES, type Shortcuts, type WorkHours } from "../lib/store.svelte";
-  import { inTauri, type BackupInfo, type DataInfo } from "../lib/backend";
+  import { inTauri, type BackupInfo, type BackupStatus, type DataInfo } from "../lib/backend";
+  import { groupBackups, noticeText, sameDrive } from "../lib/backups";
   import { pushLayer } from "../lib/layers";
+  import { modal, takeFocus } from "../lib/modal";
+  import { firesWhileTyping, latinKey, menuKey } from "../lib/keyboard";
   import { rhythmPresets } from "../lib/rhythm";
   import { APP_NAME } from "../lib/app";
   import { DOCK_PRESETS, presetName } from "../lib/dock";
@@ -19,8 +24,10 @@
   import { arrive, crumbIn, crumbOut, easeHeight, fadeQuick, fold, leave, sheet, reduced } from "../lib/motion";
   import { groupsOf, highlight, matchSettings } from "../lib/settingsFind";
   import { askTour } from "../lib/tour.svelte";
+  import { crossesMidnight } from "../lib/plan";
+  import { shownHHMM } from "../lib/time";
   import { checkNow, restartNow, updates } from "../lib/updates.svelte";
-  import { dateFmt, dayName, fileSize, i18n, isKey, keysText, readChoice, switchLanguage, t, type Key, type LangChoice, words, type Words } from "../lib/i18n.svelte";
+  import { askedLanguage, dateAndTime, dateFmt, dayName, fileSize, i18n, isKey, keysText, readChoice, switchLanguage, t, type Key, type LangChoice, words, type Words } from "../lib/i18n.svelte";
 
   // `at`: a section to open on (the "?" at the board's corner and F1 open Help); `n` changes on
   // each ask, so asking again while Settings is open goes there again.
@@ -32,6 +39,12 @@
 
   // ---- Where you are: the section under the header as you scroll, or the search ----
   let sheetEl = $state<HTMLElement>();
+  // Once a toast has shown here ("Undone · Redo"), the page keeps room under its last row, so
+  // it can scroll clear of the toast (kept until the view closes: nothing jumps as it goes).
+  let toastRoom = $state(false);
+  $effect.pre(() => {
+    if (store.toast) toastRoom = true;
+  });
   let topEl = $state<HTMLElement>();
   let findEl = $state<HTMLInputElement>();
   let q = $state("");
@@ -117,7 +130,7 @@
   $effect(() => {
     const key = (e: KeyboardEvent) => {
       if (recording) return;
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && latinKey(e) === "f") {
         e.preventDefault();
         e.stopPropagation();
         findEl?.focus();
@@ -188,6 +201,8 @@
   let autostart = $state(false);
   let recording = $state<keyof Shortcuts | null>(null);
   let keyError = $state<{ which: keyof Shortcuts; msg: string } | null>(null);
+  // Global shortcuts another app holds (they do nothing until changed).
+  let taken = $state<string[]>([]);
 
   $effect(() => {
     store.backend.listMonitors().then((m) => (monitors = m));
@@ -195,6 +210,10 @@
     store.backend
       .getAutostart()
       .then((on) => (autostart = on))
+      .catch(() => {});
+    store.backend
+      .shortcutsTaken()
+      .then((w) => (taken = w))
       .catch(() => {});
   });
 
@@ -273,27 +292,60 @@
     const which = recording;
     if (!which) return;
     const pop = pushLayer(() => (recording = null));
+    const plain = (e: KeyboardEvent) => !e.ctrlKey && !e.altKey && !e.metaKey;
     const onKey = async (e: KeyboardEvent) => {
       if (e.key === "Escape") return;
+      // Tab goes on (and stops the recording); Enter or Space alone is Cancel.
+      if (e.key === "Tab" && plain(e)) return void (recording = null);
+      if ((e.key === "Enter" || e.key === " ") && plain(e) && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelledAt = performance.now();
+        recording = null;
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       const accel = accelOf(e);
       if (!accel) return;
       recording = null;
+      // Windows' menu key (Shift+F10) would stop opening the right-click menu everywhere, and
+      // Shift alone (Shift+A is a capital A) would fire while typing, in every app: refused here
+      // as in Rust (set_shortcut), with the reason. (Shift+F5 and such type nothing: fine.)
+      if (menuKey(e)) {
+        keyError = { which, msg: t("{keys} is Windows’ menu key: it opens the menu in every app. Try another one.", { keys: keysText(accel) }) };
+        return;
+      }
+      if (firesWhileTyping(e)) {
+        keyError = { which, msg: t("Add Ctrl, Alt or Win so it doesn’t fire while you type (Shift alone isn’t enough).") };
+        return;
+      }
       try {
         await store.backend.setShortcut(which, accel);
         store.settings = { ...store.settings, [`shortcut_${which}`]: accel };
         keyError = null;
+        taken = taken.filter((w) => w !== which);
       } catch (err) {
         keyError = { which, msg: String(err) };
       }
     };
+    // A click elsewhere, or the window losing the keyboard, stops it too.
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element).closest?.(`[data-keys-row="${which}"]`)) recording = null;
+    };
+    const blur = () => (recording = null);
     window.addEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("blur", blur);
     return () => {
       pop();
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("blur", blur);
     };
   });
+  /** (The Space that cancelled a recording must not start it again as it lifts on Cancel.) */
+  let cancelledAt = -1e9;
   let keyRows = $derived<[keyof Shortcuts, string][]>([
     ["toggle", t("Open or hide {app}, from anywhere", { app: APP_NAME })],
     ["dump", t("Quick dump into the Inbox, from anywhere")],
@@ -319,13 +371,17 @@
 
   // ---- Backups ----
   let backups = $state<BackupInfo[]>([]);
+  let backupFail = $state<BackupStatus | null>(null);
   let backupDir = $state("");
   let backupMsg = $state<Words>("");
   let confirmRestore = $state<string | null>(null);
+  let keptRestore = $state<string | null>(null);
   async function loadBackups() {
     try {
       backups = await store.backend.backupList();
       backupDir = await store.backend.backupFolder();
+      const st = await store.backend.backupStatus();
+      backupFail = st.error || st.notice ? st : null;
     } catch (e) {
       backupMsg = String(e);
     }
@@ -340,7 +396,7 @@
       backupMsg = () => t("Backed up ({size}).", { size: fileSize(b.bytes) });
       await loadBackups();
     } catch (e) {
-      backupMsg = () => t("Couldn't back up: {error}", { error: String(e) });
+      backupMsg = () => t("Couldn’t back up: {error}", { error: String(e) });
     }
   }
   async function chooseFolder() {
@@ -360,22 +416,27 @@
       backupMsg = () => t("Restored. Your notes from before are kept as a backup too.");
       await loadBackups();
     } catch (e) {
-      backupMsg = () => t("Couldn't restore: {error}", { error: String(e) });
+      backupMsg = () => t("Couldn’t restore: {error}", { error: String(e) });
     }
   }
   function when(ms: number) {
-    return dateFmt({ weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(ms));
+    return dateAndTime(new Date(ms));
   }
-  const reasonName: Record<string, Key> = { daily: "Daily", manual: "By hand", "before-restore": "Before a restore" };
+  /** The backups folder is on the same drive (or share) as the notes: inside the data folder (the
+   * default), or anywhere else on that drive. */
+  let backupsWithNotes = $derived.by(() => !!info && sameDrive(backupDir, info.dir));
+  const reasonName: Record<string, Key> = { daily: "Daily", manual: "By hand", "before-restore": "Before a restore", "before-update": "Before an update" };
+  /** The backups by kind (each keeps its own last few). */
+  let backupGroups = $derived(groupBackups(backups));
 
   async function importAgain() {
     importMsg = () => t("Reading Sticky Notes…");
     try {
       const n = await store.backend.importStickyNotes();
       await store.reload();
-      importMsg = () => (n ? t("Added {n} notes from Sticky Notes.", { n }) : t("No sticky notes found on this computer."));
+      importMsg = () => (n ? t("Added {n} notes from Sticky Notes.", { n }) : t("Nothing new to bring in from Sticky Notes."));
     } catch (e) {
-      importMsg = () => t("Couldn't read Sticky Notes: {error}", { error: String(e) });
+      importMsg = () => t("Couldn’t read Sticky Notes: {error}", { error: String(e) });
     }
   }
 
@@ -449,12 +510,13 @@
     ["fr", "Français"],
   ];
   function setLanguage(c: LangChoice) {
-    if (c === langChoice) return;
+    if (c === (askedLanguage() ?? langChoice)) return;
     void switchLanguage(c, () => store.setSetting("language", c), sheetEl);
   }
 </script>
 
-<div class="sheet" role="dialog" aria-label={t("Settings")} bind:this={sheetEl} onscroll={onScroll} transition:sheet|global>
+<!-- (The keyboard comes in: to its search, or to the sheet when it opens on a section.) -->
+<div class="sheet" class:toast-room={toastRoom} role="dialog" aria-label={t("Settings")} tabindex="-1" bind:this={sheetEl} onscroll={onScroll} transition:sheet|global use:modal={{ initial: untrack(() => at) ? "self" : "#settings-find" }}>
   <div class="top" bind:this={topEl} data-drag-area={store.win.mode === "floating" || undefined}>
     <ViewHeader {crumbs} big={24} {onBack} {onClose} />
     <!-- (The whole field is a control: its icon and edges never move the window.) -->
@@ -468,27 +530,27 @@
     </div>
   </div>
   {#if none}
-    <p class="nothing" transition:sheet>{t("Nothing in Settings matches “{q}”. Try one word, like “dark”, “shortcut”, “backup” or “rappel”.", { q: q.trim() })}</p>
+    <p class="nothing" transition:sheet>{t("Nothing in Settings matches “{q}”. Try one word, like “dark”, “shortcut”, “backup” or “reminder”.", { q: q.trim() })}</p>
   {/if}
 
   <!-- The same switch as Style › Dark mode and the sun/moon in the header (one setting). -->
   <section data-key="Appearance">
     <h3>{t("Appearance")}</h3>
-    <div class="tabs appear" role="radiogroup" aria-label={t("Appearance")}>
+    <div class="tabs appear" role="radiogroup" use:roving aria-label={t("Appearance")}>
       {#each APPEARANCE as [k, label, title] (k)}
         <button role="radio" aria-checked={dm.mode === k} class:on={dm.mode === k} data-tip={t(title)} onclick={() => look.setDarkMode({ ...dm, mode: k })}>{t(label)}</button>
       {/each}
     </div>
     {#if dm.mode === "hours"}
       <div class="hours appear-hours" transition:fold={{ duration: 260 }}>
-        <label>{t("Dark from")} <input type="time" aria-label={t("Dark from")} value={dm.from} onchange={(e) => e.currentTarget.value && look.setDarkMode({ ...dm, from: e.currentTarget.value })} /></label>
-        <label>{t("until")} <input type="time" aria-label={t("Dark until")} value={dm.until} onchange={(e) => e.currentTarget.value && look.setDarkMode({ ...dm, until: e.currentTarget.value })} /></label>
+        <label>{t("Dark from")} <TimeField label={t("Dark from")} value={dm.from} onChange={(v) => look.setDarkMode({ ...dm, from: v })} /></label>
+        <label>{t("until")} <TimeField label={t("Dark until")} value={dm.until} onChange={(v) => look.setDarkMode({ ...dm, until: v })} /></label>
       </div>
     {/if}
     {@render noteSwap(dm.mode, `${t(APPEARANCE_NOTE[dm.mode])} ${t("Dark mode darkens the app and the notes; the board keeps its own look unless your theme has a Dark style (Style › Themes).")}`)}
     <div class="line lang">
       <span>{t("Language / Langue")}{#if langChoice === "system"}<small transition:fold={{ y: 0, duration: 240 }}>{i18n.system === "fr" ? t("Now in French, like Windows.") : t("Now in English, like Windows.")}</small>{/if}</span>
-      <div class="seg" role="radiogroup" aria-label={t("Language")}>
+      <div class="seg" role="radiogroup" aria-label={t("Language")} use:roving>
         {#each LANGS as [k, name] (k)}
           <button role="radio" aria-checked={langChoice === k} class:on={langChoice === k} lang={k === "system" ? undefined : k} onclick={() => setLanguage(k)}>{name ?? t("Follow Windows")}</button>
         {/each}
@@ -573,14 +635,14 @@
       </div>
     </div>
     <div class="line">
-      <span>{t("Dates written in a note")} <small>{t("“Call the client demain 9h”: the date gets a dotted line and can become a reminder.")}</small></span>
+      <span>{t("Dates written in a note")} <small>{t("“Call the client tomorrow 9am”: the date gets a dotted line and can become a reminder.")}</small></span>
       <div class="seg" role="group" aria-label={t("Dates written in a note")}>
         {#each [["ask", "Ask"], ["auto", "Automatic"], ["off", "Off"]] as const as [k, label] (k)}
           <button class:on={store.smartDates === k} aria-pressed={store.smartDates === k} onclick={() => store.setSetting("smart_dates", k)}>{t(label)}</button>
         {/each}
       </div>
     </div>
-    <p class="note">{t("Automatic adds the reminder only when the date is certain (a day and an hour, like “lundi 14h30”).")}</p>
+    <p class="note">{t("Automatic adds the reminder only when the date is certain (a day and an hour, like “Monday 2:30pm”).")}</p>
   </section>
 
   <section data-key="Archive">
@@ -597,8 +659,8 @@
   <section data-key="My day">
     <h3>{t("My day")}</h3>
     <div class="hours">
-      <label>{t("Starts at")} <input type="time" value={day.start} onchange={(e) => setDay({ start: e.currentTarget.value || "08:00" })} /></label>
-      <label>{t("ends at")} <input type="time" value={day.end} onchange={(e) => setDay({ end: e.currentTarget.value || "22:00" })} /></label>
+      <label>{t("Starts at")} <TimeField label={t("My day starts at")} value={day.start} onChange={(v) => setDay({ start: v })} /></label>
+      <label>{t("Ends at")} <TimeField label={t("My day ends at")} value={day.end} onChange={(v) => setDay({ end: v })} /></label>
     </div>
     <p class="note">{t("Used for “Later… this evening / tomorrow morning”, the hours shown when you drag a task onto a time, and the evening look back (at the end of work hours on work days, else at the end of your day).")}</p>
   </section>
@@ -615,7 +677,7 @@
       </div>
     </div>
     {#if layout}
-      <div class="screens" style:height="{layout.h + 8}px" role="radiogroup" aria-label={t("Screens")}>
+      <div class="screens" style:height="{layout.h + 8}px" role="radiogroup" aria-label={t("Screens")} use:roving>
         {#each layout.boxes as b (b.m.key)}
           <button
             class="screen"
@@ -655,10 +717,13 @@
         {/each}
       </div>
       <div class="hours">
-        <label>{t("Work from")} <input type="time" value={wh.from} onchange={(e) => setWh({ from: e.currentTarget.value || "09:00" })} /></label>
-        <label>{t("until")} <input type="time" value={wh.until} onchange={(e) => setWh({ until: e.currentTarget.value || "19:00" })} /></label>
+        <label>{t("Work from")} <TimeField label={t("Work from")} value={wh.from} onChange={(v) => setWh({ from: v })} /></label>
+        <label>{t("until")} <TimeField label={t("Work until")} value={wh.until} onChange={(v) => setWh({ until: v })} /></label>
         <span class="soft">{t("then Personal")}</span>
       </div>
+      {#if crossesMidnight(wh)}
+        <p class="note overnight" transition:fold={{ duration: 240 }}>{t("These hours cross midnight: work ends the next day at {time}.", { time: shownHHMM(wh.until) })}</p>
+      {/if}
       <p class="note"><Icon name="bell" size={14} /> {t("Reminders always ring. When one from the other space rings, the board switches to it. You can still switch by hand; the clock takes over again at its next change.")}</p>
       </div>
     {/if}
@@ -667,11 +732,11 @@
   <section data-key="Reminders">
     <h3>{t("Reminders")}</h3>
     <div class="line">
-      <span>{t("Default rhythm for deadlines")} <small>{t("End a line with ! to make a deadline.")}</small></span>
+      <span>{t("Default rhythm for deadlines")} <small>{t("End a line with\u00a0! to make a deadline.")}</small></span>
     </div>
-    <div class="tabs" role="tablist" aria-label={t("Default rhythm")}>
+    <div class="tabs" role="radiogroup" aria-label={t("Default rhythm")} use:roving>
       {#each ["gentle", "normal", "insistent", "custom"] as const as p (p)}
-        <button role="tab" class:on={defaultPreset === p} aria-selected={defaultPreset === p} onclick={() => store.setSetting("deadline_preset", p)}>{t(PRESET_NAME[p])}</button>
+        <button role="radio" class:on={defaultPreset === p} aria-checked={defaultPreset === p} onclick={() => store.setSetting("deadline_preset", p)}>{t(PRESET_NAME[p])}</button>
       {/each}
     </div>
     {#if defaultPreset === "custom" && customDefault}
@@ -679,14 +744,14 @@
     {:else if presets}
       {@const r = presets[defaultPreset]}
       <div transition:fold>
-      {@render noteSwap(defaultPreset, t("Starts {start} min before, again at {pre} min before, then every {every} min after the time, at most {max} times. After “I'm on it”, asks “Really done?” {checkin} min later; after “Not yet”, {notyet} min later.", { start: r.start, pre: r.pre.join(" · "), every: r.every, max: r.max, checkin: r.checkin, notyet: r.notyet }))}
+      {@render noteSwap(defaultPreset, t("Starts {start} min before, again at {pre} min before, then every {every} min after the time, at most {max} times. After “I’m on it”, asks “Really done?” {checkin} min later; after “Not yet”, {notyet} min later.", { start: r.start, pre: r.pre.join(" · "), every: r.every, max: r.max, checkin: r.checkin, notyet: r.notyet }))}
       </div>
     {/if}
     <p class="note">{t("A simple reminder rings at the time, then again every 5 min until you answer, at most 6 times.")}</p>
 
-    <h4>{t("Tidy the inbox")}</h4>
+    <h4>{t("Tidy the Inbox")}</h4>
     <label class="line check">
-      <span>{t("Every day at")} <input class="inline" type="time" value={tidy.time} onchange={(e) => setTidy({ time: e.currentTarget.value || "17:30" })} onclick={(e) => e.stopPropagation()} /></span>
+      <span>{t("Every day at")} <TimeField variant="inline" label={t("Tidy every day at")} value={tidy.time} onChange={(v) => setTidy({ time: v })} /></span>
       <input type="checkbox" checked={tidy.daily} onchange={(e) => setTidy({ daily: e.currentTarget.checked })} />
       <span class="sw" aria-hidden="true"></span>
     </label>
@@ -702,14 +767,15 @@
     {#each keyRows as [which, label] (which)}
       <div class="line">
         <span>{label}</span>
-        <span class="keyset">
-          <span class="keys" class:rec={recording === which}><span class="tswap">{#key recording === which}<span in:crumbIn out:crumbOut>{recording === which ? t("Press the new keys…") : keysText(store.shortcuts[which])}</span>{/key}</span></span>
-          <button class="small" onclick={() => ((recording = recording === which ? null : which), (keyError = null))}><span class="tswap">{#key recording === which}<span in:crumbIn out:crumbOut>{recording === which ? t("Cancel") : t("Change")}</span>{/key}</span></button>
+        <span class="keyset" data-keys-row={which}>
+          <span class="keys" class:rec={recording === which} aria-live="polite"><span class="tswap">{#key recording === which}<span in:crumbIn out:crumbOut>{recording === which ? t("Press the new keys…") : keysText(store.shortcuts[which])}</span>{/key}</span></span>
+          <button class="small" onclick={() => performance.now() - cancelledAt > 400 && ((recording = recording === which ? null : which), (keyError = null))}><span class="tswap">{#key recording === which}<span in:crumbIn out:crumbOut>{recording === which ? t("Cancel") : t("Change")}</span>{/key}</span></button>
           {#if store.shortcuts[which] !== defaultShortcuts[which] && recording !== which}
             <button class="link" transition:fadeQuick onclick={async () => {
               try {
                 await store.backend.setShortcut(which, defaultShortcuts[which]);
                 store.settings = { ...store.settings, [`shortcut_${which}`]: defaultShortcuts[which] };
+                taken = taken.filter((w) => w !== which);
               } catch (e) {
                 keyError = { which, msg: String(e) };
               }
@@ -717,11 +783,12 @@
           {/if}
         </span>
       </div>
-      {#if keyError?.which === which}<p class="error" transition:fold>{keyError.msg}</p>{/if}
+      {#if keyError?.which === which}<p class="error" transition:fold>{keyError.msg}</p>
+      {:else if taken.includes(which) && recording !== which}<p class="error" transition:fold>{t("{keys} is taken by another app, so it does nothing now. Choose another.", { keys: keysText(store.shortcuts[which]) })}</p>{/if}
     {/each}
     <div class="line">
       <span>{t("Add a task · an idea · a deadline")}</span>
-      <span class="keys">{t("Enter · Shift+Enter · end with !")}</span>
+      <span class="keys">{t("Enter · Shift+Enter · end with\u00a0!")}</span>
     </div>
     <h4>{t("On the board")}</h4>
     <div class="keymap">
@@ -751,32 +818,47 @@
         {#if store.settings.backup_dir}<button class="link" transition:fadeQuick onclick={async () => (await store.setSetting("backup_dir", ""), await loadBackups())}>{t("Default")}</button>{/if}
       </span>
     </div>
+    <!-- A gentle word, never a nag: the backups beside the notes go with them if that drive fails. -->
+    {#if backupsWithNotes}<p class="note hint" transition:fold>{t("Kept with your notes, on the same drive. A folder on another drive keeps them safe if this one fails.")}</p>{/if}
     <div class="line">
       <span>{t("Make one now")}</span>
       <button class="small" onclick={backupNow}>{t("Back up now")}</button>
     </div>
+    {#if backupFail?.error}<p class="note failed" transition:fold>{t("The automatic backup didn’t work ({when}): {error}", { when: when(backupFail.failed_at ?? Date.now()), error: backupFail.error ?? "" })}</p>{/if}
+    <!-- A word of its own (about the last restore, or the backup before an update), in the
+         language of the moment. -->
+    {#if backupFail?.notice}<p class="note failed" transition:fold>{noticeText(backupFail.notice)}</p>{/if}
     {#if backupMsg}<p class="note" transition:fold>{words(backupMsg)}</p>{/if}
     {#if backups.length}
       <div transition:fold>
       <h4>{t("Your backups")}</h4>
+      {#each backupGroups as g (g.kind)}
+      <div class="b-group" transition:fold>
+      <div class="b-head">
+        <span class="b-kind">{reasonName[g.kind] ? t(reasonName[g.kind]) : g.kind}</span>
+        {#if g.keep}<small>{t("the last {n} are kept", { n: g.keep })}</small>{/if}
+      </div>
       <div class="backups">
-        {#each backups as b (b.path)}
+        {#each g.items as b (b.path)}
           <div class="backup" transition:fold>
             <span class="b-when">{when(b.at)}</span>
-            <span class="b-why">{reasonName[b.reason] ? t(reasonName[b.reason]) : b.reason} · {fileSize(b.bytes)}</span>
+            <span class="b-why">{b.version ? `${t("For {app} {version}", { app: APP_NAME, version: b.version })} · ` : ""}{b.kept_in_data ? `${t("in the data folder")} · ` : ""}{fileSize(b.bytes)}</span>
             <span class="aswap">
             {#if confirmRestore === b.path}
               <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
-                <button class="small" onclick={() => (confirmRestore = null)}>{t("Keep mine")}</button>
+                <!-- (The keyboard comes to the safe choice; Keep mine gives it back to Restore….) -->
+                <button class="small" use:takeFocus onclick={() => ((keptRestore = b.path), (confirmRestore = null))}>{t("Keep mine")}</button>
                 <button class="small strong" onclick={() => restore(b.path)}>{t("Restore this")}</button>
               </span>
             {:else}
-              <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small" onclick={() => (confirmRestore = b.path)}>{t("Restore…")}</button></span>
+              <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small" use:takeFocus={keptRestore === b.path} onfocus={() => (keptRestore = null)} onclick={() => (confirmRestore = b.path)}>{t("Restore…")}</button></span>
             {/if}
             </span>
           </div>
         {/each}
       </div>
+      </div>
+      {/each}
       <p class="note">{t("Restoring first backs up the notes you have now, so nothing is lost.")}</p>
       </div>
     {/if}
@@ -785,13 +867,13 @@
   <section data-key="Start">
     <h3>{t("Start")}</h3>
     <label class="line check">
-      <span>{t("Start {app} with the computer", { app: APP_NAME })} <small>{t("Reminders only ring while it runs; it waits in the tray.")}</small></span>
+      <span>{t("Start {app} with {os}", { app: APP_NAME, os: "Windows" })} <small>{t("Reminders only ring while it runs; it waits in the tray.")}</small></span>
       <input type="checkbox" checked={autostart} onchange={(e) => setAuto(e.currentTarget.checked)} />
       <span class="sw" aria-hidden="true"></span>
     </label>
     {#if inTauri}
       <div class="line">
-        <span>{t("Bring in the notes from Windows Sticky Notes again")}</span>
+        <span>{t("Bring in the notes from Windows Sticky Notes")}</span>
         <button class="small" onclick={importAgain}>{t("Import")}</button>
       </div>
       {#if importMsg}<p class="note" transition:fold>{words(importMsg)}</p>{/if}
@@ -880,6 +962,9 @@
     background: var(--ground);
     /* What is scrolled to (a focused field) lands under the header, not behind it. */
     scroll-padding-top: 116px;
+  }
+  .sheet.toast-room {
+    padding-bottom: calc(var(--s6) + 60px);
   }
   /* The header and the search stay in view while the sections scroll under them. */
   .top {
@@ -1072,7 +1157,8 @@
     margin-top: var(--s3);
   }
   /* "Every day at [17:30]", "When [10] things wait": the field sits in the sentence. */
-  .line > span:first-child:has(> .inline) {
+  .line > span:first-child:has(> .inline),
+  .line > span:first-child:has(> :global(.tf.inline)) {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
@@ -1118,7 +1204,7 @@
     transform: translateX(16px);
   }
   .check input:focus-visible + .sw {
-    outline: 2px solid var(--focus);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
   .keys {
@@ -1140,6 +1226,12 @@
   @keyframes rec {
     50% {
       opacity: 0.55;
+    }
+  }
+  /* Reduced motion: no pulse; the dark frame and "Press the new keys…" say it is listening. */
+  @media (prefers-reduced-motion: reduce) {
+    .keys.rec {
+      animation: none;
     }
   }
   .keyset {
@@ -1245,6 +1337,10 @@
     font-size: 10px;
     color: var(--muted);
   }
+  /* (A dimmed screen's small print stays readable through its dimming.) */
+  .screen.dim .res {
+    color: var(--ink);
+  }
   .days {
     display: flex;
     gap: 6px;
@@ -1279,7 +1375,6 @@
     align-items: center;
     gap: var(--s2);
   }
-  input[type="time"],
   .inline {
     height: 34px;
     padding: 0 8px;
@@ -1344,6 +1439,18 @@
   .note.credit {
     display: block;
   }
+  /* Under the folder it is about, close to its Choose… button. */
+  .note.hint {
+    margin-top: 0;
+    display: block;
+  }
+  /* The automatic backup that didn't work: said in the late ink, until one works. (A long path
+     in it goes onto the next line rather than past the panel's edge.) */
+  .note.failed {
+    display: block;
+    color: var(--late-ink);
+    overflow-wrap: break-word;
+  }
   .error {
     margin: 0 0 var(--s2);
     font-size: var(--t-sm);
@@ -1375,17 +1482,16 @@
     border-color: var(--ink);
     color: var(--card);
   }
-  /* Installed · Portable (Settings › About). */
+  /* Installed · Portable (Settings › About): a quiet label, not a button. */
   .badge {
     flex-shrink: 0;
-    height: 26px;
-    padding: 0 10px;
-    border: 1px solid var(--line);
-    border-radius: 13px;
-    background: var(--card);
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 11px;
+    background: var(--chip);
     display: grid;
     place-items: center;
-    font-size: var(--t-sm);
+    font-size: var(--t-xs);
     font-weight: 600;
     color: var(--soft);
   }
@@ -1449,7 +1555,28 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    margin-top: 2px;
+  }
+  /* One kind of backup: its name, and how many of it are kept. */
+  .b-group + .b-group {
+    margin-top: var(--s3);
+  }
+  .b-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s3);
+    padding: 0 var(--s2);
     margin-top: var(--s1);
+  }
+  .b-kind {
+    font-size: var(--t-sm);
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .b-head small {
+    font-size: var(--t-xs);
+    color: var(--muted);
   }
   .backup {
     display: flex;
@@ -1470,5 +1597,36 @@
     flex: 1;
     font-size: var(--t-sm);
     color: var(--muted);
+  }
+  /* Narrow: what a backup is under its date (beside it, the words would squeeze to a column). */
+  @container shell (max-width: 520px) {
+    .backup {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) fit-content(50%);
+      column-gap: var(--s3);
+      padding-block: 6px;
+    }
+    .b-when {
+      grid-area: 1 / 1;
+    }
+    .b-why {
+      grid-area: 2 / 1;
+    }
+    .backup > .aswap {
+      grid-area: 1 / 2 / 3 / 3;
+      align-self: center;
+    }
+    /* (Keep mine / Restore this: one above the other, as wide as each other.) */
+    .backup .keyset {
+      flex-wrap: wrap;
+    }
+    .backup .keyset > button {
+      flex: 1 1 auto;
+      white-space: nowrap;
+    }
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .sheet:focus {
+    outline: none;
   }
 </style>

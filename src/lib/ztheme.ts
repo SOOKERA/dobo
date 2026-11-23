@@ -79,13 +79,13 @@ export function parseZtheme(text: string): ZTheme {
   try {
     v = JSON.parse(text);
   } catch {
-    throw new Error(t("That file isn't a Dobo look (it can't be read)."));
+    throw new Error(t("That file isn’t a Dobo look (it can’t be read)."));
   }
-  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error(t("That file isn't a Dobo look."));
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error(t("That file isn’t a Dobo look."));
   const o = v as Record<string, unknown>;
   if (o.ztheme !== ZTHEME_VERSION) throw new Error(t("That look was made by another version of Dobo."));
   const known = new Set(["ztheme", "kind", "themes", "styles", "mixes", "colours", "dark_mode", "app"]);
-  for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(t("That file has things Dobo doesn't know; it wasn't added."));
+  for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(t("That file has things Dobo doesn’t know; it wasn’t added."));
   for (const k of ["themes", "styles", "mixes", "colours"]) if (o[k] !== undefined && !Array.isArray(o[k])) throw new Error(t("That file is damaged."));
   const kind: ExportScope = o.kind === "theme" || o.kind === "themes" ? o.kind : "everything";
   // Pictures are never taken from a file (a path from someone else's computer means nothing here).

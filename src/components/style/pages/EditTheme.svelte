@@ -5,6 +5,7 @@
   // Dark tabs, the chosen half's style picked from ours and yours. Changes show on the board
   // at once; the footer saves the pair as your theme (or updates the one it came from).
   import { composing } from "../../../lib/compose";
+  import { roving } from "../../../lib/gridkeys";
   import Icon from "../../Icon.svelte";
   import LookSwatch from "../LookSwatch.svelte";
   import StyleCard from "../parts/StyleCard.svelte";
@@ -18,10 +19,11 @@
   let cur = $derived(half === "light" ? b.light : b.dark);
   let curFrom = $derived(half === "light" ? b.lightFrom : b.darkFrom);
   const isPicked = (ref: Ref, l: Look) => !!cur && curFrom?.kind === ref.kind && curFrom.id === ref.id && sameLook(l, cur);
+  // (Without "· Dark": the tab's moon says it, and its tooltip "Dark · …" too.)
   const nameOf = (l: Look | null, from: Ref | null) => {
     if (!l) return t("Same as light");
     const base = look.baseOf(from);
-    if (base && sameLook(base, l)) return look.nameOf(from)!;
+    if (base && sameLook(base, l)) return look.baseNameOf(from)!;
     const b = tMaybe(background(l.bg).name);
     return l.bg === "watercolour" ? `${b} · ${l.wc?.name ? tMaybe(l.wc.name) : t("your colours")}` : l.bg === "picture" ? t("Your picture") : `${b} · ${l.colour === "Custom" ? t("custom") : tMaybe(l.colour)}`;
   };
@@ -51,15 +53,16 @@
   <div class="big">
     <span class="hl"><LookSwatch look={b.light} w={332} h={150} /></span>
     <span class="hl d"><LookSwatch look={b.dark ?? b.light} w={332} h={150} /></span>
-    <div class="mn light"><b>Logitech</b>{t("Migrate to GitHub")}</div>
-    <div class="mn dark"><b>Hub</b>{t("Call général")}</div>
+    <!-- Two sample notes, one in each half. -->
+    <div class="mn light"><b>{t("Garden")}</b>{t("Water the roses")}</div>
+    <div class="mn dark"><b>{t("Studio (sample note)")}</b>{t("Draft the newsletter")}</div>
     <span class="tag tl" class:editing={half === "light"}><Icon name="sun" size={12} stroke={2.2} />{t("Light")}{half === "light" ? ` · ${t("editing")}` : ""}</span>
     <span class="tag td" class:editing={half === "dark"}><Icon name="moon" size={11} />{t("Dark")}{half === "dark" ? ` · ${t("editing")}` : ""}</span>
   </div>
 
-  <div class="tabs" role="tablist" aria-label={t("Which half")}>
-    <button role="tab" aria-selected={half === "light"} class:on={half === "light"} onclick={() => (look.editHalf = "light")}><Icon name="sun" size={14} stroke={2} /><span>{t("Light")} · {nameOf(b.light, b.lightFrom)}</span></button>
-    <button role="tab" aria-selected={half === "dark"} class:on={half === "dark"} onclick={() => (look.editHalf = "dark")}><Icon name="moon" size={13} /><span>{t("Dark")} · {nameOf(b.dark, b.darkFrom)}</span></button>
+  <div class="tabs" role="radiogroup" aria-label={t("Which half")} use:roving>
+    <button role="radio" aria-checked={half === "light"} class:on={half === "light"} aria-label="{t('Light')} · {nameOf(b.light, b.lightFrom)}" data-tip="{t('Light')} · {nameOf(b.light, b.lightFrom)}" onclick={() => (look.editHalf = "light")}><Icon name="sun" size={14} stroke={2} /><span>{nameOf(b.light, b.lightFrom)}</span></button>
+    <button role="radio" aria-checked={half === "dark"} class:on={half === "dark"} aria-label="{t('Dark')} · {nameOf(b.dark, b.darkFrom)}" data-tip="{t('Dark')} · {nameOf(b.dark, b.darkFrom)}" onclick={() => (look.editHalf = "dark")}><Icon name="moon" size={13} /><span>{nameOf(b.dark, b.darkFrom)}</span></button>
   </div>
 
   {#if half === "dark"}
@@ -107,7 +110,7 @@
     </div>
     <div class="save">
       {#if yours}
-        <button class="btn grow" onclick={() => theme && look.updateTheme(theme.id)}>{t("Update “{name}”", { name: themeName ?? "" })}</button>
+        <button class="btn grow" onclick={() => theme && look.updateTheme(theme.id)}><span class="cut">{t("Update “{name}”", { name: themeName ?? "" })}</span></button>
         <button class="btn2" onclick={() => look.saveTheme(themeName ?? t("My theme"))}>{t("Save as new")}</button>
       {:else}
         <label class="visually-hidden" for="theme-name">{t("Theme name")}</label>
@@ -166,9 +169,14 @@
   .hl.d {
     clip-path: polygon(100% 0, 100% 100%, 0 100%);
   }
+  /* (As wide as its words need, up to a point, so a sample line stays on one line; should one
+     wrap, its two lines about even: never one word left alone on the second.) */
   .mn {
     position: absolute;
-    width: 86px;
+    min-width: 86px;
+    max-width: 128px;
+    box-sizing: border-box;
+    text-wrap: balance;
     border-radius: 6px;
     padding: 6px 8px;
     font-size: 9.5px;
@@ -228,8 +236,8 @@
   }
   .tabs button {
     min-width: 0;
-    height: 34px;
-    padding: 0 8px;
+    min-height: 34px;
+    padding: 4px 8px;
     border: 0;
     border-radius: 8px;
     background: transparent;
@@ -241,10 +249,15 @@
     gap: 6px;
     cursor: pointer;
   }
+  /* (A long style name takes a second line rather than being cut.) */
   .tabs button span {
-    white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    line-height: 1.2;
+    text-align: center;
   }
   .tabs button.on {
     background: var(--card);
@@ -290,12 +303,15 @@
     gap: 10px;
     font-size: 12px;
   }
+  /* (Two lines when the theme's name is long, never cut on the first.) */
   .what {
     color: var(--soft);
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
   .what b {
     font-weight: 600;
@@ -305,8 +321,15 @@
     display: flex;
     gap: 8px;
   }
-  .grow {
+  .save .btn.grow {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* (The panel's .btn is a flex box that doesn't shrink: these win over it, and its words need
+     their own box to be cut short.) */
+  .save .btn.grow .cut {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

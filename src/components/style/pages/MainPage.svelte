@@ -9,6 +9,7 @@
   import StyleCard from "../parts/StyleCard.svelte";
   import Seg from "../parts/Seg.svelte";
   import Paging from "../parts/Paging.svelte";
+  import TimeField from "../../TimeField.svelte";
   import StyleFooter from "../parts/StyleFooter.svelte";
   import MixCard from "../parts/MixCard.svelte";
   import { look, type PanelPage } from "../../../lib/look.svelte";
@@ -134,9 +135,9 @@
     {#if dm.mode === "hours"}
       <div class="hours" transition:fold={{ gap: 8, duration: 260 }}>
         <span>{t("Dark from")}</span>
-        <input type="time" aria-label={t("Dark from")} value={dm.from} onchange={(e) => e.currentTarget.value && look.setDarkMode({ ...dm, from: e.currentTarget.value })} />
+        <TimeField variant="panel" label={t("Dark from")} value={dm.from} onChange={(v) => look.setDarkMode({ ...dm, from: v })} />
         <span>{t("to")}</span>
-        <input type="time" aria-label={t("Dark until")} value={dm.until} onchange={(e) => e.currentTarget.value && look.setDarkMode({ ...dm, until: e.currentTarget.value })} />
+        <TimeField variant="panel" label={t("Dark until")} value={dm.until} onChange={(v) => look.setDarkMode({ ...dm, until: v })} />
       </div>
     {/if}
   </section>
@@ -422,17 +423,6 @@
     gap: 8px;
     font-size: 12.5px;
     color: var(--soft);
-  }
-  .hours input {
-    height: 30px;
-    padding: 0 8px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--card);
-    color: var(--ink);
-    font: inherit;
-    font-size: 12.5px;
-    font-weight: 600;
   }
   .bgs {
     position: relative;

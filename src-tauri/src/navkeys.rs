@@ -6,6 +6,7 @@
 //! them), but some mouse software sends them as WM_APPCOMMAND messages instead, which reach our
 //! window, not the page. Those are caught here and passed on as a "nav" event ("back" /
 //! "forward"); the page treats both ways the same (and ignores a double within a moment).
+//! The same hook hears Windows' settings change (WM_SETTINGCHANGE): a 12- or 24-hour clock.
 
 #[cfg(windows)]
 pub fn hook(win: &tauri::WebviewWindow) {
@@ -45,11 +46,12 @@ unsafe extern "system" fn proc(
     _id: usize,
     data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
-    use tauri::Emitter;
+    use tauri::{Emitter, Manager};
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     const WM_APPCOMMAND: u32 = 0x0319;
     const WM_NCDESTROY: u32 = 0x0082;
+    const WM_SETTINGCHANGE: u32 = 0x001A;
     if msg == WM_NCDESTROY {
         // The window is going: take the subclass off and free what `hook` kept for it.
         unsafe {
@@ -57,6 +59,13 @@ unsafe extern "system" fn proc(
             drop(Box::from_raw(data as *mut tauri::WebviewWindow));
             return DefSubclassProc(hwnd, msg, wp, lp);
         }
+    }
+    // Windows' region settings changed ("intl"): a 12- or 24-hour clock from now on, in every
+    // window ("clock-format": the page asks again).
+    if msg == WM_SETTINGCHANGE && crate::clock::refresh_hour12() {
+        // SAFETY: as below.
+        let win = unsafe { &*(data as *const tauri::WebviewWindow) };
+        let _ = win.app_handle().emit("clock-format", crate::clock::hour12());
     }
     if msg == WM_APPCOMMAND
         && let Some(dir) = command(lp.0)

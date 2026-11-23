@@ -48,7 +48,7 @@
     </div>
     <div class="save">
       {#if yours && !mixMode}
-        <button class="btn grow" onclick={() => from && look.updateStyle(from.id)}>{t("Update “{name}”", { name: baseName ?? "" })}</button>
+        <button class="btn grow" onclick={() => from && look.updateStyle(from.id)}><span class="cut">{t("Update “{name}”", { name: baseName ?? "" })}</span></button>
         <button class="btn2" onclick={() => look.saveStyle(baseName ?? t("My style"))}>{t("Save as new")}</button>
       {:else}
         <label class="visually-hidden" for="style-name">{mixMode ? t("Mix name") : t("Style name")}</label>
@@ -109,8 +109,15 @@
     display: flex;
     gap: 8px;
   }
-  .grow {
+  .save .btn.grow {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* (The panel's .btn is a flex box that doesn't shrink: these win over it, and its words need
+     their own box to be cut short.) */
+  .save .btn.grow .cut {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -5,11 +5,11 @@
 // spaces in the parts.
 //
 // Glossary (keep it consistent): note · tâche · idée · étape · rappel · échéance (deadline) ·
-// À trier (Inbox, the note) · Faire le tri / Trier (Tidy) · tableau (board) · Bilan du jour (Look back) ·
+// À trier (Inbox, the note; « À trier » in a sentence, bare only as its own label) · Faire le tri / Trier (Tidy) · tableau (board) · Bilan du jour (Look back) ·
 // Style · thème · mélange (mix) · fond (background) · couleur · Personnaliser (Customise) ·
 // Ancré / Flottant (Docked / Floating) · Toujours au premier plan · Épingler (Pin) ·
 // Paramètres (Settings) · Travail / Perso · modèle (template) · rythme · Annuler / Rétablir
-// (Undo / Redo) · Pense-bêtes (Windows Sticky Notes) · vous.
+// (Undo / Redo) · Pense-bêtes (Windows Sticky Notes) · appli (app, never « app ») · vous.
 import { app } from "./fr-app";
 import { settings } from "./fr-settings";
 import { board } from "./fr-board";

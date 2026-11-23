@@ -77,7 +77,7 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
 
 // ---- Dark mode ----
 
-fn valid_hhmm(s: &str) -> bool {
+pub(crate) fn valid_hhmm(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 5 && b[2] == b':' && s[..2].parse::<u8>().is_ok_and(|h| h < 24) && s[3..].parse::<u8>().is_ok_and(|m| m < 60)
 }
@@ -248,7 +248,7 @@ const PATTERNS: [&str; 4] = ["Scattered", "Sweep", "Corners", "One patch"];
 const PAPERS: [&str; 2] = ["white", "dark"];
 
 fn bad(what: &str) -> String {
-    tr!("That file isn't a Dobo look ({}).", "Ce fichier n’est pas un style Dobo ({}).", what)
+    tr!("That file isn’t a Dobo look ({}).", "Ce fichier n’est pas un style Dobo ({}).", what)
 }
 
 fn plain_text(s: &str, max: usize) -> bool {
@@ -303,7 +303,7 @@ pub fn validate(text: &str) -> Result<ZTheme, String> {
     if text.len() as u64 > ZTHEME_MAX {
         return Err(tr!("That file is too big to be a Dobo look.", "Ce fichier est trop gros pour être un style Dobo."));
     }
-    let mut z: ZTheme = serde_json::from_str(text).map_err(|_| bad(&tr!("it can't be read", "il ne peut pas être lu")))?;
+    let mut z: ZTheme = serde_json::from_str(text).map_err(|_| bad(&tr!("it can’t be read", "il ne peut pas être lu")))?;
     if z.ztheme != 1 {
         return Err(tr!("That look was made by another version of Dobo.", "Ce style vient d’une autre version de Dobo."));
     }
@@ -363,11 +363,11 @@ fn read_checked(path: &std::path::Path) -> Result<String, String> {
     if !ext_ok {
         return Err(tr!("Only .ztheme files can be added here.", "Seuls les fichiers .ztheme peuvent être ajoutés ici."));
     }
-    let meta = std::fs::metadata(path).map_err(|_| tr!("That file can't be opened.", "Ce fichier ne peut pas être ouvert."))?;
+    let meta = std::fs::metadata(path).map_err(|_| tr!("That file can’t be opened.", "Ce fichier ne peut pas être ouvert."))?;
     if !meta.is_file() || meta.len() > ZTHEME_MAX {
         return Err(tr!("That file is too big to be a Dobo look.", "Ce fichier est trop gros pour être un style Dobo."));
     }
-    let text = std::fs::read_to_string(path).map_err(|_| bad(&tr!("it can't be read", "il ne peut pas être lu")))?;
+    let text = std::fs::read_to_string(path).map_err(|_| bad(&tr!("it can’t be read", "il ne peut pas être lu")))?;
     let z = validate(&text)?;
     serde_json::to_string(&z).map_err(|e| e.to_string())
 }
@@ -425,9 +425,9 @@ pub async fn pick_background_picture(app: AppHandle) -> Result<Option<String>, S
     let src = p.into_path().map_err(|e| e.to_string())?;
     let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
     if !PICTURE_EXT.contains(&ext.as_str()) {
-        return Err(tr!("That file isn't a picture Dobo can show.", "Ce fichier n’est pas une image que Dobo peut afficher."));
+        return Err(tr!("That file isn’t a picture Dobo can show.", "Ce fichier n’est pas une image que Dobo peut afficher."));
     }
-    let len = std::fs::metadata(&src).map(|m| m.len()).map_err(|_| tr!("That picture can't be opened.", "Cette image ne peut pas être ouverte."))?;
+    let len = std::fs::metadata(&src).map(|m| m.len()).map_err(|_| tr!("That picture can’t be opened.", "Cette image ne peut pas être ouverte."))?;
     if len > PICTURE_MAX {
         return Err(tr!("That picture is too big for the board (40 MB at most).", "Cette image est trop lourde pour le tableau (40 Mo au plus)."));
     }
@@ -435,29 +435,35 @@ pub async fn pick_background_picture(app: AppHandle) -> Result<Option<String>, S
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let dest = dir.join(format!("{}.{}", db::now_ms(), if ext == "jpeg" { "jpg" } else { &ext }));
     std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
-    clean_pictures(&app, Some(&dest));
     Ok(Some(dest.to_string_lossy().into_owned()))
 }
 
-/// Background pictures no setting mentions any more (kept: the one just added).
-fn clean_pictures(app: &AppHandle, keep: Option<&std::path::Path>) {
-    let Ok(dir) = crate::paths::sub("backgrounds") else { return };
-    let used: String = {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
-        ["look_board", "look_styles", "look_themes"].iter().filter_map(|k| db::get_setting(&conn, k)).map(|v| v.to_string()).collect()
-    };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
-    for e in entries.flatten() {
-        let p = e.path();
-        if Some(p.as_path()) == keep || !p.is_file() {
-            continue;
-        }
-        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        if !used.contains(&name) {
-            let _ = std::fs::remove_file(&p);
+/// The background pictures the looks use (the board's, saved styles' and themes'): each file's
+/// name, for the clean-up at start (lib.rs), which keeps the others a day. (Never cleaned when a
+/// picture is picked: Undo may still bring back the look that used the one before.) A setting
+/// that can't be read is an error, never "no picture used".
+pub fn background_pictures(conn: &Connection) -> Result<Vec<String>, String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, x) in m {
+                    match x.as_str() {
+                        Some(s) if k == "picture" && !s.is_empty() => out.push(s.to_string()),
+                        _ => walk(x, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            _ => {}
         }
     }
+    let mut out = vec![];
+    for key in ["look_board", "look_styles", "look_themes"] {
+        if let Some(v) = db::get_setting_strict(conn, key)? {
+            walk(&v, &mut out);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -522,6 +528,17 @@ mod tests {
         assert_eq!(db::get_setting(&c, "look_styles"), Some(style));
         drop(c);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_background_picture_a_look_uses_is_found() {
+        let c = conn();
+        db::set_setting(&c, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": "C:/d/backgrounds/1.jpg" }, "dark": { "bg": "cork" } })).unwrap();
+        db::set_setting(&c, "look_styles", &serde_json::json!([{ "id": "s1", "look": { "bg": "picture", "picture": "C:/d/backgrounds/2.png" } }, { "id": "s2", "look": { "picture": "" } }])).unwrap();
+        db::set_setting(&c, "look_themes", &serde_json::json!([{ "id": "t1", "light": { "bg": "cork" }, "dark": { "bg": "picture", "picture": "C:/d/backgrounds/3.webp" } }])).unwrap();
+        let mut found = background_pictures(&c).unwrap();
+        found.sort();
+        assert_eq!(found, vec!["C:/d/backgrounds/1.jpg", "C:/d/backgrounds/2.png", "C:/d/backgrounds/3.webp"]);
     }
 
     #[test]

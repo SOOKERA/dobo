@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dump",
+  "description": "The quick dump bar: only what it uses (a line into the Inbox, its picture and link preview, its language and dark mode, hiding itself)",
+  "windows": [
+    "dump"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-language-now",
+    "allow-dark-mode-now",
+    "allow-dump-item",
+    "allow-save-picture",
+    "allow-fetch-preview",
+    "allow-set-item-link",
+    "allow-hide-dump"
+  ]
+}

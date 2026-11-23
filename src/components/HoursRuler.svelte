@@ -8,10 +8,10 @@
   import { untrack } from "svelte";
   import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
-  import { itemDrag } from "../lib/itemdrag.svelte";
+  import { HOURS_LIFT, itemDrag } from "../lib/itemdrag.svelte";
   import { formatDueLong, hhmm } from "../lib/time";
   import { hourLabelStep, rulerRange, spanName, timeAt, type Span } from "../lib/plan";
-  import { t } from "../lib/i18n.svelte";
+  import { hourMark, i18n, t } from "../lib/i18n.svelte";
   import { pushLayer } from "../lib/layers";
   import { arrive, blip, crumbIn, crumbOut, easeHeight, fadeQuick, glide, leave, reduced } from "../lib/motion";
 
@@ -47,8 +47,47 @@
   let tomorrowEl = $state<HTMLDivElement>();
   let hover = $state<number | null>(null);
   let demoAt = $derived(store.ruler?.mode === "demo" && store.ruler.at != null && span ? timeAt(span, store.ruler.at) : null);
-  let marked = $derived(hover ?? demoAt);
+  // Where the keyboard has the marker (sliderKey, below).
+  let keyAt = $state<number | null>(null);
+  /** Where the marker starts: the task's time when it is in these hours, else the next quarter
+   * hour from now, else the first hour. */
+  let startAt = $derived.by(() => {
+    if (!span) return null;
+    const due = subject?.due_at;
+    if (due != null && due >= span.start && due <= span.end) return due;
+    const q = 15 * 60_000;
+    const next = Math.ceil(store.now.getTime() / q) * q;
+    return next >= span.start && next <= span.end ? next : span.start;
+  });
+  // (Always inside the hours shown: a place kept from the other day's hours never is.)
+  let at = $derived.by(() => {
+    const v = hover ?? keyAt ?? startAt;
+    return v == null || !span ? v : Math.min(span.end, Math.max(span.start, v));
+  });
+  // Today's and tomorrow's hours swapped (the pointer rested on Tomorrow): the keyboard's place,
+  // and the pointer's, were in the other day's hours; the marker starts again from this day's.
+  $effect(() => {
+    void onNext;
+    untrack(() => {
+      keyAt = null;
+      hover = null;
+    });
+  });
+  // (The keyboard's place shows too, while the keyboard is on the hours: keysOn, below.)
+  let keysOn = $state(false);
+  let marked = $derived(hover ?? (keysOn ? at : null) ?? demoAt);
   let overTomorrow = $state(false);
+  /** The marker's time, kept whole inside the track: near an end it slides in from its line. */
+  let markLabelW = $state(0);
+  let markShift = $derived.by(() => {
+    const span = view?.span;
+    if (marked == null || !span || !trackW || !markLabelW) return 0;
+    const x = ((marked - span.start) / (span.end - span.start)) * trackW;
+    const half = markLabelW / 2;
+    // (Centred on the line, 1 px left of its place: from there when kept in.)
+    const c = x - 1;
+    return c < half ? half - c : c > trackW - half ? trackW - half - c : 0;
+  });
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Hour labels: as many as fit without crowding (every 1, 2, 3… hours on the clock), none
@@ -58,7 +97,7 @@
   let hours = $derived.by(() => {
     const span = view?.span;
     if (!span) return [];
-    const step = hourLabelStep((span.end - span.start) / 3_600_000, trackW || 400);
+    const step = hourLabelStep((span.end - span.start) / 3_600_000, trackW || 400, i18n.hour12 ? 44 : 32);
     const out: { x: number; label: string; major: boolean; named: boolean }[] = [];
     const len = span.end - span.start;
     const first = new Date(span.start);
@@ -69,8 +108,10 @@
       const d = new Date(t);
       const x = (t - span.start) / len;
       const major = d.getMinutes() === 0;
-      const named = major && d.getHours() % step === 0 && (!trackW || x * trackW <= trackW - END_ROOM);
-      out.push({ x, label: `${d.getHours()}h`, major, named });
+      // (Never cut at either end of the track: a 12-hour "4 PM" is wider than "16h".)
+      const room = i18n.hour12 ? 18 : END_ROOM;
+      const named = major && d.getHours() % step === 0 && (!trackW || (x * trackW >= room && x * trackW <= trackW - Math.max(END_ROOM, room)));
+      out.push({ x, label: hourMark(d.getHours()), major, named });
     }
     return out;
   });
@@ -87,6 +128,14 @@
     const span = view?.span;
     return span && span.label === "Today" ? Math.max(0, (store.now.getTime() - span.start) / (span.end - span.start)) : null;
   });
+  /** The time being picked has its label over the word for now: the word steps aside meanwhile
+   * (« maintenant » is long enough to show half of itself from under it). */
+  let nowCovered = $derived.by(() => {
+    const span = view?.span;
+    if (marked == null || nowX == null || !span || !trackW) return false;
+    const d = ((marked - span.start) / (span.end - span.start) - nowX) * trackW;
+    return d > -32 && d < (i18n.lang === "fr" ? 62 : 26) + 32;
+  });
 
   function fractionAt(clientX: number): number | null {
     if (!trackEl) return null;
@@ -101,13 +150,42 @@
     return x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
   }
 
+  /** The carried slip rides right of the pointer over the hours, unless its words don't fit
+   * there before Tomorrow (or the window's edge): then on whichever side has more room, the
+   * pointer's left most often (with some room to spare before it goes back, so it doesn't flick
+   * from side to side at the edge). Where the room is less than its words need (a long line in a
+   * narrow panel), it is narrowed to the room (its words cut short), so it never goes past 8 px
+   * from either edge of the window nor over Tomorrow. Its move from side to side glides (App). */
+  function lean(x: number) {
+    const t = tomorrowEl?.getBoundingClientRect();
+    const want = itemDrag.slip?.full ?? itemDrag.slip?.w ?? 160;
+    // (On the right, 2 px more: its tilt.)
+    const edge = Math.min(t ? t.left : Infinity, window.innerWidth) - SLIP_EDGE - 2;
+    const roomRight = edge - (x + 14 + HOURS_LIFT.x);
+    const roomLeft = x - 14 - SLIP_EDGE;
+    const flipped = itemDrag.liftX !== HOURS_LIFT.x;
+    const fitsRight = want <= roomRight - (flipped ? 24 : 0);
+    // (Neither fits: the roomier side, by a margin before it changes sides.)
+    const onLeft = !fitsRight && (want <= roomLeft || roomLeft - roomRight > (flipped ? -24 : 24));
+    const w = Math.max(SLIP_MIN, Math.min(want, onLeft ? roomLeft : roomRight));
+    const cap = w < want ? Math.floor(w) : null;
+    const to = onLeft ? -(w + 28) : HOURS_LIFT.x;
+    if (itemDrag.cap !== cap) itemDrag.cap = cap;
+    if (itemDrag.liftX !== to) itemDrag.liftX = to;
+  }
+
+  /** How near the window's edges the carried slip may go, and how narrow it may get. */
+  const SLIP_EDGE = 8;
+  const SLIP_MIN = 64;
+
   function track(x: number, y: number, exact: boolean) {
     if (!span) return;
+    if (carried) lean(x);
     if (inside(tomorrowEl, x, y, 6)) {
       hover = null;
       // Dropped right on it: the next day's first hour. (While tomorrow shows, it leads back.)
       itemDrag.time = carried && !onNext ? range!.next.start : null;
-      itemDrag.timeAt = carried && !onNext && tomorrowEl ? center(tomorrowEl) : null;
+      setTimeAt(carried && !onNext && tomorrowEl ? center(tomorrowEl) : null);
       if (!overTomorrow) {
         overTomorrow = true;
         holdTimer = setTimeout(() => {
@@ -139,8 +217,15 @@
     if (carried) {
       itemDrag.time = hover;
       const r = trackEl!.getBoundingClientRect();
-      itemDrag.timeAt = { x: r.left + ((hover - span.start) / (span.end - span.start)) * r.width, y: r.top + r.height / 2 };
+      setTimeAt({ x: r.left + ((hover - span.start) / (span.end - span.start)) * r.width, y: r.top + r.height / 2 });
     }
+  }
+  /** (Only a new place is given: the same one as a new object on every move would have what
+   * shows it worked out again for nothing.) */
+  function setTimeAt(p: { x: number; y: number } | null) {
+    const c = itemDrag.timeAt;
+    if (c === p || (c && p && c.x === p.x && c.y === p.y)) return;
+    itemDrag.timeAt = p;
   }
 
   function center(el: HTMLElement) {
@@ -165,12 +250,19 @@
     if (!carried || !wrapEl) return;
     const el = wrapEl;
     let raf = 0;
+    // (The page under the pointer moves only when the ruler's room changes height: only then is
+    // what is under the pointer looked at again, not every frame its card slides or fades.)
+    let seenH = -1;
     const moving = () =>
       el.getAnimations({ subtree: true }).some((a) => a.playState === "running" && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
     const loop = () => {
       raf = 0;
       if (!itemDrag.item) return;
-      itemDrag.recheck();
+      const h = el.getBoundingClientRect().height;
+      if (h !== seenH) {
+        seenH = h;
+        itemDrag.recheck();
+      }
       if (moving()) raf = requestAnimationFrame(loop);
     };
     const kick = () => {
@@ -219,21 +311,68 @@
 
   async function choose(e: MouseEvent) {
     if (!clickMode || !store.ruler) return;
+    if (inside(tomorrowEl, e.clientX, e.clientY, 4)) return tomorrow();
+    if (hover == null) return;
+    await setTo(hover);
+  }
+  async function setTo(at: number) {
+    if (!store.ruler) return;
     const it = store.items.find((x) => x.id === store.ruler!.item.id) ?? store.ruler.item;
-    if (inside(tomorrowEl, e.clientX, e.clientY, 4)) {
-      if (overTomorrow && holdTimer) clearTimeout(holdTimer);
-      overTomorrow = false;
-      if (onNext) onNext = false;
-      else {
-        store.ruler = null;
-        await store.setDue(it, range!.next.start);
-      }
+    store.ruler = null;
+    await store.setDue(it, at);
+  }
+  /** The Tomorrow spot clicked (or pressed): tomorrow's first hour; while tomorrow's hours show,
+   * back to today's. */
+  async function tomorrow() {
+    if (overTomorrow && holdTimer) clearTimeout(holdTimer);
+    overTomorrow = false;
+    if (onNext) onNext = false;
+    else await setTo(range!.next.start);
+  }
+
+  // ---- The keyboard ("Pick on today's hours" chosen from the keyboard) ----
+  // The hours are a slider: it takes the keyboard as the ruler opens, ← / → move the marker by
+  // 15 minutes (Shift: an hour), Home / End go to the first / last hour, Enter sets the time; Tab
+  // goes on to Tomorrow and ×. Closing gives the keyboard back to the task's ⋯.
+  function sliderKey(e: KeyboardEvent) {
+    if (!clickMode || !span || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (at != null) void setTo(at);
       return;
     }
-    if (hover == null) return;
-    store.ruler = null;
-    await store.setDue(it, hover);
+    const step = (e.shiftKey ? 60 : 15) * 60_000;
+    const from = Math.min(span.end, Math.max(span.start, at ?? span.start));
+    let to: number;
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") to = from + step;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowDown") to = from - step;
+    else if (e.key === "PageUp") to = from + 60 * 60_000;
+    else if (e.key === "PageDown") to = from - 60 * 60_000;
+    else if (e.key === "Home") to = span.start;
+    else if (e.key === "End") to = span.end;
+    else return;
+    e.preventDefault();
+    // (On the quarter hour, whatever the pointer left it at.)
+    const q = 15 * 60_000;
+    to = Math.min(span.end, Math.max(span.start, Math.round(to / q) * q));
+    keyAt = to;
+    hover = to;
   }
+  $effect(() => {
+    if (!clickMode || !trackEl) return;
+    const el = trackEl;
+    const id = untrack(() => store.ruler?.item.id);
+    el.focus({ preventScroll: true });
+    return () => {
+      keyAt = null;
+      // (Back to the task's ⋯ when the keyboard was here; nowhere if that is gone.)
+      const a = document.activeElement;
+      if (a && a !== document.body && !el.parentElement?.closest(".ruler")?.contains(a)) return;
+      const back = document.querySelector<HTMLElement>(`[data-item-menu="${id}"]`);
+      if (back && !back.closest("[inert]")) back.focus({ preventScroll: true });
+      else (a as HTMLElement | null)?.blur?.();
+    };
+  });
 </script>
 
 <div class="wrap" use:easeHeight={{ clip: false }} bind:this={wrapEl}>
@@ -262,13 +401,29 @@
           {/if}
         </div>
         <div class="lane">
-          <div class="track" bind:this={trackEl} bind:clientWidth={trackW}>
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (the hours are a slider while they are picked) -->
+          <div
+            class="track"
+            bind:this={trackEl}
+            bind:clientWidth={trackW}
+            role={v.clickMode ? "slider" : undefined}
+            tabindex={v.clickMode ? 0 : undefined}
+            aria-label={v.clickMode ? t("When for “{text}”?", { text: v.text }) : undefined}
+            aria-valuemin={v.clickMode ? 0 : undefined}
+            aria-valuemax={v.clickMode ? Math.round((v.span.end - v.span.start) / 60_000) : undefined}
+            aria-valuenow={v.clickMode && at != null ? Math.round((at - v.span.start) / 60_000) : undefined}
+            aria-valuetext={v.clickMode && at != null ? formatDueLong(at, store.now) : undefined}
+            aria-keyshortcuts={v.clickMode ? "Enter" : undefined}
+            onkeydown={sliderKey}
+            onfocus={(e) => (keysOn = (e.currentTarget as HTMLElement).matches(":focus-visible"))}
+            onblur={() => (keysOn = false)}
+          >
             <div class="axis"></div>
             <!-- Tomorrow's hours (and back): the old hours slide away as the new ones come in. -->
             {#key v.onNext}
               <div class="hours" in:arrive={{ delay: 110, duration: 260, y: 0 }} out:leave={{ duration: 130, y: 0 }}>
                 {#if nowX != null}
-                  <span class="now" style:left="{nowX * 100}%"><span class="now-label">{t("now")}</span></span>
+                  <span class="now" style:left="{nowX * 100}%"><span class="now-label" class:wordy={i18n.lang === "fr"} class:covered={nowCovered}>{t("now")}</span></span>
                 {/if}
                 {#each hours as h (h.x)}
                   <span class="tick" class:major={h.major} style:left="{h.x * 100}%"></span>
@@ -280,10 +435,25 @@
               </div>
             {/key}
             {#if marked != null && v.span}
-              <span class="marker" style:left="{((marked - v.span.start) / (v.span.end - v.span.start)) * 100}%" transition:fadeQuick={{ duration: 120 }}><span class="marker-label">{hhmm(new Date(marked))}</span></span>
+              <span class="marker" style:left="{((marked - v.span.start) / (v.span.end - v.span.start)) * 100}%" transition:fadeQuick={{ duration: 120 }}><span class="marker-label" bind:offsetWidth={markLabelW} style:margin-left="{markShift}px">{hhmm(new Date(marked))}</span></span>
             {/if}
           </div>
-          <div class="tomorrow" class:over={overTomorrow} class:back={v.onNext} bind:this={tomorrowEl} data-tip-drag data-tip={v.onNext ? t("Back to today") : t("Drop: {when} · hold to see its hours", { when: formatDueLong(v.range.next.start, store.now) })}>
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex (a button while the hours are picked) -->
+          <div
+            class="tomorrow"
+            class:over={overTomorrow}
+            class:back={v.onNext}
+            bind:this={tomorrowEl}
+            role={v.clickMode ? "button" : undefined}
+            tabindex={v.clickMode ? 0 : undefined}
+            aria-label={v.clickMode ? (v.onNext ? t("Back to today") : formatDueLong(v.range.next.start, store.now)) : undefined}
+            onkeydown={(e) => {
+              if (!v.clickMode || (e.key !== "Enter" && e.key !== " ")) return;
+              e.preventDefault();
+              void tomorrow();
+            }}
+            data-tip-drag
+            data-tip={v.onNext ? t("Back to today") : t("Drop: {when} · hold to see its hours", { when: formatDueLong(v.range.next.start, store.now) })}>
             {#if overTomorrow}<span class="fill" aria-hidden="true" out:fadeQuick={{ duration: 160 }}></span>{/if}
             {#key v.onNext}
               <span class="name" in:crumbIn out:crumbOut>{v.onNext ? t("Today") : spanName(v.range.next.label)}</span>
@@ -329,9 +499,9 @@
     margin: var(--s3) var(--s6) 0;
     padding: var(--s3) var(--s4) 14px;
     background: var(--card);
-    border: 1.5px solid var(--focus-ring);
+    border: 1.5px solid var(--accent);
     border-radius: 14px;
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus-ring) 16%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
     transform-origin: 50% 0;
     user-select: none;
   }
@@ -400,6 +570,10 @@
     flex: 1;
     min-width: 0;
   }
+  /* (The hours as a slider, the keyboard on them: the ring rounds like the cards'.) */
+  .track:focus-visible {
+    border-radius: var(--r-md);
+  }
   .hours {
     position: absolute;
     inset: 0;
@@ -429,6 +603,28 @@
     font-size: var(--t-xs);
     font-weight: 600;
     color: #9a6100;
+    transition: opacity 0.12s ease;
+  }
+  .now-label.covered {
+    opacity: 0;
+  }
+  /* (The same amber as the line, readable on the dark card.) */
+  :global(:root[data-mode="dark"]) .now-label {
+    color: #e9a93a;
+  }
+  /* A narrow ruler (a window under 480 px): a long word for now (« maintenant ») gives way to an amber dot where the word sits, over the line
+     (still read out: the word is there, at no size). */
+  @container shell (max-width: 455px) {
+    .now-label.wordy {
+      top: -24px;
+      left: -2px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #e9a93a;
+      font-size: 0;
+      overflow: hidden;
+    }
   }
   .tick {
     position: absolute;
@@ -464,10 +660,12 @@
     position: absolute;
     top: 4px;
     width: 2px;
-    height: 34px;
+    /* (Down to the ticks' foot, 28 px: never through the hour names under them, 32 px down.) */
+    height: 24px;
     margin-left: -1px;
     border-radius: 1px;
-    background: var(--focus-ring);
+    /* (In the ink of its time chip above it: one marker.) */
+    background: var(--ink);
     pointer-events: none;
   }
   .marker-label {
@@ -477,8 +675,8 @@
     transform: translateX(-50%);
     padding: 2px 7px;
     border-radius: 6px;
-    background: var(--focus-ring);
-    color: #fff;
+    background: var(--ink);
+    color: var(--card);
     font-size: var(--t-sm);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -498,8 +696,8 @@
     transition: border-color 0.15s, background-color 0.15s;
   }
   .tomorrow.over {
-    border-color: var(--focus-ring);
-    background: color-mix(in srgb, var(--focus-ring) 8%, transparent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .tomorrow .name {
     position: relative;
@@ -508,7 +706,7 @@
   .fill {
     position: absolute;
     inset: 0;
-    background: color-mix(in srgb, var(--focus-ring) 18%, transparent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
     transform-origin: 0 50%;
     animation: hold 0.5s linear;
   }

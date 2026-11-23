@@ -4,10 +4,12 @@
   // A task's repeat (Repeat board): never / every day / weekday / week (on days) / month (on a
   // date), every N, and when it ends. Saves as you choose.
   import { store } from "../lib/store.svelte";
+  import { roving } from "../lib/gridkeys";
   import { firstOccurrence, repeatLabel } from "../lib/repeat";
   import { dayName, t } from "../lib/i18n.svelte";
   import type { Item, Repeat } from "../lib/types";
   import { fold, widen } from "../lib/motion";
+  import DateField from "./DateField.svelte";
 
   let { item }: { item: Item } = $props();
 
@@ -25,14 +27,23 @@
       monthday: f === "month" ? (rule?.monthday ?? due?.getDate() ?? 1) : null,
       ends: rule?.ends ?? { kind: "never" },
       done: rule?.done ?? 0,
+      ...(rule?.at ? { at: rule.at } : {}),
     };
   }
 
+  /** The time a repeat gave the task here, when it had none: it goes again with the repeat
+   * (back to Never), unless the time was changed meanwhile. */
+  let added: number | null = null;
+
   async function save(r: Repeat | null) {
-    if (!r) return store.setRepeat(item, null);
+    if (!r) {
+      const mine = added != null && item.due_at === added;
+      added = null;
+      return mine ? store.setRepeat(item, null, null) : store.setRepeat(item, null);
+    }
     // No time yet: the first occurrence, at 09:00 (or the time it already has).
     let due: number | undefined;
-    if (item.due_at == null) due = firstOccurrence(r, 9, 0, store.now).getTime();
+    if (item.due_at == null) due = added = firstOccurrence(r, 9, 0, store.now).getTime();
     await store.setRepeat(item, r, due);
   }
 
@@ -64,14 +75,10 @@
     }
   }
   const unit = (f: Freq, n: number) => t(f === "day" ? "day(s)" : f === "week" ? "week(s)" : "month(s)", { n });
-  function dateValue(ms: number) {
-    const d = new Date(ms);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
 </script>
 
 <div class="rep">
-  <div class="seg" role="radiogroup" aria-label={t("Repeat")}>
+  <div class="seg" role="radiogroup" use:roving aria-label={t("Repeat")}>
     {#each [["never", "Never"], ["day", "Day"], ["weekday", "Weekday"], ["week", "Week"], ["month", "Month"]] as const as [key, label] (key)}
       <button role="radio" aria-checked={freq === key} class:on={freq === key} onclick={() => pickFreq(key as Freq)} data-label={t(label)}>{t(label)}</button>
     {/each}
@@ -100,7 +107,7 @@
     {/if}
     <div class="line ends">
       <span>{t("Ends")}</span>
-      <div class="seg small" role="radiogroup" aria-label={t("Ends")}>
+      <div class="seg small" role="radiogroup" use:roving aria-label={t("Ends")}>
         <button role="radio" aria-checked={rule.ends.kind === "never"} class:on={rule.ends.kind === "never"} onclick={() => setEnds("never")} data-label={t("Never")}>{t("Never")}</button>
         <button role="radio" aria-checked={rule.ends.kind === "after"} class:on={rule.ends.kind === "after"} onclick={() => setEnds("after")} data-label={t("After")}>{t("After")}</button>
         <button role="radio" aria-checked={rule.ends.kind === "on"} class:on={rule.ends.kind === "on"} onclick={() => setEnds("on")} data-label={t("On a date")}>{t("On a date")}</button>
@@ -110,17 +117,9 @@
         <span transition:widen={{ gap: 6 }}>{t("times")}</span>
       {/if}
       {#if rule.ends.kind === "on"}
-        <input
-          class="date"
-          transition:widen={{ gap: 6 }}
-          type="date"
-          value={dateValue(rule.ends.date)}
-          aria-label={t("Last day")}
-          onchange={(e) => {
-            const v = e.currentTarget.value;
-            if (rule && v) save({ ...rule, ends: { kind: "on", date: new Date(`${v}T12:00`).getTime() } });
-          }}
-        />
+        <span class="date" transition:widen={{ gap: 6 }}>
+          <DateField value={rule.ends.date} label={t("Last day")} onChange={(date) => rule && save({ ...rule, ends: { kind: "on", date } })} />
+        </span>
       {/if}
     </div>
     <p class="sum">{t("{label} · ticking it makes the next one", { label: repeatLabel(rule) })}</p>
@@ -217,8 +216,8 @@
     font-size: var(--t-md);
     color: var(--ink);
   }
-  .line input.date {
-    width: 136px;
+  .date {
+    display: inline-flex;
   }
   .sum {
     margin: 0;

@@ -40,6 +40,37 @@ export function isWorkDay(w: WorkHoursLike, d: Date | number): boolean {
   return w.on && w.days.includes(new Date(d).getDay());
 }
 
+/** Work hours that cross midnight (22:00 to 06:00) end the next day. */
+export function crossesMidnight(w: { from: string; until: string }): boolean {
+  return w.until < w.from;
+}
+
+/** The work hours that start on the day of `d`: from its start to its end (the next morning's,
+ * for hours that cross midnight). */
+export function workSpan(w: WorkHoursLike, d: Date | number): { start: number; end: number } {
+  return { start: at(d, w.from), end: at(crossesMidnight(w) ? addDays(d, 1) : d, w.until) };
+}
+
+/** The work hours `now` is in, or else today's (on a work day), or null. Hours that cross
+ * midnight belong to the day they start: Saturday 02:00 is still Friday's night. */
+export function currentShift(w: WorkHoursLike, now: Date | number): { start: number; end: number } | null {
+  const t = new Date(now).getTime();
+  const yesterday = addDays(now, -1);
+  if (crossesMidnight(w) && isWorkDay(w, yesterday)) {
+    const s = workSpan(w, yesterday);
+    if (t < s.end) return s;
+  }
+  return isWorkDay(w, now) ? workSpan(w, now) : null;
+}
+
+/** Now within work hours (their days and hours, whether or not the switch is on). */
+export function inWorkHours(w: WorkHoursLike, now: Date | number): boolean {
+  if (w.from === w.until) return false;
+  const s = currentShift({ ...w, on: true }, now);
+  const t = new Date(now).getTime();
+  return !!s && t >= s.start && t < s.end;
+}
+
 export interface Span {
   start: number;
   end: number;
@@ -63,13 +94,14 @@ export function rulerRange(now: number, space: "work" | "personal", day: DaySett
     if (useWork) {
       for (let k = 1; k <= 7; k++) {
         const d = addDays(from, k);
-        if (isWorkDay(work, d)) return { start: at(d, work.from), end: at(d, work.until), label: k === 1 ? "Tomorrow" : DAY_NAMES[d.getDay()] };
+        if (isWorkDay(work, d)) return { ...workSpan(work, d), label: k === 1 ? "Tomorrow" : DAY_NAMES[d.getDay()] };
       }
     }
     const d = addDays(from, 1);
     return { start: at(d, day.start), end: at(d, day.end), label: "Tomorrow" };
   };
-  const todayEnd = useWork && isWorkDay(work, now) ? at(now, work.until) + 60 * MIN : at(now, day.end);
+  const shift = useWork ? currentShift(work, now) : null;
+  const todayEnd = shift ? shift.end + 60 * MIN : at(now, day.end);
   const start = Math.floor(now / (15 * MIN)) * 15 * MIN;
   if (todayEnd - now < 30 * MIN) {
     const main = nextSpan(now);
@@ -107,29 +139,74 @@ export interface LaterChoice {
   at: number;
 }
 
-/** "Later…": 1 hour, This evening, Tomorrow morning, Next Monday (Pick a time is the page's). */
+/** "Later…": 1 hour, This evening, Tomorrow morning, Next Monday (Pick a time is the page's), in
+ * the order they come. Still up in the night (after midnight, before 05:00), "Tomorrow morning"
+ * is this morning's start, as the person means it, never a whole day later. */
 export function laterChoices(now: number, day: DaySettings): LaterChoice[] {
   const out: LaterChoice[] = [{ label: "1 hour", at: now + 60 * MIN }];
   const evening = at(now, day.end) - 3 * 60 * MIN;
   if (evening - now >= 30 * MIN) out.push({ label: "This evening", at: evening });
-  out.push({ label: "Tomorrow morning", at: at(addDays(now, 1), day.start) });
+  const startToday = at(now, day.start);
+  const night = new Date(now).getHours() < 5 && now < startToday;
+  out.push({ label: "Tomorrow morning", at: night ? startToday : at(addDays(now, 1), day.start) });
   let d = addDays(now, 1);
   while (d.getDay() !== 1) d = addDays(d, 1);
   out.push({ label: "Next Monday", at: at(d, day.start) });
-  return out;
+  return out.sort((a, b) => a.at - b.at);
 }
 
-/** When the day's look back comes: the end of work hours on a work day, else the end of day. */
+/** When the day's look back comes: the end of work hours on a work day (the next morning, for
+ * hours that cross midnight), else the end of day. */
 export function lookbackAt(d: Date | number, day: DaySettings, work: WorkHoursLike): number {
-  return isWorkDay(work, d) ? at(d, work.until) : at(d, day.end);
+  return isWorkDay(work, d) ? workSpan(work, d).end : at(d, day.end);
 }
 
-/** The day whose look back shows now (from its time until the next morning), or null. */
+/** The day whose look back shows now (from its time until the next morning; after work hours
+ * that crossed midnight, until today's comes), or null. */
 export function lookbackDay(now: number, day: DaySettings, work: WorkHoursLike): Date | null {
   if (now >= lookbackAt(now, day, work)) return new Date(now);
   const yesterday = addDays(now, -1);
-  if (now < at(now, day.start) && now >= lookbackAt(yesterday, day, work)) return yesterday;
+  const y = lookbackAt(yesterday, day, work);
+  if (now >= y && (now < at(now, day.start) || y >= at(now, "00:00"))) return yesterday;
   return null;
+}
+
+/** What a day's look back counts (done, due, added): its calendar day, but a work day whose
+ * hours cross midnight runs on to their end the next morning, and the day after such a night
+ * starts where that night ended (nothing counted twice, nothing from the night left out). Its
+ * notification counts on the same span (reminders.rs `lookback_span`): keep them in step. */
+export function lookbackSpan(d: Date | number, work: WorkHoursLike): { start: number; end: number } {
+  const { start, end } = dayBounds(d);
+  if (!crossesMidnight(work)) return { start, end };
+  const before = addDays(start, -1);
+  return {
+    start: isWorkDay(work, before) ? Math.max(start, workSpan(work, before).end) : start,
+    end: isWorkDay(work, d) ? Math.max(end, workSpan(work, d).end) : end,
+  };
+}
+
+/** The day whose look back span holds `now`: today, but in the part of a night's work hours
+ * after midnight it is still the day that night began (its span runs on to the night's end). */
+export function spanDay(now: number, work: WorkHoursLike): Date {
+  return now < lookbackSpan(now, work).start ? addDays(now, -1) : new Date(now);
+}
+
+/** A calendar day, from its midnight to the next one (23 or 25 hours on the nights the clocks
+ * change, never a fixed 24). */
+export function dayBounds(d: Date | number): { start: number; end: number } {
+  const x = new Date(d);
+  return { start: new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(), end: new Date(x.getFullYear(), x.getMonth(), x.getDate() + 1).getTime() };
+}
+
+/** The look back's "Tomorrow" for a task (at its own time of day): the day after the one looked
+ * back on, also when it's opened after midnight (then that's today), and never a time already
+ * past. */
+export function lookbackTomorrow(due: number, lookDay: Date | number, now: number): number {
+  const time = new Date(due);
+  const x = addDays(lookDay, 1);
+  x.setHours(time.getHours(), time.getMinutes(), 0, 0);
+  while (x.getTime() <= now) x.setDate(x.getDate() + 1);
+  return x.getTime();
 }
 
 export function dayKey(d: Date | number): string {

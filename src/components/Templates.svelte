@@ -4,14 +4,18 @@
   // New note, empty or from a template (Review board). Any note can be saved as a template from
   // its menu.
   import { composing } from "../lib/compose";
+  import { roving } from "../lib/gridkeys";
+  import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import { store, type Template } from "../lib/store.svelte";
   import { swatchesFor } from "../lib/palette";
   import { look } from "../lib/look.svelte";
   import { pushLayer } from "../lib/layers";
+  import { modal } from "../lib/modal";
   import { isWindowDrag } from "../lib/windrag";
   import { arrive, easeHeight, fadeQuick, fold, leave, rise, veil } from "../lib/motion";
   import { t } from "../lib/i18n.svelte";
+  import { toastAbove } from "../lib/toastroom.svelte";
 
   let { onClose }: { onClose: () => void } = $props();
   $effect(() => pushLayer(onClose));
@@ -32,6 +36,19 @@
     return (dark ? s?.dark.bg : s?.light.bg) ?? "transparent";
   }
 
+  /** A template deleted: the keyboard goes to the one now at its place (else the one before, else
+   * Blank note), never nowhere. */
+  async function deleteTemplate(e: MouseEvent, id: number) {
+    const list = (e.currentTarget as HTMLElement).closest(".list");
+    const i = store.templates.findIndex((x) => x.id === id);
+    await store.deleteTemplate(id);
+    if (chosen === id) chosen = null;
+    await tick();
+    const opts = [...(list?.querySelectorAll<HTMLElement>(".opt") ?? [])].filter((o) => !o.closest("[inert]"));
+    // (Blank note is the first.)
+    opts[Math.min(i + 1, opts.length - 1)]?.focus({ preventScroll: true });
+  }
+
   async function create() {
     if (busy) return;
     busy = true;
@@ -47,7 +64,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <!-- (Floating, a press on the veil over the top bar moves the window and keeps this open.) -->
 <div class="veil" data-drag-through onclick={(e) => !isWindowDrag(e) && onClose()} transition:veil|global></div>
-<div class="dialog" role="dialog" aria-label={t("New note")} transition:rise|global={{ y: -6 }}>
+<div class="dialog" role="dialog" aria-label={t("New note")} transition:rise|global={{ y: -6 }} use:modal={{ initial: "input" }}>
   <div class="top">
     <h2>{t("New note")}</h2>
     <button class="x" aria-label={t("Close")} data-tip={t("Close")} data-tip-keys="Esc" onclick={onClose}><Icon name="close" size={16} /></button>
@@ -55,19 +72,18 @@
 
   <label class="name">
     <span class="visually-hidden">{t("Title")}</span>
-    <!-- svelte-ignore a11y_autofocus -->
+    <!-- (The keyboard comes here when it opens: use:modal.) -->
     <input
       bind:value={title}
       placeholder={tpl ? tpl.name : t("Title of the note")}
       autocomplete="off"
-      autofocus
       onkeydown={(e) => {
         if (e.key === "Enter" && !composing(e)) create();
       }}
     />
   </label>
 
-  <div class="list" role="radiogroup" aria-label={t("Start from")}>
+  <div class="list" role="radiogroup" use:roving aria-label={t("Start from")}>
     <button role="radio" aria-checked={chosen == null} class="opt" class:on={chosen == null} onclick={() => (chosen = null)}>
       <span class="dot" style:background={dotOf(null)}></span>
       <span class="what"><b>{t("Blank note")}</b><small>{t("nothing inside")}</small></span>
@@ -82,7 +98,7 @@
             ></span
           >
         </button>
-        <button class="del" aria-label={t("Delete the template {name}", { name: tp.name })} data-tip={t("Delete this template")} onclick={() => (store.deleteTemplate(tp.id), chosen === tp.id && (chosen = null))}
+        <button class="del" aria-label={t("Delete the template {name}", { name: tp.name })} data-tip={t("Delete this template")} onclick={(e) => deleteTemplate(e, tp.id)}
           ><Icon name="trash" size={14} /></button
         >
       </div>
@@ -117,7 +133,7 @@
     </div>
   {/if}
 
-  <div class="foot">
+  <div class="foot" use:toastAbove>
     <button class="create" onclick={create} disabled={busy}>{t("Create note")}</button>
   </div>
 </div>
@@ -268,8 +284,9 @@
     background: var(--card);
     color: var(--late-ink);
   }
+  /* In line with the options' names (12 px in, the dot, its gap). */
   .hint {
-    margin: 4px 12px;
+    margin: 4px 12px 4px 32px;
     font-size: var(--t-sm);
     color: var(--muted);
   }

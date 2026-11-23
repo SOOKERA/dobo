@@ -25,7 +25,9 @@
   // keyboard goes back where it was.
   import Icon from "../../Icon.svelte";
   import { pushLayer } from "../../../lib/layers";
+  import { takeFocus } from "../../../lib/modal";
   import { t } from "../../../lib/i18n.svelte";
+  import { tick } from "svelte";
   type Item = MenuItem;
   let { items, anchor, onClose, label }: { items: Item[]; anchor: DOMRect; onClose: () => void; label?: string } = $props();
   let el: HTMLDivElement;
@@ -35,6 +37,7 @@
   // keys or clicks.
   let done = false;
   let back = false;
+  let was: HTMLElement | null = null;
   function close(keyboardBack: boolean) {
     if (done) return;
     done = true;
@@ -47,7 +50,7 @@
     };
     // Closed by Esc or Back, or by a choice that left the keyboard nowhere (an On / Off item): the
     // keyboard goes back to where it was (the button that opened it).
-    const was = document.activeElement as HTMLElement | null;
+    was = document.activeElement as HTMLElement | null;
     const pop = pushLayer(() => close(true));
     setTimeout(() => window.addEventListener("pointerdown", away, true));
     el.querySelector<HTMLElement>("button")?.focus();
@@ -76,8 +79,23 @@
   let top = $derived(anchor.bottom - frame.top + 6);
   let bottom = $derived(frame.height - (anchor.top - frame.top) + 6);
 
+  async function keep() {
+    if (done || !confirming) return;
+    const asked = confirming.label;
+    confirming = null;
+    await tick();
+    [...el.querySelectorAll<HTMLElement>("[role=menuitem]")].find((b) => b.querySelector(".label")?.textContent === asked)?.focus();
+  }
+
   function keys(e: KeyboardEvent) {
     if (done) return e.preventDefault();
+    // Tab leaves the menu, as from the button that opened it: the menu closes and Tab goes on
+    // to what follows that button.
+    if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (was?.isConnected && was !== document.body) was.focus({ preventScroll: true });
+      close(false);
+      return;
+    }
     const list = [...el.querySelectorAll<HTMLElement>("button")];
     const i = list.indexOf(document.activeElement as HTMLElement);
     if (e.key === "ArrowDown") list[(i + 1) % list.length]?.focus();
@@ -109,7 +127,8 @@
   {#if confirming}
     <p class="ask">{t("{action}? Undo can bring it back.", { action: confirming.label.replace("…", "") })}</p>
     <div class="row">
-      <button class="plain" onclick={() => !done && (confirming = null)}>{t("Keep")}</button>
+      <!-- (The keyboard comes to the safe choice; Keep gives it back to the line that asked.) -->
+      <button class="plain" use:takeFocus onclick={keep}>{t("Keep")}</button>
       <button
         class="del"
         onclick={() => {
@@ -175,6 +194,10 @@
     background: var(--hover);
     outline: none;
   }
+  /* (The keyboard's place: the ring inside the row, as on the board.) */
+  [role="menuitem"]:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--focus-ring);
+  }
   .menu.up {
     transform-origin: 100% 100%;
   }
@@ -196,14 +219,17 @@
   /* The one to start with: a soft tint of the accent, its icon in the accent. */
   .primary {
     font-weight: 600;
-    background: color-mix(in srgb, var(--focus-ring) 10%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
   .primary :global(svg) {
-    color: var(--focus-ring);
+    color: var(--accent);
+  }
+  .primary .hint {
+    color: var(--soft);
   }
   [role="menuitem"].primary:hover,
   [role="menuitem"].primary:focus-visible {
-    background: color-mix(in srgb, var(--focus-ring) 17%, transparent);
+    background: color-mix(in srgb, var(--accent) 17%, transparent);
   }
   .hint {
     font-weight: 400;
@@ -215,7 +241,7 @@
     color: var(--muted);
   }
   .danger {
-    color: #b4322a;
+    color: var(--late-ink);
   }
   hr {
     border: 0;
@@ -248,7 +274,7 @@
     color: var(--ink);
   }
   .del {
-    background: #b4322a;
+    background: var(--danger-fill);
     color: #fff;
   }
   @media (prefers-reduced-motion: reduce) {

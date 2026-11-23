@@ -4,6 +4,7 @@
   // A theme card, split on the diagonal: the Light style above, the Dark style below, a little
   // light and dark note on each. Tap: use it. Tap a half of the one in use: change that half.
   import { composing } from "../../../lib/compose";
+  import { focusSelect } from "../../../lib/modal";
   import Icon from "../../Icon.svelte";
   import LookSwatch from "../LookSwatch.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
@@ -53,13 +54,14 @@
     onHalf(y > 1 - x ? "dark" : "light");
   }
   function done(save: boolean) {
+    if (!renaming) return;
     if (save && draft.trim() && draft.trim() !== name) onRename?.(draft.trim());
     renaming = false;
   }
 </script>
 
 <div class="th" data-sel={selected}>
-  <button class="thumb" aria-pressed={selected} data-tip={selected ? t("{name} · tap a half to change it", { name }) : t("Use {name}", { name })} onclick={tap} onkeydown={(e) => e.key === "F2" && canRename && (e.preventDefault(), rename())} data-ring>
+  <button class="thumb" aria-label={name} aria-pressed={selected} aria-keyshortcuts={canRename ? "F2" : undefined} data-tip={selected ? t("{name} · tap a half to change it", { name }) : t("Use {name}", { name })} onclick={tap} onkeydown={(e) => e.key === "F2" && canRename && (e.preventDefault(), rename())} data-ring>
     <span class="half"><LookSwatch look={light} {w} {h} /></span>
     <span class="half d"><LookSwatch look={dark ?? light} {w} {h} /></span>
     <span class="mini l"></span>
@@ -68,20 +70,22 @@
     <span class="ico moon"><Icon name="moon" size={11} stroke={2} /></span>
   </button>
   {#if renaming}
-    <!-- svelte-ignore a11y_autofocus -->
     <input
       class="rename"
       bind:value={draft}
       maxlength="60"
       aria-label={t("New name")}
-      autofocus
+      use:focusSelect
       onkeydown={(e) => {
         if (composing(e)) return;
+        // (The keyboard goes back to the card.)
+        const card = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>("button.thumb");
         if (e.key === "Enter") done(true);
         if (e.key === "Escape") {
           e.stopPropagation();
           done(false);
         }
+        if (e.key === "Enter" || e.key === "Escape") queueMicrotask(() => card?.focus());
       }}
       onblur={() => done(true)}
     />

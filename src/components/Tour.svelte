@@ -17,7 +17,7 @@
   import { styleButton, tour } from "../lib/tour.svelte";
   import { DIP_OUT, PREFER, STEPS, clip, cornerPlan, cornerWay, fadePlan, fadeWay, laterWords, placeBubble, straightPlan, straightWay, union, type Fade, type Pose, type StepId, type Way } from "../lib/tourPlan";
   import { pushLayer } from "../lib/layers";
-  import { itemDrag } from "../lib/itemdrag.svelte";
+  import { HOURS_LIFT, itemDrag } from "../lib/itemdrag.svelte";
   import { SAMPLE_ITEM, SAMPLE_PARENT } from "../lib/sample";
   import { liveLine } from "../lib/keys";
   import { easeHeight, glide, reduced, rise, stepIn, stepOut, veil, type Box4 } from "../lib/motion";
@@ -27,7 +27,7 @@
     dump: { title: "Dump it, from anywhere", text: "Press {keys} in any app, type, Enter: it’s kept, and you’re back to work." },
     inbox: { title: "It waits in the Inbox", text: "What you dump lands in this strip, like anything you type at the top." },
     tidy: { title: "Sort it into notes", text: "Drag a line onto the note it belongs to, or let Tidy sort them one card at a time." },
-    time: { title: "Give it a time", text: "Write a time as you type; end with ! for a deadline that rings early, then more often." },
+    time: { title: "Give it a time", text: "Write a time as you type; end with\u00a0! for a deadline that rings early, then more often." },
     ruler: { title: "Or drag it onto the hours", text: "Already on the board? Drag a task up onto today’s hours." },
     step: { title: "Or make it a step", text: "Drop it onto a bigger task: it becomes one of its steps." },
     style: { title: "Make it yours", text: "Click Style or press {keys} to change the board’s look: background, colours, notes." },
@@ -45,6 +45,8 @@
   let words = $derived(tour.step === "style" ? { ...WORDS.style, text: STYLE_WORDS[styleButton.shown] } : WORDS[tour.step]);
   let parts = $derived(around(t(words.text, { keys: MARK }), MARK));
   let hasKeys = $derived(words.text.includes("{keys}"));
+  /** The punctuation right after the keys ("." or ", "…): it stays with the keycap, on its line. */
+  let glue = $derived(parts[1].match(/^[\u00a0\u202f]?[.,;:!?…»)]*/)?.[0] ?? "");
 
   // ---- Esc, Back / Forward, arrows ----
   // (Forward on the last step stays there: there is nothing further.)
@@ -274,13 +276,15 @@
         leg = setOff(pose, performance.now(), { corner, up: corner && step === "style" });
       }
       was = step;
+      wake();
     });
   });
 
   const local = (b: Box4, S: DOMRect): Box4 => ({ ...b, x: b.x - S.left, y: b.y - S.top });
-  function frame(now: number) {
+  /** Places the tour for this frame; false when nothing moved. */
+  function frame(now: number): boolean {
     // Leaving: everything stays where it is while it fades (what it pointed at goes away).
-    if (!rootEl || !bubbleEl || !tour.open) return;
+    if (!rootEl || !bubbleEl || !tour.open) return !rootEl || !bubbleEl;
     const S = rootEl.getBoundingClientRect();
     const W = S.width;
     const H = S.height;
@@ -362,7 +366,7 @@
     seenH = bh;
     seenLit = lit;
     seenTo = to;
-    if (!L && before && same(before, next) && W === size[0] && H === size[1]) return;
+    if (!L && before && same(before, next) && W === size[0] && H === size[1]) return false;
     size = [W, H];
     put(cutA, next.a, next.r, 0);
     put(cutB, next.b, next.r, 0);
@@ -390,6 +394,7 @@
     ringsWasEl?.style.setProperty("--two", f ? (f.ring * f.two * fading).toFixed(3) : "0");
     bubbleEl.style.transform = `translate(${next.bx.toFixed(1)}px, ${next.by.toFixed(1)}px)`;
     bubbleEl.style.opacity = next.show >= 0.999 ? "" : next.show.toFixed(3);
+    return true;
   }
   /** The bubble's height once its words have settled (its room eases to it meanwhile). */
   function endHeight() {
@@ -411,17 +416,52 @@
   const same = (u: Pose, v: Pose) =>
     near(u.a, v.a) && near(u.b, v.b) && Math.abs(u.bx - v.bx) < 0.05 && Math.abs(u.by - v.by) < 0.05 && Math.abs(u.ring - v.ring) < 0.001 && Math.abs(u.two - v.two) < 0.001 && Math.abs(u.show - v.show) < 0.001;
 
-  // One look per frame while the tour shows: what it points at may move (the board scrolling or
-  // making room, the header changing rows, the window resized). Only one box is read and only
-  // the two pieces of the tour are written, so it costs next to nothing.
+  // One look per frame while something can move: what the tour points at may move (the board
+  // scrolling or making room, the header changing rows, the window resized). Only one box is read
+  // and only the two pieces of the tour are written. Once nothing has moved for a few frames and
+  // nothing is easing on the page, it rests until something changes: the page (anything added,
+  // changed or restyled, outside the tour's own placing), a scroll, the pointer, the window's
+  // size, a new step.
+  let wake: () => void = () => {};
   $effect(() => {
     let raf = 0;
+    let still = 0;
+    const easing = () =>
+      document.getAnimations().some((a) => {
+        if (a.playState !== "running") return false;
+        const end = a.effect?.getComputedTiming().endTime;
+        return typeof end === "number" && Number.isFinite(end);
+      });
     const loop = (now: number) => {
-      frame(now);
-      raf = requestAnimationFrame(loop);
+      raf = 0;
+      const moved = frame(now);
+      still = moved || leg || easing() ? 0 : still + 1;
+      if (still < 12) raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    wake = () => {
+      still = 0;
+      if (!raf) raf = requestAnimationFrame(loop);
+    };
+    wake();
+    // (The tour's own placing writes attributes inside it: those don't wake it.)
+    const mo = new MutationObserver((list) => {
+      if (list.some((r) => r.type !== "attributes" || !rootEl?.contains(r.target))) wake();
+    });
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    const ro = new ResizeObserver(() => wake());
+    ro.observe(document.documentElement);
+    if (rootEl) ro.observe(rootEl);
+    if (bubbleEl) ro.observe(bubbleEl);
+    const opts = { capture: true, passive: true } as const;
+    const kinds = ["scroll", "pointermove", "pointerdown", "wheel", "keydown", "resize"] as const;
+    for (const k of kinds) window.addEventListener(k, wake, opts);
+    return () => {
+      cancelAnimationFrame(raf);
+      mo.disconnect();
+      ro.disconnect();
+      for (const k of kinds) window.removeEventListener(k, wake, opts);
+      wake = () => {};
+    };
   });
 
   // The sample line stays in view on the board, whatever happens meanwhile (a line dumped from the
@@ -589,8 +629,13 @@
           // The slip's text sits 13 px in from its edge, over the line's own text.
           const x0 = text.left - S.left - 13;
           const y0 = text.top - S.top + text.height / 2 - sh / 2;
-          const x1 = track.left - S.left + track.width * AT - sw / 2;
-          const y1 = track.top - S.top + track.height / 2 - sh / 2;
+          // Held as a hand holds it (App.svelte's slip): just right of the hour, riding a little
+          // higher over the hours (HOURS_LIFT), so the hour labels stay in sight; then it
+          // shrinks into the hour's dot.
+          const px = track.left - S.left + track.width * AT;
+          const py = track.top - S.top + track.height / 2;
+          const x1 = px + 14 + HOURS_LIFT.x;
+          const y1 = py + 10 - HOURS_LIFT.y;
           const go = slip.animate(
             [
               { transform: `translate(${x0}px, ${y0}px) rotate(0deg) scale(0.97)`, opacity: 0 },
@@ -604,7 +649,7 @@
           const land = slip.animate(
             [
               { transform: `translate(${x1}px, ${y1}px) rotate(-1deg) scale(1)`, opacity: 1 },
-              { transform: `translate(${x1}px, ${y1}px) rotate(0deg) scale(0.15)`, opacity: 0 },
+              { transform: `translate(${px - sw / 2}px, ${py - sh / 2}px) rotate(0deg) scale(0.15)`, opacity: 0 },
             ],
             { duration: 300, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
           );
@@ -666,15 +711,16 @@
           const sh = slip.offsetHeight;
           // From over the line's own text (13 px in from the slip's edge) to just after the
           // task's words, as a hand would hold it there, so they stay readable; in a narrow
-          // panel, where it can't sit beside them (with the count), it hangs under the row,
-          // clear of "Drop to make it a step", over where the step will come in.
+          // panel, where it can't sit beside them (with "Drop to make it a step" at the row's
+          // end), it hangs under the row, over where the step will come in.
           const words = document.createRange();
           words.selectNodeContents(ontoEl);
           const end = Math.min(words.getBoundingClientRect().right, onto.right);
           const x0 = text.left - S.left - 13;
           const y0 = text.top - S.top + text.height / 2 - sh / 2;
-          // "Drop to make it a step" shows under the row's right end while it is held there
-          // (ItemRow: 8 px in, 9 px below): the slip keeps clear of it, also in French, longer.
+          // "Drop to make it a step" shows at the row's right end while it is held there
+          // (ItemRow: 6 px in, centred on the row): the slip keeps clear of it, also in French,
+          // longer.
           const tag = dropTag(ontoEl.closest<HTMLElement>(".row"));
           const clear = (x: number) => !tag || x + sw <= tag.left - 6;
           const beside = end + 14 + sw <= onto.right - 36 && clear(end + 14);
@@ -744,7 +790,7 @@
     const b = m.getBoundingClientRect();
     m.remove();
     const R = row.getBoundingClientRect();
-    return { left: R.right - 8 * store.zoom - b.width, bottom: R.bottom + 9 * store.zoom };
+    return { left: R.right - 6 * store.zoom - b.width, bottom: R.top + R.height / 2 + b.height / 2 };
   }
 
   // ---- The pointer ----
@@ -823,7 +869,7 @@
             <p class="text" id="tour-text">
               <!-- (Style's words follow the header as it narrows: the old ones fade, the new come.) -->
               {#key tour.step === "style" ? styleButton.shown : ""}
-                <span class="say" in:sayIn out:sayOut>{parts[0]}{#if hasKeys}<kbd>{keysText(STEP_KEYS[tour.step]?.() ?? "")}</kbd>{parts[1]}{/if}</span>
+                <span class="say" in:sayIn out:sayOut>{parts[0]}{#if hasKeys}<span class="glue"><kbd>{keysText(STEP_KEYS[tour.step]?.() ?? "")}</kbd>{glue}</span>{parts[1].slice(glue.length)}{/if}</span>
               {/key}
             </p>
             {#if tour.step === "dump"}
@@ -903,12 +949,12 @@
     fill: none;
   }
   .ring {
-    stroke: var(--focus-ring);
+    stroke: var(--accent);
     stroke-width: 1.5;
     opacity: calc(var(--ring) * 0.75);
   }
   .glow {
-    stroke: var(--focus-ring);
+    stroke: var(--accent);
     stroke-width: 4.5;
     opacity: calc(var(--ring) * 0.14);
   }
@@ -987,6 +1033,13 @@
     line-height: 19px;
     color: var(--soft);
     white-space: nowrap;
+  }
+  /* A keycap and the punctuation after it: one piece, the full stop close against the key. */
+  .glue {
+    white-space: nowrap;
+  }
+  .glue kbd {
+    margin-right: 0;
   }
 
   /* The quick dump bar, in small. */

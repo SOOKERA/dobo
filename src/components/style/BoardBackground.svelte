@@ -43,7 +43,11 @@
     const W = w;
     const H = h;
     if (!W || !H) return;
-    const first = size.w === 0;
+    // (The size is read without depending on it: setting it below must not start this again,
+    // or a new timer would be armed every 300 ms for ever, the window resting.)
+    const was = untrack(() => size);
+    if (was.w === W && was.h === H) return;
+    const first = was.w === 0;
     const t = setTimeout(
       () => {
         size = { w: W, h: H };

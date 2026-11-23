@@ -4,6 +4,7 @@
   // A task's menu: its time, Reminder or Deadline (and the deadline's rhythm), add a step,
   // make it an idea, delete.
   import { composing } from "../lib/compose";
+  import { roving } from "../lib/gridkeys";
   import { untrack } from "svelte";
   import Icon from "./Icon.svelte";
   import RhythmFields from "./RhythmFields.svelte";
@@ -14,12 +15,18 @@
   import { presetOf, rhythmPresets } from "../lib/rhythm";
   import { repeatLabel } from "../lib/repeat";
   import { pushLayer } from "../lib/layers";
+  import { closeOnLeave, keepInView, modal } from "../lib/modal";
   import type { Item, PresetName, Rhythm } from "../lib/types";
   import { fadeQuick, fold, pop, widen } from "../lib/motion";
   import { keysText, t } from "../lib/i18n.svelte";
+  import { atPointer, type Point } from "../lib/rightclick.svelte";
+  import { lineText } from "../lib/astext";
 
   const PRESET_NAME = { gentle: "Gentle", normal: "Normal", insistent: "Insistent", custom: "Custom" } as const;
-  let { item, onClose, onAddStep }: { item: Item; onClose: () => void; onAddStep: () => void } = $props();
+  // (`at`: opened by a right-click, at the pointer; else under its ⋯.)
+  let { item, onClose, onAddStep, at = null }: { item: Item; onClose: () => void; onAddStep: () => void; at?: Point | null } = $props();
+  /** How it comes in: from above, or from below when it opens above the pointer. */
+  const motion = { y: -4 };
 
   let menuEl: HTMLDivElement;
   let when = $state("");
@@ -74,7 +81,8 @@
   }
 </script>
 
-<div class="menu" transition:pop|global bind:this={menuEl} role="dialog" aria-label={t("Task options")}>
+<!-- (The keyboard comes in, to When, and goes back to the line's button when it closes.) -->
+<div class="menu" use:atPointer={{ at, motion }} transition:pop|global={motion} bind:this={menuEl} role="dialog" aria-label={item.parent_id == null ? t("Task options") : t("Step options")} use:modal={{ initial: "input", trap: false }} use:closeOnLeave={onClose} use:keepInView={[repeatOpen, item.due_at != null, item.alarm, preset]}>
   <div class="head">
     <span class="label">{t("When")}</span>
     <span class="current">{item.due_at != null ? formatDueLong(item.due_at, store.now) : t("No time")}</span>
@@ -85,7 +93,7 @@
       id="when-{item.id}"
       bind:value={when}
       class:bad={whenError}
-      placeholder={t("demain 10h, 3pm, friday…")}
+      placeholder={t("tomorrow 10am, 3pm, Friday…")}
       autocomplete="off"
       onkeydown={(e) => {
         if (e.key === "Enter" && !composing(e)) {
@@ -122,9 +130,9 @@
     <div class="divider"></div>
     <div class="head">
       <span class="label">{t("Reminder")}</span>
-      <span class="keys">{t("end a line with ! for a deadline")}</span>
+      <span class="keys">{t("end a line with\u00a0! for a deadline")}</span>
     </div>
-    <div class="kinds" role="radiogroup" aria-label={t("Kind of reminder")}>
+    <div class="kinds" role="radiogroup" use:roving aria-label={t("Kind of reminder")}>
       <button role="radio" aria-checked={item.alarm !== "deadline"} class:on={item.alarm !== "deadline"} onclick={() => store.setAlarm(item, "reminder")}>
         <Icon name="bell" size={15} />
         <span><b>{t("Reminder")}</b><small>{t("Rings at the time")}</small></span>
@@ -141,9 +149,9 @@
     </div>
     {#if item.alarm === "deadline"}
       <div transition:fold>
-      <div class="tabs" role="tablist" aria-label={t("Rhythm")}>
+      <div class="tabs" role="radiogroup" aria-label={t("Rhythm")} use:roving>
         {#each ["gentle", "normal", "insistent", "custom"] as const as p (p)}
-          <button role="tab" class:on={preset === p} aria-selected={preset === p} onclick={() => pick(p as PresetName)}>{t(PRESET_NAME[p])}</button>
+          <button role="radio" class:on={preset === p} aria-checked={preset === p} onclick={() => pick(p as PresetName)}>{t(PRESET_NAME[p])}</button>
         {/each}
       </div>
       {#if preset === "custom" && custom}
@@ -151,7 +159,7 @@
       {:else if presets}
         {@const r = presets[preset]}
         <p class="summary" transition:fold>
-          {t("Starts {start} min before, again at {pre} min before, then every {every} min (at most {max}). “Really done?” {checkin} min after “I'm on it”.", { start: r.start, pre: r.pre.join(" · "), every: r.every, max: r.max, checkin: r.checkin })}
+          {t("Starts {start} min before, again at {pre} min before, then every {every} min (at most {max}). “Really done?” {checkin} min after “I’m on it”.", { start: r.start, pre: r.pre.join(" · "), every: r.every, max: r.max, checkin: r.checkin })}
         </p>
       {/if}
       </div>
@@ -169,6 +177,13 @@
       }}><span>{t("Add a step")}</span><span class="keys">{t("or drop a line on it")}</span></button
     >
   {/if}
+  <button
+    class="item"
+    onclick={() => {
+      void store.copy(lineText(item));
+      onClose();
+    }}><span>{t("Copy text")}</span></button
+  >
   <button
     class="item"
     onclick={() => {
@@ -206,7 +221,14 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
+    gap: var(--s3);
     padding: 0 2px var(--s2);
+  }
+  /* (The Reminder's hint, longer in French: it goes to a second line rather than past the edge.) */
+  .head > .keys {
+    white-space: normal;
+    text-wrap: balance;
+    text-align: right;
   }
   .label {
     font-size: var(--t-sm);

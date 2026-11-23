@@ -145,8 +145,9 @@ mod imp {
         /// of the test's own (removed after).
         #[test]
         fn each_theme_change_is_seen() {
-            const PARENT: &str = r"Software\DoboTests";
-            let key: &'static str = Box::leak(format!(r"{PARENT}\tray-{}", crate::db::now_ms()).into_boxed_str());
+            // (Straight under Software: a parent shared with other tests could be removed under
+            // one of them.)
+            let key: &'static str = Box::leak(format!(r"Software\DoboTests-tray-{}-{}", std::process::id(), crate::db::now_ms()).into_boxed_str());
             set(key, 1);
             let (tx, rx) = mpsc::channel();
             watch_key(key, move || {
@@ -158,11 +159,10 @@ mod imp {
                 assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok(), "the change to {v} was seen");
                 while rx.try_recv().is_ok() {}
             }
-            let (k, parent) = (wide(key), wide(PARENT));
+            let k = wide(key);
             unsafe {
                 let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()));
                 let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()));
-                let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(parent.as_ptr()));
             }
         }
     }

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
-import { backendPromise, type Backend } from "./backend";
+import { backendPromise, onSaveFailed, type Backend } from "./backend";
 import { findNoteForTag, parseCapture, titleFromTag, type Parsed } from "./capture";
 import { defaultCustom, rotation, type CustomColour } from "./palette";
-import { History } from "./history";
+import { History, changedKeys, withFields } from "./history";
 import { dropFromSteps, dropNotesFromSteps, putBackInSteps, type SavedSteps, type Step } from "./arrange";
-import { dayKey, defaultDay, lookbackDay, type DaySettings } from "./plan";
+import { dayKey, defaultDay, inWorkHours, lookbackDay, spanDay, type DaySettings } from "./plan";
 import { backWords } from "./undoWords";
 import { SAMPLE_ITEM, inMemory } from "./sample";
 import { i18n, keysText, readChoice, t as tr, tMaybe, type Key, type Words } from "./i18n.svelte";
 import { noteTitle } from "./names";
 import { APP_NAME } from "./app";
 import { arrivedSince, firstInboxes, inboxesLost, isInbox, savedInboxes } from "./inboxes";
+import { thumbs } from "./thumbs.svelte";
+import { copyText } from "./contextmenu";
 import type {
   Alarm,
   Item,
@@ -76,10 +78,52 @@ export const defaultShortcuts: Shortcuts = { toggle: "Ctrl+Shift+Space", dump: "
 
 const RING_ORDER: Record<string, number> = { check: 0, ringing: 1, early: 2 };
 
+/** The list of nothing: one for all (a new empty list each time would look like a change). */
+export const NO_ITEMS: Item[] = [];
+export const NO_PICTURES: Picture[] = [];
+
+/** Each list of `next` that holds the same things, in the same order, as its list in `prev` is
+ * that old list again: what shows a list that didn't change (a note's lines) isn't redone. */
+function keepSame<K, V>(prev: Map<K, V[]> | null, next: Map<K, V[]>): Map<K, V[]> {
+  if (!prev) return next;
+  for (const [k, list] of next) {
+    const was = prev.get(k);
+    if (was && was.length === list.length && was.every((v, i) => v === list[i])) next.set(k, was);
+  }
+  return next;
+}
+
+/** The same plain value (fields in any order). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b || Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** The rows read again: each one that is the same as before is the old object (and when all of
+ * them are, in the same order, the old list). */
+function keepRows<T extends { id: number }>(was: T[], next: T[]): T[] {
+  const old = new Map(was.map((r) => [r.id, r]));
+  let same = was.length === next.length;
+  const out = next.map((r, i) => {
+    const o = old.get(r.id);
+    const keep = o && sameValue(o, r) ? o : r;
+    if (keep !== was[i]) same = false;
+    return keep;
+  });
+  return same ? was : out;
+}
+
 class Store {
-  notes = $state<Note[]>([]);
-  items = $state<Item[]>([]);
-  pictures = $state<Picture[]>([]);
+  // The notes, lines and pictures are plain objects, never changed in place: a change is always
+  // a new object in a new list (replaceItem, upsertItem…). The board reads them as they are,
+  // without a watched copy of every field of every line.
+  notes = $state.raw<Note[]>([]);
+  items = $state.raw<Item[]>([]);
+  pictures = $state.raw<Picture[]>([]);
   settings = $state<Record<string, unknown>>({});
   view = $state<SpaceView>("all");
   win = $state<WindowInfo>({ mode: "docked", chosen: "docked", docked_possible: true, side: "right", float_on_top: false, width: 720 });
@@ -105,6 +149,8 @@ class Store {
   peek = $state(false);
   /** The evening look back, opened from the menu (any time). */
   lookbackOpen = $state(false);
+  /** The day it was opened for (its notification, clicked the next day: that day's), else null. */
+  lookbackFor = $state<number | null>(null);
   templatesOpen = $state(false);
   /** The Archive page, and where it was opened from (Back goes there). */
   archiveOpen = $state<"board" | "settings" | null>(null);
@@ -113,6 +159,18 @@ class Store {
   /** Notes put back from the archive while a view covers the board: their cards settle in once
    * the board shows again (Board.svelte). */
   arriving = $state<number[]>([]);
+  /** The board has measured every note once (Board.svelte): it is laid out as it will show. */
+  boardSettled = false;
+  private settledWaiters: (() => void)[] = [];
+  /** Resolves once the board has measured every note (at once when it has). */
+  whenBoardSettled(): Promise<void> {
+    return this.boardSettled ? Promise.resolve() : new Promise((r) => this.settledWaiters.push(r));
+  }
+  markBoardSettled() {
+    if (this.boardSettled) return;
+    this.boardSettled = true;
+    for (const r of this.settledWaiters.splice(0)) r();
+  }
   /** The board plays a note's way out (archived, deleted) before it goes; set by Board.svelte. */
   noteLeaves: ((ids: number[]) => Promise<void>) | null = null;
   history = new History();
@@ -143,12 +201,21 @@ class Store {
     return Array.isArray(this.settings.templates) ? (this.settings.templates as Template[]) : [];
   }
 
-  /** The day whose look back shows now (or today, when opened from the menu). */
+  /** The day whose look back shows now (or today, when opened from the menu: the evening's
+   * until it is closed, then today's so far; in the night part of work hours that cross
+   * midnight, "today" is the day that night began, so what was ticked since it began is in it). */
   get lookback(): Date | null {
-    if (this.lookbackOpen) return lookbackDay(this.now.getTime(), this.day, this.workHours) ?? this.now;
     const d = lookbackDay(this.now.getTime(), this.day, this.workHours);
-    if (!d || this.settings.lookback_dismissed === dayKey(d)) return null;
-    return d;
+    const closed = !!d && this.settings.lookback_dismissed === dayKey(d);
+    if (this.lookbackOpen) return this.lookbackFor != null ? new Date(this.lookbackFor) : d && !closed ? d : spanDay(this.now.getTime(), this.workHours);
+    return d && !closed ? d : null;
+  }
+
+  /** Copies from a menu (Copy text, Copy as text, Copy, Copy link), and says it did, briefly
+   * ("Copied" never takes the place of a message with a button, an Undo), or that it couldn't. */
+  async copy(what: string) {
+    if (!(await copyText(what))) this.showToast(() => tr("Couldn’t copy"), undefined, 3200);
+    else if (!this.toast?.action && !this.toast?.more) this.showToast(() => tr("Copied (text)"), undefined, 1800);
   }
 
   showToast(text: Words, action?: Toast["action"], ms = 5200, more?: Toast["more"]) {
@@ -157,14 +224,30 @@ class Store {
     this.toastTimer = setTimeout(() => (this.toast = null), ms);
   }
 
-  /** A shortcut set long ago on a key Dobo now uses inside (Ctrl+Shift+S, Ctrl+Shift+P, Ctrl+,)
-   * went back to its default at start (Rust): said once, then forgotten. */
+  /** A shortcut set long ago on a key Dobo now uses inside (Ctrl+Shift+S, Ctrl+Shift+P, Ctrl+,),
+   * one that would fire while typing (Shift+A), or Windows' menu key (Shift+F10), went back to its
+   * default at start (Rust; search to a key no global shortcut uses):
+   * said once, then forgotten. */
   private sayMovedShortcuts() {
-    const moved = this.settings.shortcut_moved as { from: string; to: string }[] | null | undefined;
+    const moved = this.settings.shortcut_moved as { from: string; to: string; why?: string }[] | null | undefined;
     if (!Array.isArray(moved) || !moved.length) return;
     // Both may have moved (Open or hide and Quick dump): each is said.
-    this.showToast(() => moved.map((m) => tr("{old} is used inside {app} now: your shortcut moved to {keys}", { old: keysText(m.from), keys: keysText(m.to), app: APP_NAME })).join(" · "), undefined, 10_000);
+    const say = (m: { from: string; to: string; why?: string }) =>
+      m.why === "menu"
+        ? tr("{old} is Windows’ menu key: your shortcut moved to {keys}", { old: keysText(m.from), keys: keysText(m.to) })
+        : m.why === "typing"
+          ? tr("{old} would fire while you type: your shortcut moved to {keys}", { old: keysText(m.from), keys: keysText(m.to) })
+          : tr("{old} is used inside {app} now: your shortcut moved to {keys}", { old: keysText(m.from), keys: keysText(m.to), app: APP_NAME });
+    this.showToast(() => moved.map(say).join(" · "), undefined, 10_000);
     void this.setSetting("shortcut_moved", null);
+  }
+
+  /** Global shortcuts another app holds (Rust, at start or after a restore): said once, with
+   * where to choose another. */
+  sayTakenShortcuts(list: unknown) {
+    if (!Array.isArray(list) || !list.length) return;
+    const keys = (list as { keys: string }[]).map((x) => keysText(String(x.keys)));
+    this.showToast(() => keys.map((k) => tr("{keys} is taken by another app, so it does nothing now. Choose another in Settings › Keyboard", { keys: k })).join(" · "), undefined, 12_000);
   }
 
   async undo() {
@@ -191,13 +274,23 @@ class Store {
     const saved = await this.api.updateItem(next);
     this.replaceItem(saved);
     if (label && prev) {
-      this.history.record({
-        label,
-        undo: async () => void (await this.putItem(prev, null)),
-        redo: async () => void (await this.putItem(next, null)),
-      });
+      const keys = changedKeys(prev, next);
+      this.history.record({ label, undo: () => this.revertItem(prev, keys), redo: () => this.revertItem(next, keys) });
     }
     return saved;
+  }
+
+  /** An undo or redo of a change to a line: only the fields that change made, onto the line as it
+   * is now (`withFields`). */
+  private async revertItem(want: Item, keys: (keyof Item)[]) {
+    const now = this.items.find((x) => x.id === want.id);
+    await this.putItem(now ? withFields($state.snapshot(now) as Item, want, keys) : want, null);
+  }
+
+  /** The same for a note. */
+  private async revertNote(want: Note, keys: (keyof Note)[]) {
+    const now = this.notes.find((x) => x.id === want.id);
+    await this.putNote(now ? withFields($state.snapshot(now) as Note, want, keys) : want, null);
   }
 
   private async putNote(next: Note, label: Key | null): Promise<Note> {
@@ -211,11 +304,8 @@ class Store {
     this.replaceNote(saved);
     await this.keepInboxes(had);
     if (label && prev) {
-      this.history.record({
-        label,
-        undo: async () => void (await this.putNote(prev, null)),
-        redo: async () => void (await this.putNote(next, null)),
-      });
+      const keys = changedKeys(prev, next);
+      this.history.record({ label, undo: () => this.revertNote(prev, keys), redo: () => this.revertNote(next, keys) });
     }
     return saved;
   }
@@ -267,6 +357,7 @@ class Store {
     this.notes = [...all.notes, ...this.notes.filter((n) => inMemory(n.id))];
     this.items = [...all.items, ...this.items.filter((i) => inMemory(i.id))];
     this.pictures = all.pictures ?? [];
+    thumbs.fill(this.api, this.pictures);
   }
 
   private removeLocal(itemIds: number[]) {
@@ -323,28 +414,29 @@ class Store {
       .sort((a, b) => a.sort - b.sort || a.id - b.id),
   );
 
-  /** Top-level lines of each note (steps are under their task). */
-  itemsByNote = $derived.by(() => {
-    const map = new Map<number, Item[]>();
+  // (The lists as last given: a list whose lines are all the same is given again as it was.)
+  private lastLines: { top: Map<number, Item[]>; steps: Map<number, Item[]> } | null = null;
+  private lastPictures: Map<number, Picture[]> | null = null;
+
+  /** Top-level lines of each note, and the steps of each line: both from one sorted pass. */
+  private lines = $derived.by(() => {
+    const top = new Map<number, Item[]>();
+    const steps = new Map<number, Item[]>();
     for (const it of [...this.items].sort((a, b) => a.sort - b.sort || a.id - b.id)) {
-      if (it.parent_id != null) continue;
-      const list = map.get(it.note_id);
+      const map = it.parent_id == null ? top : steps;
+      const key = it.parent_id ?? it.note_id;
+      const list = map.get(key);
       if (list) list.push(it);
-      else map.set(it.note_id, [it]);
+      else map.set(key, [it]);
     }
-    return map;
+    const last = this.lastLines;
+    return (this.lastLines = { top: keepSame(last?.top ?? null, top), steps: keepSame(last?.steps ?? null, steps) });
   });
 
-  stepsOf = $derived.by(() => {
-    const map = new Map<number, Item[]>();
-    for (const it of [...this.items].sort((a, b) => a.sort - b.sort || a.id - b.id)) {
-      if (it.parent_id == null) continue;
-      const list = map.get(it.parent_id);
-      if (list) list.push(it);
-      else map.set(it.parent_id, [it]);
-    }
-    return map;
-  });
+  /** Top-level lines of each note (steps are under their task). */
+  itemsByNote = $derived(this.lines.top);
+
+  stepsOf = $derived(this.lines.steps);
 
   picturesByNote = $derived.by(() => {
     const map = new Map<number, Picture[]>();
@@ -354,9 +446,10 @@ class Store {
       if (list) list.push(p);
       else map.set(p.note_id, [p]);
     }
-    return map;
+    return (this.lastPictures = keepSame(this.lastPictures, map));
   });
 
+  private lastItemPictures: Map<number, Picture[]> | null = null;
   picturesByItem = $derived.by(() => {
     const map = new Map<number, Picture[]>();
     for (const p of this.pictures) {
@@ -365,7 +458,7 @@ class Store {
       if (list) list.push(p);
       else map.set(p.item_id, [p]);
     }
-    return map;
+    return (this.lastItemPictures = keepSame(this.lastItemPictures, map));
   });
 
   /** Open timed tasks in view, soonest first (overdue first). */
@@ -434,23 +527,37 @@ class Store {
     this.notes.filter((n) => n.archived && !inMemory(n.id)).sort((a, b) => (b.archived_at ?? 0) - (a.archived_at ?? 0) || b.sort - a.sort || b.id - a.id),
   );
 
+  /** Each note's space (a look-up instead of a search through the notes for every line). */
+  private spaceOfNote = $derived(new Map(this.notes.map((n) => [n.id, n.space])));
+
   /** Open lines waiting in the Inbox (of the space showing; both when All). The tour's sample
    * line counts, as if just dumped, also while "Or make it a step" shows it as one; the bigger
    * task it is dropped onto there doesn't (the badge stays still under the tour's veil). */
   inboxWaiting = $derived(
     this.items
       .filter((i) => (i.id === SAMPLE_ITEM || (i.parent_id == null && !inMemory(i.id))) && i.done_at == null && this.inboxIds.has(i.note_id))
-      .filter((i) => {
-        if (this.view === "all") return true;
-        return this.notes.find((n) => n.id === i.note_id)?.space === this.view;
-      })
+      .filter((i) => this.view === "all" || this.spaceOfNote.get(i.note_id) === this.view)
       .sort((a, b) => a.sort - b.sort || a.id - b.id),
   );
+
+  /** When the board last showed what is saved after a change that couldn't be (one at a time). */
+  private resynced = 0;
+
+  /** A change couldn't be saved: said, and the board shows the notes as they really are saved
+   * (never a change on screen that would be gone at the next start). */
+  private saveFailed(e: unknown) {
+    const now = Date.now();
+    if (now - this.resynced < 2000) return;
+    this.resynced = now;
+    this.showToast(() => tr("That change couldn’t be saved: {error}", { error: String(e) }), undefined, 10_000);
+    void this.reload().catch(() => {});
+  }
 
   async init() {
     try {
       // (The language was asked before anything was drawn: main.ts.)
       this.api = await backendPromise;
+      onSaveFailed((e) => this.saveFailed(e));
       await this.reload();
       const v = this.settings.view;
       if (v === "work" || v === "personal" || v === "all") this.view = v;
@@ -463,8 +570,16 @@ class Store {
       this.error = String(e);
     }
     this.api.onEvent("item-updated", (p) => this.upsertItem(p as Item));
+    // A picture pasted in the quick dump bar.
+    this.api.onEvent("picture-added", (p) => {
+      const pic = p as Picture;
+      this.pictures = [...this.pictures.filter((x) => x.id !== pic.id), pic];
+      thumbs.soon(this.api, pic);
+    });
     this.api.onEvent("ring", (p) => this.onRing(p as RingEvent));
     this.api.onEvent("reload", () => void this.reload());
+    // The automatic backup didn't work (once, until one works again): never a silent failure.
+    this.api.onEvent("backup-failed", (e) => this.showToast(() => tr("Today’s backup didn’t work: {error}. Settings › Backups", { error: String(e) }), undefined, 12_000));
     setInterval(() => {
       this.now = new Date();
       this.applyClock(false);
@@ -473,10 +588,12 @@ class Store {
 
   async reload() {
     const all = await this.api.loadAll();
-    this.notes = all.notes;
-    this.items = all.items;
-    this.pictures = all.pictures ?? [];
-    this.settings = all.settings;
+    // (What is read again as it was stays the very same object: only what changed is redrawn.)
+    this.notes = keepRows(this.notes, all.notes);
+    this.items = keepRows(this.items, all.items);
+    this.pictures = keepRows(this.pictures, all.pictures ?? []);
+    thumbs.fill(this.api, this.pictures);
+    if (!sameValue($state.snapshot(this.settings), all.settings)) this.settings = all.settings;
     i18n.choice = readChoice(all.settings.language);
     document.documentElement.lang = i18n.lang;
     // The Inbox was a card on the board until 1.0: its places in the board's saved columns go.
@@ -520,9 +637,8 @@ class Store {
   // ---- Work hours: the clock switches the space showing (never the reminders) ----
 
   clockSpace(d: Date): Space {
-    const w = this.workHours;
-    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    return w.days.includes(d.getDay()) && hm >= w.from && hm < w.until ? "work" : "personal";
+    // (Hours that cross midnight, 22:00 to 06:00, count for the day they start.)
+    return inWorkHours(this.workHours, d) ? "work" : "personal";
   }
 
   /** Switches the space when the clock crosses a work-hours boundary. A switch by hand stays
@@ -577,8 +693,9 @@ class Store {
   }
 
   /** A repeat needs a time: without one, the first occurrence is given one (09:00). */
-  async setRepeat(it: Item, repeat: Repeat | null, due?: number) {
-    await this.putItem({ ...it, repeat, kind: "task", due_at: due ?? it.due_at }, repeat ? "Repeat set" : "Repeat removed");
+  /** `due`: the time it is given with it (null: none any more; left out: the time it has). */
+  async setRepeat(it: Item, repeat: Repeat | null, due?: number | null) {
+    await this.putItem({ ...it, repeat, kind: "task", due_at: due === undefined ? it.due_at : due }, repeat ? "Repeat set" : "Repeat removed");
   }
 
   // ---- Lines ----
@@ -692,9 +809,10 @@ class Store {
             await this.api.deleteItem(spawned.id);
           }
         }
-        await this.putItem(prev, null);
+        // (The rule too: the backend moved it to the next occurrence.)
+        await this.revertItem(prev, ["done_at", "repeat"]);
       },
-      redo: async () => void (await this.putItem({ ...prev, done_at: next.done_at }, null)),
+      redo: () => this.revertItem(next, ["done_at"]),
     });
   }
 
@@ -745,8 +863,8 @@ class Store {
     await Promise.all([this.putItem(a, null), this.putItem(b, null)]);
     this.history.record({
       label: "Line moved",
-      undo: async () => void (await Promise.all([this.putItem(prevA, null), this.putItem(prevB, null)])),
-      redo: async () => void (await Promise.all([this.putItem(a, null), this.putItem(b, null)])),
+      undo: async () => void (await Promise.all([this.revertItem(prevA, ["sort"]), this.revertItem(prevB, ["sort"])])),
+      redo: async () => void (await Promise.all([this.revertItem(a, ["sort"]), this.revertItem(b, ["sort"])])),
     });
   }
 
@@ -777,15 +895,16 @@ class Store {
     const before = this.items.find((x) => x.id === it.id) ?? it;
     await this.putItem(next, null);
     const back = { ...before, sort: it.sort };
+    const keys = changedKeys(back, next);
     this.history.record({
       label: "Moved",
       undo: async () => {
         follow(back.note_id);
-        await this.putItem(back, null);
+        await this.revertItem(back, keys);
       },
       redo: async () => {
         follow(next.note_id);
-        await this.putItem(next, null);
+        await this.revertItem(next, keys);
       },
     });
     // A picture dumped with the line becomes the note's own once it is put away.
@@ -871,10 +990,10 @@ class Store {
     if (this.focus?.note === n.id) this.focus = null;
     const put = async () => {
       await this.leaveBoard([n.id]);
-      await this.putNote(next, null);
+      await this.revertNote(next, ["archived"]);
     };
     await put();
-    this.history.record({ label: "Archived", undo: async () => void (await this.putNote(prev, null)), redo: put });
+    this.history.record({ label: "Archived", undo: () => this.revertNote(prev, ["archived", "archived_at"]), redo: put });
     this.showToast(
       () => tr("Archived “{name}”", { name: noteTitle(n) }),
       { label: () => tr("Undo"), run: () => void this.undo() },
@@ -905,7 +1024,7 @@ class Store {
     let handed: { to: number; items: Item[]; pictures: Picture[]; made: boolean } | null = null;
     const put = async () => {
       if (this.over) this.arriving = [...this.arriving.filter((id) => id !== n.id), n.id];
-      await this.putNote(next, null);
+      await this.revertNote(next, ["archived", "archived_at"]);
       const h = handed;
       handed = null;
       if (!h) return;
@@ -929,7 +1048,7 @@ class Store {
       const wasInbox = this.inboxIds.has(n.id);
       const known = new Set(this.notes.map((x) => x.id));
       await this.leaveBoard([n.id]);
-      await this.putNote(prev, null);
+      await this.revertNote(prev, ["archived", "archived_at"]);
       if (!wasInbox) return;
       // (The space has its Inbox again by now: `keepInboxes`.)
       const to = await this.inboxId(n.space);
@@ -1001,8 +1120,13 @@ class Store {
       }
       await this.restoreAll(snap.notes, snap.items, snap.pictures);
     };
-    await drop();
-    this.history.record({ label, undo: back, redo: drop });
+    try {
+      await drop();
+    } finally {
+      // (Recorded even when a delete failed partway, the disk full say: those already gone
+      // can still be put back. Undo puts back what was read, whatever is still there.)
+      this.history.record({ label, undo: back, redo: drop });
+    }
     return true;
   }
 
@@ -1031,15 +1155,29 @@ class Store {
         steps: (this.stepsOf.get(i.id) ?? []).map((s) => s.text),
       }));
     const t: Template = { id: Date.now(), name: n.title, palette: n.palette, color: n.color, paper: n.paper ?? "plain", lines };
-    await this.setSetting("templates", [...this.templates.filter((x) => x.name !== t.name), t]);
-    this.showToast(() => tr("Saved “{name}” as a template", { name: noteTitle(n) }));
+    // (One of the same name is replaced: Undo brings it back.)
+    const said = () => tr("Saved “{name}” as a template", { name: noteTitle(n) });
+    await this.putTemplates([...this.templates.filter((x) => x.name !== t.name), t], said);
+    this.showToast(said, { label: () => tr("Undo"), run: () => void this.undo() });
   }
 
   async deleteTemplate(id: number) {
-    await this.setSetting(
-      "templates",
+    const gone = this.templates.find((t) => t.id === id);
+    if (!gone) return;
+    const said = () => tr("Template “{name}” deleted", { name: gone.name });
+    await this.putTemplates(
       this.templates.filter((t) => t.id !== id),
+      said,
     );
+    this.showToast(said, { label: () => tr("Undo"), run: () => void this.undo() });
+  }
+
+  /** The templates changed as one step Undo takes back (a template deleted or replaced). */
+  private async putTemplates(next: Template[], label: () => string) {
+    const prev = structuredClone($state.snapshot(this.templates)) as Template[];
+    next = structuredClone($state.snapshot(next)) as Template[];
+    await this.setSetting("templates", next);
+    this.history.record({ label, undo: () => this.setSetting("templates", prev), redo: () => this.setSetting("templates", next) });
   }
 
   /** A new note, empty or from a template. */
@@ -1091,12 +1229,29 @@ class Store {
 
   // ---- The evening look back ----
 
-  /** Closes the look back. The evening's own card is said done for that day; one opened by hand
-   * earlier in the day just closes (the evening's still comes). */
-  async dismissLookback() {
-    const d = lookbackDay(this.now.getTime(), this.day, this.workHours);
+  /** Opens the look back: on `day` (its notification's), else the evening's or today's. */
+  openLookback(day: number | null = null) {
+    this.lookbackFor = day;
+    this.lookbackOpen = true;
+  }
+
+  /** Puts the look back away without saying it was seen (Esc, another view opening). */
+  hideLookback() {
     this.lookbackOpen = false;
-    if (d) await this.setSetting("lookback_dismissed", dayKey(d));
+    this.lookbackFor = null;
+  }
+
+  /** Closes the look back. The day it showed is said done: the evening's own card for that day,
+   * or the day of the notification it was opened from (an older one's never takes away today's
+   * evening card). One opened by hand earlier in the day just closes (the evening's still
+   * comes). */
+  async dismissLookback() {
+    const d = this.lookbackFor != null ? new Date(this.lookbackFor) : lookbackDay(this.now.getTime(), this.day, this.workHours);
+    this.hideLookback();
+    // Never an older day over a later one ("YYYY-MM-DD" sorts as days do): an older look back
+    // closed after tonight's would bring tonight's back.
+    const stored = this.settings.lookback_dismissed;
+    if (d && !(typeof stored === "string" && stored > dayKey(d))) await this.setSetting("lookback_dismissed", dayKey(d));
   }
 
   async newNote(title: string, space: Space = this.space): Promise<Note> {
@@ -1179,6 +1334,7 @@ class Store {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const p = await this.api.savePicture(noteId, itemId, bytes, ext);
     this.pictures = [...this.pictures, p];
+    thumbs.soon(this.api, p);
     return p;
   }
 
@@ -1186,6 +1342,7 @@ class Store {
     if (inMemory(noteId) || inMemory(itemId)) return null;
     const p = await this.api.addPictureFile(noteId, itemId, path);
     this.pictures = [...this.pictures, p];
+    thumbs.soon(this.api, p);
     return p;
   }
 
@@ -1196,6 +1353,11 @@ class Store {
 
   src(path: string): string {
     return this.api.fileSrc(path);
+  }
+
+  /** A picture as a small box shows it (a strip, a row): its thumb, else the picture. */
+  thumbSrc(p: Picture): string {
+    return thumbs.src(p, (path) => this.api.fileSrc(path));
   }
 }
 

@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
+# cargo deny check (scripts/release.ps1 runs all four checks before every release build:
+# advisories, licenses, bans, sources). Needs cargo-deny 0.19 or newer (the `unmaintained` and
+# `unsound` scopes below; the old `version` keys are no longer read).
+# Dobo is GPL-3.0-only: every crate built into it (or into its build) must carry a licence that
+# may be combined into a GPL-3.0 program, none may have a known vulnerability, and all come from
+# crates.io.
+
+[graph]
+# Dobo ships for Windows only: the Linux and macOS crates (gtk, webkit2gtk…) aren't built in.
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+# A known vulnerability always fails (cargo-deny's own rule). Unmaintained or unsound crates are
+# reported by cargo audit as warnings, which the release reads, without stopping it.
+unmaintained = "none"
+unsound = "none"
+yanked = "warn"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# All compatible with the GPL version 3. (A crate offering several licences, "MIT OR
+# Apache-2.0", needs one of them here.) Add a new one only after checking it is GPL-3.0
+# compatible: https://www.gnu.org/licenses/license-list.html
+allow = [
+    "GPL-3.0-only",          # Dobo itself
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",               # cssparser, selectors (Tauri's HTML), option-ext (dirs)
+    "Unicode-3.0",           # the ICU crates (url, idna)
+    "CDLA-Permissive-2.0",   # webpki-roots (the root certificates, data)
+]
+
+[bans]
+# Tauri's tree carries several versions of a few crates (windows-sys, bitflags…): said, never a
+# failure.
+multiple-versions = "warn"
+# A dependency on "any version" can change under a release: refused (Dobo's own path
+# dependencies excepted).
+wildcards = "deny"
+allow-wildcard-paths = true
+# Dobo's connections use rustls only (ureq with "tls"): OpenSSL or the system TLS crate coming in
+# means a dependency changed its features.
+deny = [
+    { crate = "openssl", reason = "Dobo uses rustls only" },
+    { crate = "openssl-sys", reason = "Dobo uses rustls only" },
+    { crate = "native-tls", reason = "Dobo uses rustls only" },
+]
+
+[sources]
+# Crates come from crates.io only: no other registry, no git repository.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

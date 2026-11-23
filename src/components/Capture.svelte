@@ -8,7 +8,7 @@
   import { look } from "../lib/look.svelte";
   import { clockDate, formatDueLong } from "../lib/time";
   import type { Kind, Note } from "../lib/types";
-  import { keysText, t } from "../lib/i18n.svelte";
+  import { i18n, keysText, t } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
   import { arrive, crumbIn, crumbOut, easeHeight, leave, pop, widen } from "../lib/motion";
   import { composing } from "../lib/compose";
@@ -35,7 +35,36 @@
   // or the hint. Each one crossfades into the next.
   let mode = $derived(preview ? "preview" : targetNote ? "target" : "hint");
   let previewHint = $derived(preview?.deadline ? "deadline" : preview?.due ? "due" : "");
+  /** The time's hint, whole when it fits beside the reading, else its short form ("Deadline: end
+   * with !"); when even that doesn't fit, it goes whole onto the line that never shows (`.set`).
+   * Tried whole first each time the room changes (the window, the reading's chips, the language). */
+  function fitHint(node: HTMLElement, _lang: string) {
+    const set = node.closest<HTMLElement>(".set");
+    const check = () => {
+      if (!set || !node.querySelector(".due-full")) return;
+      node.classList.remove("brief");
+      if (node.offsetTop - set.offsetTop >= set.clientHeight - 1) node.classList.add("brief");
+    };
+    const room = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(check);
+    const chips = node.closest(".chips");
+    const pair = set?.querySelector(".pair");
+    if (chips) room?.observe(chips);
+    if (pair) room?.observe(pair);
+    return {
+      update: check,
+      destroy: () => room?.disconnect(),
+    };
+  }
   let clock = $derived(clockDate(store.now));
+  // For screen readers, what the line will do (its time, its note), once typing pauses and only
+  // when that changes: not every key, never the clock.
+  let reading = $derived(preview ? [preview.due ? formatDueLong(preview.due.getTime(), store.now) : "", preview.into].filter(Boolean).join(" · ") : "");
+  let spoken = $state("");
+  $effect(() => {
+    const r = reading;
+    const id = setTimeout(() => (spoken = r), 700);
+    return () => clearTimeout(id);
+  });
 
   // ---- # suggestions ----
   // As soon as a "#" is typed, the notes it may mean show under the field, narrowing as you type
@@ -196,7 +225,8 @@
       <span class="visually-hidden" aria-live="polite">{t("{n} notes match", { n: hits.length })}</span>
     </div>
   {/if}
-  <div class="chips" aria-live="polite" data-tour="capture-hints">
+  <span class="visually-hidden" aria-live="polite">{spoken}</span>
+  <div class="chips" data-tour="capture-hints">
     <span class="what">
       {#key mode}
         <span class="set" in:arrive={{ delay: 70, duration: 200, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
@@ -209,13 +239,18 @@
             </span>
             <span class="hints">
               {#key previewHint}
-                <span class="hint" in:crumbIn out:crumbOut>{previewHint === "deadline" ? t("Deadline: rings early, then more often") : previewHint === "due" ? t("Reminds you at the time · end with ! for a deadline") : ""}</span>
+                <span class="hint" in:crumbIn out:crumbOut use:fitHint={i18n.lang}
+                  >{#if previewHint === "due"}<span class="due-full">{t("Reminds you at the time · end with\u00a0! for a deadline")}</span><span class="due-brief"
+                      >{t("Deadline: end with\u00a0!")}</span
+                    >{:else if previewHint === "deadline"}{t("Deadline: rings early, then more often")}{/if}</span
+                >
               {/key}
             </span>
           {:else if mode === "target" && targetNote}
             <span class="chip into"><span class="label">{t("Into {title}", { title: noteTitle(targetNote) })}</span><button class="unchip" aria-label={t("Back to the Inbox")} onclick={() => (store.target = null)}><Icon name="close" size={12} stroke={2.2} /></button></span>
           {:else}
-            <span class="hint">{t("Add a time like “15h” or “tomorrow 9am”, and #note to pick where it goes")}</span>
+            <!-- The whole hint, or at narrow widths the same three examples alone (never cut, never wrapped). -->
+            <span class="hint"><span class="full">{t("Add a time like “3pm” or “tomorrow 9am”, and #note to pick where it goes")}</span><span class="brief">{t("“3pm”, “tomorrow 9am”, #note")}</span></span>
           {/if}
         </span>
       {/key}
@@ -482,6 +517,14 @@
   .unchip:hover {
     background: var(--hover);
   }
+  /* The time's hint whole, or its short form when that doesn't fit (`fitHint`). */
+  .hint .due-brief,
+  .hint:global(.brief) .due-full {
+    display: none;
+  }
+  .hint:global(.brief) .due-brief {
+    display: inline;
+  }
   .hint {
     min-width: 0;
     color: var(--muted);
@@ -504,8 +547,18 @@
   .clock > .tick {
     grid-area: 1 / 1;
   }
-  .clock .short {
+  .clock .short,
+  .hint .brief {
     display: none;
+  }
+  /* The whole hint needs about 620 px beside the date and a 12-hour time, with room to spare: below that, its three examples alone. */
+  @container shell (max-width: 640px) {
+    .hint .full {
+      display: none;
+    }
+    .hint .brief {
+      display: inline;
+    }
   }
   @container shell (max-width: 520px) {
     .key {

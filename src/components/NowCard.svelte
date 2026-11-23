@@ -6,10 +6,11 @@
   import { composing } from "../lib/compose";
   import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
-  import { formatDueLong, hhmm } from "../lib/time";
+  import { dayWord, formatDueLong, hhmm } from "../lib/time";
   import { laterChoices } from "../lib/plan";
   import { parseCapture } from "../lib/capture";
   import { pushLayer } from "../lib/layers";
+  import { closeOnLeave, modal } from "../lib/modal";
   import type { Item, RingAction } from "../lib/types";
   import { arrive, card, easeHeight, fadeQuick, glideTo, leave, pop, widen } from "../lib/motion";
   import { around, duration, i18n, ordinal, t, type Key } from "../lib/i18n.svelte";
@@ -17,6 +18,23 @@
 
   let index = $state(0);
   let list = $derived(store.ringing);
+  // For screen readers: said once when a reminder starts ringing (not the card's minutes going by).
+  // Emptied first, then the words a frame later: the same reminder ringing again (after
+  // "Later…", a repeat) is said again too.
+  let rang = $state("");
+  let heard = new Set<number>();
+  let sayFrame = 0;
+  $effect(() => {
+    const now = new Set(list.map((i) => i.id));
+    const fresh = list.find((i) => !heard.has(i.id));
+    heard = now;
+    if (!fresh) return;
+    const text = t("Reminder: {text}", { text: fresh.text });
+    rang = "";
+    cancelAnimationFrame(sayFrame);
+    sayFrame = requestAnimationFrame(() => (rang = text));
+  });
+  $effect(() => () => cancelAnimationFrame(sayFrame));
   let it = $derived<Item | undefined>(list[Math.min(index, Math.max(0, list.length - 1))]);
   let note = $derived(it ? store.noteOf(it) : undefined);
 
@@ -87,10 +105,20 @@
         ? upper("Now · {nth} reminder", { mark: "nth", val: ordinal(it.rings), nth: it.rings })
         : upper("Now");
     const time = hhmm(new Date(due));
-    const meta = early ? t("Due at {time} · {where}", { time, where }) : now - due > 60000 ? t("Was due {time} · {where}", { time, where }) : t("Due now · {where}", { where });
+    // (Another day than today says which: a reminder missed overnight rings "Was due yesterday".)
+    const day = dayWord(due, store.now);
+    const meta = early
+      ? day
+        ? t("Due {day} at {time} · {where}", { day, time, where })
+        : t("Due at {time} · {where}", { time, where })
+      : now - due > 60000
+        ? day
+          ? t("Was due {day} at {time} · {where}", { day, time, where })
+          : t("Was due {time} · {where}", { time, where })
+        : t("Due now · {where}", { where });
     const buttons: [string, RingAction, boolean][] = deadline
       ? [
-          [t("I'm on it"), "onit", true],
+          [t("I’m on it"), "onit", true],
           [t("Done"), "done", false],
           [duration(10), "snooze:10", false],
         ]
@@ -108,10 +136,11 @@
   }
 </script>
 
+<span class="visually-hidden" aria-live="polite">{rang}</span>
 {#if it && view}
   <!-- (The card's box also eases when the window's width moves its buttons under the words.) -->
   <div class="now-room" use:easeHeight>
-  <section class="now {view.tone}" aria-live="polite" aria-label={t("Ringing now")} transition:card|global={{ duration: 400 }}>
+  <section class="now {view.tone}" aria-label={t("Ringing now")} transition:card|global={{ duration: 400 }}>
     <!-- Another reminder in its place (the next one, or after an answer): the words crossfade
          and the card eases to its new height. -->
     <div class="bodies" use:easeHeight>
@@ -144,7 +173,16 @@
       <button class="more" transition:fadeQuick={{ duration: 180 }} onclick={() => (index = (index + 1) % list.length)} data-tip={t("Show the next one")}>{t("{n} more", { n: list.length - 1 })}</button>
     {/if}
     {#if laterOpen}
-      <div class="later" role="dialog" aria-label={t("Remind me later")} transition:pop|global>
+      <!-- Opened by its button, the keyboard comes in (to the first choice) and goes back to it;
+           opened from a notification, it stays where it is. -->
+      <div
+        class="later"
+        role="dialog"
+        aria-label={t("Remind me later")}
+        transition:pop|global
+        use:modal={{ initial: document.activeElement?.closest(".now") ? ".choice" : "none", trap: false, restore: () => !!document.activeElement?.closest(".later") }}
+        use:closeOnLeave={() => (store.laterFor = null)}
+      >
         {#each choices as c (c.label)}
           <button class="choice" onclick={() => later(c.at)}><span>{t(c.label)}</span><span class="when">{formatDueLong(c.at, store.now)}</span></button>
         {/each}
@@ -153,7 +191,7 @@
           <input
             id="later-pick"
             bind:value={pick}
-            placeholder={t("Pick a time… (demain 14h, friday 9am)")}
+            placeholder={t("Pick a time… (tomorrow 2pm, Friday 9am)")}
             autocomplete="off"
             onkeydown={(e) => {
               if (e.key === "Enter" && picked && !composing(e)) later(picked.getTime());

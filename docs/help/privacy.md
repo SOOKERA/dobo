@@ -21,9 +21,13 @@ That's all. Nothing else goes online: not your notes, not your searches, not you
 
 ## What Dobo reads on your PC
 
-- **Windows Sticky Notes, on the very first start.** The first time Dobo starts, while it has no notes yet, it copies in your notes from Windows Sticky Notes by itself, without asking. It reads Sticky Notes' own database on this PC, from a copy, and nothing leaves your PC. Your Sticky Notes are never changed. You can bring them in again any time with **Settings › Start › Bring in the notes from Windows Sticky Notes again** (**Import**); notes already on the board aren't added twice.
+- **Windows Sticky Notes, when you ask.** On the first start, Dobo looks at whether Windows Sticky Notes has notes, to offer to bring them in: it reads Sticky Notes' own database on this PC, from a copy, and only counts them. They come in only when you click **Import**, on the welcome or later in **Settings › Start › Bring in the notes from Windows Sticky Notes**; notes already on the board aren't added twice. Nothing leaves your PC, and your Sticky Notes are never changed.
 - **The window in front, when the quick dump bar opens.** Each time you open the bar (**Ctrl+Shift+D**, or **+ Dump** in the tray menu), Dobo reads the title of the window in front. When that window is a web browser, it also reads the page's address from the address bar, through Windows UI Automation (Windows' accessibility feature). This stays on your PC: it's only used to offer the link in the bar. Only a link you keep is fetched, for its title and picture (see above). **Leave it out** drops it.
 - **Files you drop or paste** onto the board.
+
+## Files on another computer
+
+A file card can point to a file on another computer: a shared folder, a NAS, or your Documents or Pictures when they live on a server. Opening such a file sends your Windows sign-in to that computer, as File Explorer does. So the first time, the card asks, once per computer: "Files on nas open from the network. Allow?" (**Allow** / **Not now**). Nothing on that computer is touched before you allow it. Dobo remembers the computers you allowed with your settings; a restored backup never brings its own. Programs and scripts are never started from a card, wherever they are.
 
 ## Notifications
 
@@ -32,4 +36,4 @@ Reminders are shown by Windows' own notifications. They stay on your PC.
 ## Remove everything
 
 - **Installed**: uninstall Dobo from Windows **Settings › Apps** with **Also delete my notes** on. If you chose a backups folder in **Settings › Backups**, uninstalling doesn't remove it: it's yours, delete it yourself if you want it gone.
-- **Portable**: delete Dobo.exe and its `data` folder. If **Settings › About** says its notes are in your user profile, they're in `%APPDATA%\com.sookera.ztodo`. A backups folder you chose stays until you delete it.
+- **Portable**: delete Dobo.exe and its `data` folder. If **Settings › About** says its notes are in your user profile, they're in `%APPDATA%\com.sookera.ztodo` (a portable Dobo using that folder notes its own path there, in `.dobo-portable-copies`, so that uninstalling an installed Dobo keeps those notes). A backups folder you chose stays until you delete it.

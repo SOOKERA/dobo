@@ -36,7 +36,7 @@ To show that card, Dobo fetches the page's title and picture once (see [Privacy]
 **Tidy** (on the strip, or in the header, with how many lines wait) goes through the Inbox one card at a time:
 
 1. **It's**: **A task** or **An idea** (**T** / **I**).
-2. **When?**: an optional time, like "demain 10h" or "friday 3pm". End it with **!** for a deadline.
+2. **When?**: an optional time, like "tomorrow 10am" or "Friday 3pm". End it with **!** for a deadline.
 3. **Into which note?**: when the words match, one is suggested ("Suggested: Shopping, it mentions milk"). **1–9** picks a note, or type a **New note's name**.
 4. **Where in Shopping?**: **A new task in the note**, **A new idea in the note**, or **A step of the task** (**↑** / **↓**).
 5. **Put it in Shopping** (**Enter**). **Keep for later** (**L**) skips the card for now; **D** deletes it.
@@ -45,4 +45,4 @@ To show that card, Dobo fetches the page's title and picture once (see [Privacy]
 
 ### A nudge to tidy
 
-Dobo reminds you to tidy once a day (at 17:30 at first) and when many things wait (10 at first). Change both, or turn them off, in **Settings › Reminders › Tidy the inbox**.
+Dobo reminds you to tidy once a day (at 17:30 at first) and when many things wait (10 at first). Change both, or turn them off, in **Settings › Reminders › Tidy the Inbox**.

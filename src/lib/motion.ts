@@ -243,10 +243,14 @@ export function gridGlide(grid: HTMLElement) {
     for (const el of grid.children as HTMLCollectionOf<HTMLElement>) if (!el.inert) m.set(el, { x: el.offsetLeft, y: el.offsetTop });
     return m;
   };
-  let last = where();
+  // (The places are first read when the browser has laid the grid out anyway, as it is first
+  // seen: reading them as the grid is made would lay the page out once more, for every line of
+  // it, just as the strip unfolds.)
+  let last: Map<Element, At> | null = null;
   const mo = new MutationObserver((list) => {
     // (Only lines coming, going or leaving count, not what changes inside them.)
     if (!list.some((r) => r.target === grid || (r.target as Element).parentElement === grid)) return;
+    last ??= where();
     for (const rec of list) {
       const el = rec.target as HTMLElement;
       if (rec.type !== "attributes" || el.parentElement !== grid) continue;
@@ -364,6 +368,8 @@ export function card(
   opts?: { direction?: "in" | "out" | "both" },
 ) {
   const out = opts?.direction === "out";
+  // (Reduced motion only fades: nothing to measure.)
+  if (reduced()) return { duration: out ? 100 : 140, css: (t: number) => `opacity:${t}` };
   const cs = getComputedStyle(node);
   const h = parseFloat(cs.height);
   const mt = parseFloat(cs.marginTop);
@@ -372,7 +378,6 @@ export function card(
   const pb = parseFloat(cs.paddingBottom);
   const bt = parseFloat(cs.borderTopWidth);
   const bb = parseFloat(cs.borderBottomWidth);
-  if (reduced()) return { duration: out ? 100 : 140, css: (t: number) => `opacity:${t}` };
   return {
     duration: out ? Math.round(duration * 0.8) : duration,
     easing: cubicOut,

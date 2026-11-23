@@ -38,19 +38,72 @@ fn is_public(ip: IpAddr) -> bool {
                 || (o0 == 192 && o1 == 0))
         }
         IpAddr::V6(a) => {
-            if let Some(v4) = a.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
+            let seg = a.segments();
+            let v4 = |hi: u16, lo: u16| IpAddr::V4(std::net::Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo)));
+            // An IPv4 address inside an IPv6 one is judged as that IPv4 address: mapped
+            // (::ffff:a.b.c.d), compatible (::a.b.c.d), NAT64 (64:ff9b::a.b.c.d) and 6to4
+            // (2002:aabb:ccdd::), all of which can reach the IPv4 network behind them.
+            if let Some(m) = a.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(m));
             }
-            let s0 = a.segments()[0];
-            !(a.is_loopback() || a.is_unspecified() || a.is_multicast() || (s0 & 0xfe00) == 0xfc00 || (s0 & 0xffc0) == 0xfe80)
+            if seg[..6].iter().all(|&x| x == 0) {
+                return is_public(v4(seg[6], seg[7]));
+            }
+            if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return is_public(v4(seg[6], seg[7]));
+            }
+            if seg[0] == 0x2002 {
+                return is_public(v4(seg[1], seg[2]));
+            }
+            let s0 = seg[0];
+            !(a.is_loopback()
+                || a.is_unspecified()
+                || a.is_multicast()
+                || (s0 & 0xfe00) == 0xfc00 // unique local
+                || (s0 & 0xffc0) == 0xfe80 // link-local
+                || (s0 & 0xffc0) == 0xfec0 // site-local (old)
+                || (s0 == 0x64 && seg[1] == 0xff9b) // NAT64 for local use (64:ff9b:1::/48)
+                || (s0 == 0x2001 && seg[1] < 0x0200) // IETF special use: Teredo, benchmarking… (2001::/23)
+                || (s0 == 0x2001 && seg[1] == 0x0db8) // documentation
+                || seg[..4] == [0x100, 0, 0, 0]) // discard-only (100::/64)
         }
     }
+}
+
+/// Name lookups still running, given up on or not (Windows' own lookup can't be stopped).
+static LOOKUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// At most this many at once: a DNS that never answers leaves a few threads waiting, never more.
+const MAX_LOOKUPS: usize = 4;
+
+/// A name lookup that takes too long (a slow DNS) gives up, as the connection would: Windows'
+/// own lookup has no time limit of ureq's. An address written as such needs no lookup.
+fn lookup(netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
+    use std::sync::atomic::Ordering;
+    if let Ok(a) = netloc.parse::<SocketAddr>() {
+        return Ok(vec![a]);
+    }
+    let slow = || std::io::Error::new(std::io::ErrorKind::TimedOut, "the name lookup took too long");
+    if LOOKUPS.fetch_add(1, Ordering::AcqRel) >= MAX_LOOKUPS {
+        LOOKUPS.fetch_sub(1, Ordering::AcqRel);
+        return Err(slow());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let name = netloc.to_string();
+    let started = std::thread::Builder::new().name("dobo-lookup".into()).spawn(move || {
+        let _ = tx.send(name.to_socket_addrs().map(|a| a.collect::<Vec<_>>()));
+        LOOKUPS.fetch_sub(1, Ordering::AcqRel);
+    });
+    if started.is_err() {
+        LOOKUPS.fetch_sub(1, Ordering::AcqRel);
+        return Err(slow());
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err(slow()))
 }
 
 /// Every connection (the page, each redirect, its picture) goes through this: only public
 /// addresses are used, checked after the name lookup so a name can't point inside either.
 fn public_only(netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
-    let addrs: Vec<SocketAddr> = netloc.to_socket_addrs()?.filter(|a| is_public(a.ip())).collect();
+    let addrs: Vec<SocketAddr> = lookup(netloc)?.into_iter().filter(|a| is_public(a.ip())).collect();
     if addrs.is_empty() {
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not an internet address"));
     }
@@ -186,7 +239,7 @@ pub fn fetch(url: &str, dir: &Path) -> Result<Preview, String> {
     resp.into_reader().take(800_000).read_to_end(&mut body).map_err(|e| e.to_string())?;
     let mut p = Preview { url: url.clone(), site: host_of(&final_url).trim_start_matches("www.").to_string(), ..Default::default() };
     if !is_html {
-        p.title = final_url.rsplit('/').next().unwrap_or("").to_string();
+        p.title = final_url.rsplit('/').next().unwrap_or("").chars().take(300).collect();
         return Ok(p);
     }
     let html = String::from_utf8_lossy(&body);
@@ -200,31 +253,67 @@ pub fn fetch(url: &str, dir: &Path) -> Result<Preview, String> {
     Ok(p)
 }
 
+/// The biggest preview picture kept.
+const IMAGE_MAX: u64 = 4_000_000;
+
+/// What a picture's first bytes say it is (its file type), or None when it isn't one Dobo shows.
+fn picture_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF8") {
+        Some("gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.starts_with(b"BM") {
+        Some("bmp")
+    } else {
+        None
+    }
+}
+
+/// The page's picture, saved next to the notes: only a real picture (said so by the server, and
+/// by its own first bytes), whole (not cut at the size limit).
 fn save_image(a: &ureq::Agent, src: &str, dir: &Path) -> Result<String, String> {
     let resp = a.get(src).call().map_err(|e| e.to_string())?;
-    let ext = match resp.content_type() {
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => return Err("svg skipped".into()),
-        _ => "jpg",
-    };
+    let kind = resp.content_type().to_ascii_lowercase();
+    if !kind.starts_with("image/") || kind.starts_with("image/svg") {
+        return Err("not a picture".into());
+    }
     let mut bytes = Vec::new();
-    resp.into_reader().take(4_000_000).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    resp.into_reader().take(IMAGE_MAX + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() < 200 {
         return Err("too small".into());
     }
+    if bytes.len() as u64 > IMAGE_MAX {
+        return Err("too big".into());
+    }
+    let ext = picture_kind(&bytes).ok_or("not a picture")?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     src.hash(&mut h);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("preview-{:016x}.{ext}", h.finish()));
-    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    // (Written beside, then renamed over: a file of the same name is replaced, never changed in
+    // place, so a backup made before an update that links to it keeps its own, backup.rs
+    // `link_files`.)
+    let part = dir.join(format!("preview-{:016x}.{ext}.part", h.finish()));
+    std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &path)).map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        e.to_string()
+    })?;
     Ok(path.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_address_needs_no_lookup() {
+        assert_eq!(lookup("93.184.216.34:443").unwrap(), vec!["93.184.216.34:443".parse::<SocketAddr>().unwrap()]);
+        assert_eq!(lookup("[2606:2800:220:1::]:80").unwrap().len(), 1);
+    }
 
     #[test]
     fn reads_open_graph() {
@@ -247,10 +336,32 @@ mod tests {
         ] {
             assert!(public_only(local).is_err(), "{local}");
         }
+        // IPv4 inside IPv6 (NAT64, 6to4, compatible) and IPv6's own special ranges.
+        for inside in [
+            "64:ff9b::a00:8", "64:ff9b::7f00:1", "2002:c0a8:101::", "2002:7f00:1::1", "::7f00:1", "::a00:1", "64:ff9b:1::1", "fec0::1",
+            "2001:db8::1", "100::1", "2001::1", "2001:0:4136:e378::1", "ff02::1",
+        ] {
+            assert!(!is_public(inside.parse().unwrap()), "{inside}");
+        }
+        for public in ["64:ff9b::5db8:d822", "2002:5db8:d822::1", "2606:4700::1111", "2a00:1450:4007::200e"] {
+            assert!(is_public(public.parse().unwrap()), "{public}");
+        }
         assert!(public_only("93.184.216.34:443").is_ok());
         assert!(public_only("[2606:4700::1111]:443").is_ok());
         assert!(fetch("http://127.0.0.1:9/", &std::env::temp_dir()).is_err());
         assert!(fetch("file:///C:/Windows/win.ini", &std::env::temp_dir()).is_err());
+    }
+
+    #[test]
+    fn only_real_pictures_are_kept() {
+        assert_eq!(picture_kind(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(picture_kind(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]), Some("jpg"));
+        assert_eq!(picture_kind(b"GIF89a.."), Some("gif"));
+        assert_eq!(picture_kind(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(picture_kind(b"BM\0\0"), Some("bmp"));
+        assert_eq!(picture_kind(b"<!doctype html><html>"), None);
+        assert_eq!(picture_kind(b"RIFF\0\0\0\0WAVEfmt "), None);
+        assert_eq!(picture_kind(b""), None);
     }
 
     #[test]

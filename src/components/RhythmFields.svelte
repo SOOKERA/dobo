@@ -44,7 +44,7 @@
     ["pre", "Ring again at", "min before"],
     ["every", "After the time, ring every", "min"],
     ["max", "If nobody answers, stop after", "rings"],
-    ["checkin", "After “I'm on it”, ask if it's done", "min later"],
+    ["checkin", "After “I’m on it”, ask if it’s done", "min later"],
     ["notyet", "After “Not yet”, ask again", "min later"],
   ];
 </script>

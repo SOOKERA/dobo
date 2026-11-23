@@ -4,7 +4,7 @@ Rangez une note sans la supprimer. Elle attend dans les Archives, en silence, ju
 
 ## Archiver une note
 
-Ouvrez le menu de la note (sa pastille de couleur ou **⋯**) › **Archiver la note**. La note quitte le tableau avec ses lignes et ses images, et ses rappels restent en sourdine pendant son absence. Un message dit « « Courses » archivée », avec **Annuler** et **Voir les archives**.
+Ouvrez le menu de la note (sa pastille de couleur ou **⋯**) › **Archiver la note**. La note quitte le tableau avec ses lignes et ses images, et ses rappels restent en sourdine pendant son absence. Un message dit « « Courses » archivée », avec **Annuler** et **Voir les archives**.
 
 ## Ouvrir les Archives
 
@@ -14,14 +14,14 @@ Ouvrez le menu de la note (sa pastille de couleur ou **⋯**) › **Archiver la 
 - Le menu **?** au coin du tableau › **Archives**.
 - **Paramètres › Archives › Ouvrir les archives**.
 
-**‹ Retour** revient là d’où vous venez (les Paramètres, par exemple) ; **×** ou **Échap** ramène directement au tableau.
+**‹ Retour** revient là d’où vous venez (les Paramètres, par exemple) ; **×** ou **Échap** ramène directement au tableau.
 
 ## Dans les Archives
 
-Chaque note archivée s’affiche en carte, avec son espace, quelques-unes de ses lignes, ce qu’elle contient (« 3 à faire · 2 idées · 1 image ») et quand elle a été archivée (« Archivée hier », « Archivée le 3 novembre »).
+Chaque note archivée s’affiche en carte, avec son espace, quelques-unes de ses lignes, ce qu’elle contient (« 3 à faire · 2 idées · 1 image ») et quand elle a été archivée (« Archivée hier », « Archivée le 3 novembre »).
 
-- **Restaurer** : de retour sur le tableau, à sa place. Ses rappels sonnent de nouveau.
-- **Supprimer** (la corbeille) : la supprime. **Annuler** peut encore la ramener.
-- **Vider les archives…** : demande d’abord « Supprimer les 5 notes archivées ? » (**Les garder** / **Tout supprimer**). Annuler peut les ramener jusqu’à la fermeture de Dobo.
+- **Restaurer** : de retour sur le tableau, à sa place. Ses rappels sonnent de nouveau.
+- **Supprimer** (la corbeille) : la supprime. **Annuler** peut encore la ramener.
+- **Vider les archives…** : demande d’abord « Supprimer les 5 notes archivées ? » (**Les garder** / **Tout supprimer**). Annuler peut les ramener jusqu’à la fermeture de Dobo.
 
-Vides, elles affichent : « Rien dans les archives ».
+Vides, elles affichent : « Rien dans les archives ».

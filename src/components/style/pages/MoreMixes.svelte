@@ -37,7 +37,7 @@
           {#each shown as m, i (m.name)}
             <button class="mix" data-sel={same(m.colours)} aria-pressed={same(m.colours)} data-tip={tMaybe(m.name)} onclick={() => look.pickMix(m.colours, m.name, "Scattered")} in:deal={{ i }}>
               <span class="art" data-ring><LookSwatch look={{ bg: "watercolour", colour: "", held: "auto", wc: { ...wc, colours: m.colours, pattern: "Scattered", name: m.name } }} w={104} h={56} /></span>
-              <span class="n" class:on={same(m.colours)}>{tMaybe(m.name)}{#if ours(m.name)}<span class="tag">{` · ${t("ours")}`}</span>{/if}</span>
+              <span class="n" class:on={same(m.colours)}><span class="nm">{tMaybe(m.name)}</span>{#if ours(m.name)}<span class="tag">{t("ours")}</span>{:else}<span class="tag none" aria-hidden="true"></span>{/if}</span>
             </button>
           {/each}
         {/key}
@@ -86,7 +86,19 @@
   .mix:hover .art {
     transform: translateY(-1px);
   }
+  /* The name keeps its line; "ours" is a small tag on the line under it, the same on every card
+     (a card without one keeps that line empty), so the cards of a row, and the rows, keep one
+     height in every language and width. */
   .n {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 0;
+  }
+  .nm {
+    min-width: 0;
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -96,9 +108,18 @@
     color: var(--ink);
   }
   .tag {
+    flex: none;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--chip);
     font-size: 10px;
     font-weight: 400;
+    line-height: 15px;
     color: var(--muted);
+  }
+  .tag.none {
+    visibility: hidden;
+    min-height: 15px;
   }
   .mf {
     display: flex;

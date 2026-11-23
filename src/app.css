@@ -82,16 +82,21 @@
   --lift-shadow: 0 18px 36px rgba(60, 50, 30, 0.22), 0 4px 10px rgba(60, 50, 30, 0.1);
   --pop-shadow: 0 12px 32px rgba(30, 24, 16, 0.18), 0 2px 6px rgba(30, 24, 16, 0.08);
   --shell-shadow: 0 8px 24px rgba(20, 16, 10, 0.22), 0 0 0 1px rgba(20, 16, 10, 0.1);
-  --late: #c2410c;
   --late-ink: #b13a0a;
-  --focus: rgba(31, 29, 26, 0.35);
+  /* Behind white words: a destructive button, an overdue time (at least 4.5 : 1 with white). */
+  --danger-fill: #b13a0a;
   --now-bg: #2b211c;
   --now-ink: #fbf3ee;
   --now-muted: #d9c3b8;
   --now-line: #5e4438;
   --now-btn: #fbf3ee;
   --now-btn-ink: #2b211c;
-  --focus-ring: #5d8bc2;
+  /* The keyboard's ring, everywhere: at least 3 : 1 on the ground, the cards, every note colour
+     (the vivid Violet and Blue tints the lowest) and the Now card. */
+  --focus-ring: #4774ae;
+  /* The soft blue of what isn't a keyboard ring: the hours card, Tomorrow held over, a menu's
+     first choice, the tour's rings (the Sky note's dot). */
+  --accent: #5d8bc2;
   --antique: radial-gradient(120% 90% at 30% 15%, #fbf4e2, #f3e7cb 70%, #ead9b3);
   color-scheme: light;
 }
@@ -115,16 +120,17 @@
   --lift-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
   --pop-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shell-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.07);
-  --late: #e2572a;
   --late-ink: #ff8a5b;
-  --focus: rgba(238, 235, 229, 0.4);
+  --danger-fill: #b8461c;
   --now-bg: #2a1c17;
   --now-ink: #f6e9e2;
   --now-muted: #d3b7a9;
   --now-line: #5a3a2e;
   --now-btn: #f6e9e2;
   --now-btn-ink: #2a1c17;
+  /* (At least 3 : 1 on the dark ground, cards and note tints.) */
   --focus-ring: #7ea6d8;
+  --accent: #7ea6d8;
   --antique: radial-gradient(120% 90% at 30% 15%, #2c2820, #24211b 70%, #1e1b16);
   color-scheme: dark;
 }
@@ -169,7 +175,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -189,6 +195,51 @@ button {
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* A menu kept to the board's height (rightclick.svelte.ts `atPointer`): past it, it scrolls
+   inside itself, without going on to scroll the board (and itself with it) at its end. */
+[data-capped] {
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+/* While there is more above or below, that edge fades the words into the menu's paper (never
+   cut hard under its round corner). Drawn over the words in the paper's colour: a mask would fade
+   the paper and its shadow too. Sticky, they stay at the edges as it scrolls, and take no room. */
+[data-capped]::before,
+[data-capped]::after {
+  content: "";
+  position: sticky;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+/* (Each covers its padding, which stays paper as at rest, and the 16 px past it, where the words
+   fade in. Pulled into the padding by its margin, and taking no room: sticky alone stops short
+   of a scroller's padding.) */
+[data-capped]::before {
+  top: calc(-1 * var(--cap-pad-top, 0px));
+  height: calc(var(--cap-pad-top, 0px) + 16px);
+  margin: calc(-1 * var(--cap-pad-top, 0px)) 0 -16px;
+  background: linear-gradient(var(--card) var(--cap-pad-top, 0px), transparent);
+}
+[data-capped]::after {
+  bottom: calc(-1 * var(--cap-pad-bottom, 0px));
+  height: calc(var(--cap-pad-bottom, 0px) + 16px);
+  margin: -16px 0 calc(-1 * var(--cap-pad-bottom, 0px));
+  background: linear-gradient(transparent, var(--card) calc(100% - var(--cap-pad-bottom, 0px)));
+}
+[data-capped][data-more-up]::before,
+[data-capped][data-more-down]::after {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-capped]::before,
+  [data-capped]::after {
+    transition: none;
+  }
 }
 
 .visually-hidden {
@@ -275,6 +326,13 @@ button {
   }
 }
 
+/* A carried note's sway (NoteCard): on the card alone, not inherited by what is in it. */
+@property --lift-tilt {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: -2.5deg;
+}
+
 /* Switching language: only the words fade (out, change, back in); cards and colours stay. */
 @property --lang-a {
   syntax: "<number>";
@@ -294,4 +352,15 @@ button {
 [data-drag-area] {
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* A change of look (lib/look.svelte.ts, crossfade): the old page fades into the new one, and a
+   click meanwhile goes on to the page under it. */
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: ease;
 }

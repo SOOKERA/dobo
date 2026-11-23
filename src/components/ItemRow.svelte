@@ -10,7 +10,8 @@
   import LinkCard from "./LinkCard.svelte";
   import FileCard from "./FileCard.svelte";
   import StepTrace from "./StepTrace.svelte";
-  import { store } from "../lib/store.svelte";
+  import { store, NO_ITEMS, NO_PICTURES } from "../lib/store.svelte";
+  import { thumbs } from "../lib/thumbs.svelte";
   import { itemDrag } from "../lib/itemdrag.svelte";
   import { openViewer } from "../lib/viewer.svelte";
   import { formatDue, formatDueLong } from "../lib/time";
@@ -20,12 +21,17 @@
   import { blip, fadeQuick, fold, widen } from "../lib/motion";
   import type { Item } from "../lib/types";
   import { t } from "../lib/i18n.svelte";
+  import { rightClick, takeMenu, type Point } from "../lib/rightclick.svelte";
+  import { untrack } from "svelte";
 
   let { item, nested = false, tint = false }: { item: Item; nested?: boolean; tint?: boolean } = $props();
 
   let editing = $state(false);
   let draft = $state("");
   let menuOpen = $state(false);
+  /** Where its menu was right-clicked open (null: under its ⋯). */
+  let menuAt = $state.raw<Point | null>(null);
+  let rowEl = $state<HTMLElement>();
   let addingStep = $state(false);
   let stepDraft = $state("");
   let inputEl = $state<HTMLInputElement>();
@@ -52,16 +58,20 @@
   });
   let auto = $derived(store.smartDates === "auto" && !!found?.certain);
 
+  // (The same steps give the same list: a line whose steps didn't change isn't redrawn.)
+  let stepsWere: Item[] | null = null;
+  let stepsList: Item[] = NO_ITEMS;
   let steps = $derived.by(() => {
-    if (nested) return [];
-    const s = store.stepsOf.get(item.id) ?? [];
-    return [...s.filter((x) => x.done_at == null), ...s.filter((x) => x.done_at != null)];
+    const s = nested ? NO_ITEMS : (store.stepsOf.get(item.id) ?? NO_ITEMS);
+    if (s === stepsWere) return stepsList;
+    stepsWere = s;
+    return (stepsList = s.length ? [...s.filter((x) => x.done_at == null), ...s.filter((x) => x.done_at != null)] : NO_ITEMS);
   });
   let stepsDone = $derived(steps.filter((s) => s.done_at != null).length);
   // Every step ticked: the task itself is still yours to tick (nothing ticks it for you).
   let allSteps = $derived(steps.length > 0 && stepsDone === steps.length);
   let stepsLabel = $derived(t("{a} of {n} steps done", { a: stepsDone, n: steps.length }));
-  let pics = $derived(store.picturesByItem.get(item.id) ?? []);
+  let pics = $derived(store.picturesByItem.get(item.id) ?? NO_PICTURES);
   let late = $derived(item.due_at != null && item.done_at == null && item.due_at < store.now.getTime());
   let ringing = $derived(item.done_at == null && (item.ring_state === "ringing" || item.ring_state === "check" || item.ring_state === "early"));
   let dropHere = $derived(itemDrag.target?.kind === "task" && itemDrag.target.id === item.id);
@@ -126,6 +136,19 @@
     if (!keepOpen || !t) addingStep = false;
   }
 
+  // Its menu asked for by a right-click, Shift+F10 or the Menu key (App): it opens, at the
+  // pointer or under its ⋯. (Not the copy of a line on its way out to another note.)
+  $effect(() => {
+    if (rightClick.ask?.kind !== "line" || rightClick.ask.id !== item.id) return;
+    untrack(() => {
+      if (!rowEl || rowEl.closest("[inert]:not([data-cover])")) return;
+      const got = takeMenu("line", item.id);
+      if (!got) return;
+      menuAt = got.at;
+      menuOpen = true;
+    });
+  });
+
   function press(e: PointerEvent) {
     if (editing) return;
     itemDrag.press(e, item);
@@ -144,8 +167,9 @@
     data-drop-kind="task"
     data-drop-label={t("Drop to make it a step")}
     data-line={item.id}
+    bind:this={rowEl}
   >
-    <button class="box" class:small={nested} class:all={allSteps && item.done_at == null} aria-label={item.done_at == null ? t("Mark done") : t("Mark not done")} data-tip={item.done_at == null ? t("Done") : t("Not done")} data-tip-keys="Space" onclick={() => store.toggleDone(item)}>
+    <button class="box" class:small={nested} class:all={allSteps && item.done_at == null} aria-label={item.done_at == null ? t("Mark “{name}” done", { name: item.text }) : t("Mark “{name}” not done", { name: item.text })} data-tip={item.done_at == null ? t("Done") : t("Not done")} data-tip-keys="Space" onclick={() => store.toggleDone(item)}>
       {#if item.done_at != null}<Icon name="check" size={nested ? 9 : 10} stroke={3.4} />{/if}
       <!-- Its steps' progress: a thin ring round the box (gone once the task is ticked). -->
       {#if steps.length && item.done_at == null}<span class="trace" class:lined transition:fadeQuick={{ duration: 200 }}><StepTrace done={stepsDone} total={steps.length} size={lined ? 22 : 24} radius={lined ? 7 : 8} stroke={1.25} /></span>{/if}
@@ -200,24 +224,24 @@
       </span>
     {/if}
     <span class="acts">
-      <button class="act" data-item-menu={item.id} data-tip={t("Time, repeat, reminder, steps…")} aria-label={t("Task menu")} aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}
+      <button class="act" data-item-menu={item.id} aria-haspopup="dialog" data-tip={t("Time, repeat, reminder, steps…")} aria-label={t("Menu for “{name}”", { name: item.text })} aria-expanded={menuOpen} onclick={() => ((menuAt = null), (menuOpen = !menuOpen))}
         ><Icon name="more" size={15} /></button
       >
     </span>
     {#if menuOpen}
-      <ItemMenu {item} onClose={() => (menuOpen = false)} onAddStep={() => (addingStep = true)} />
+      <ItemMenu {item} at={menuAt} onClose={() => (menuOpen = false)} onAddStep={() => (addingStep = true)} />
     {/if}
   </div>
 
   {#if item.link || item.file || pics.length}
-    <div class="attach" transition:fold use:snap={lined}>
+    <div class="attach" data-menu-line={item.id} transition:fold use:snap={lined}>
       {#if item.link}<LinkCard link={item.link} />{/if}
       {#if item.file}<FileCard path={item.file} />{/if}
       {#if pics.length}
         <div class="thumbs">
           {#each pics as p, i (p.id)}
             <button class="thumb" in:blip aria-label={t("Open picture")} ondblclick={() => openViewer(pics, i)} onclick={() => openViewer(pics, i)}>
-              <img src={store.src(p.path)} alt="" loading="lazy" draggable="false" />
+              <img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
             </button>
           {/each}
         </div>
@@ -371,12 +395,15 @@
     background: var(--hover);
     box-shadow: inset 0 0 0 1.5px var(--ink);
   }
-  /* "Drop to make it a step": fades up under the row while a line is held over it. */
+  /* "Drop to make it a step": fades up at the row's right end while a line is held over it, set
+     on the row's top edge like a legend: over neither its own words and time nor the next
+     row's. */
   .row::after {
     content: attr(data-drop-label);
     position: absolute;
-    right: 8px;
-    bottom: -9px;
+    right: 10px;
+    top: 0;
+    translate: 0 -50%;
     z-index: 2;
     padding: 1px 7px;
     border-radius: 5px;
@@ -522,7 +549,7 @@
   }
   .pill.late,
   .pill.ringing {
-    background: var(--late);
+    background: var(--danger-fill);
     color: #fff;
     font-weight: 600;
   }
@@ -563,6 +590,10 @@
   .acts:focus-within {
     opacity: 1;
     pointer-events: auto;
+  }
+  /* (A line held over it: its time stays in sight, not its ⋯.) */
+  .row.drop .acts {
+    opacity: 0;
   }
   .act {
     width: 26px;

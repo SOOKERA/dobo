@@ -4,6 +4,7 @@
   // One of your watercolour mixes (the "Watercolour · yours" row): the real painting, its name on
   // up to two lines, a ⋯ menu to use, rename or delete it.
   import { composing } from "../../../lib/compose";
+  import { focusSelect } from "../../../lib/modal";
   import Icon from "../../Icon.svelte";
   import LookSwatch from "../LookSwatch.svelte";
   import Menu from "./Menu.svelte";
@@ -23,6 +24,7 @@
     renaming = true;
   }
   function done(save: boolean) {
+    if (!renaming) return;
     if (save && draft.trim() && draft.trim() !== m.name) void look.renameMix(m.id, draft.trim());
     renaming = false;
   }
@@ -41,20 +43,22 @@
     {#if !renaming}<span class="n" class:on={selected}>{m.name}</span>{/if}
   </button>
   {#if renaming}
-    <!-- svelte-ignore a11y_autofocus -->
     <input
       class="rename"
       bind:value={draft}
       maxlength="60"
       aria-label={t("New name")}
-      autofocus
+      use:focusSelect
       onkeydown={(e) => {
         if (composing(e)) return;
+        // (The keyboard goes back to the card.)
+        const card = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>("button.pick");
         if (e.key === "Enter") done(true);
         if (e.key === "Escape") {
           e.stopPropagation();
           done(false);
         }
+        if (e.key === "Enter" || e.key === "Escape") queueMicrotask(() => card?.focus());
       }}
       onblur={() => done(true)}
     />

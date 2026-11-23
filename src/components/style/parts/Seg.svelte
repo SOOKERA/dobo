@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts" generics="T extends string">
+  import { roving } from "../../../lib/gridkeys";
   // A small segmented choice (Auto · Pins · Tape · None).
   let { value, options, label, onPick, serif = false }: { value: T; options: { key: T; label: string; title?: string; size?: number }[]; label: string; onPick: (v: T) => void; serif?: boolean } = $props();
 </script>
 
-<div class="seg" class:serif role="radiogroup" aria-label={label}>
+<div class="seg" class:serif role="radiogroup" use:roving aria-label={label}>
   {#each options as o (o.key)}
     <button role="radio" aria-checked={value === o.key} class:on={value === o.key} data-tip={o.title ?? (o.size ? o.label : null)} style:font-size={o.size ? `${o.size}px` : null} onclick={() => onPick(o.key)}>{o.label}</button>
   {/each}

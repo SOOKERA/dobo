@@ -6,7 +6,7 @@
   // over it inside the same panel. ‹ Back goes up one level (the page reverses its entrance);
   // × and Esc close the whole panel the way it opened. The header says where you are
   // ("Style › Themes › Edit theme"); an earlier level jumps straight back to it.
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import ViewHeader, { type Crumb } from "../ViewHeader.svelte";
   import MainPage from "./pages/MainPage.svelte";
   import MoreMixes from "./pages/MoreMixes.svelte";
@@ -16,6 +16,7 @@
   import Share from "./pages/Share.svelte";
   import { look, type PanelPage } from "../../lib/look.svelte";
   import { pushLayer } from "../../lib/layers";
+  import { modal, tabbables } from "../../lib/modal";
   import { isWindowDrag } from "../../lib/windrag";
   import { pageIn, pageOut, side } from "../../lib/motion";
   import { follow, forward, goTo, pagesAt, upTo, type Pages } from "../../lib/nav";
@@ -32,6 +33,7 @@
   }
 
   let back = $state(false);
+  let panelEl = $state<HTMLElement>();
   /** Where you are, the way you came, and the pages just backed out of (for Forward). */
   let nav = $state<Pages<PanelPage>>(pagesAt(look.page, lineage(look.page)));
   let moving = false;
@@ -46,10 +48,29 @@
     });
   });
   function show(n: Pages<PanelPage>, up: boolean) {
+    // The keyboard follows (when it is in the panel): down to the new page's first control; back
+    // up to the control that opened the page left.
+    const a = document.activeElement as HTMLElement | null;
+    const keys = !!a && (a === document.body || !!panelEl?.contains(a));
+    if (!up && pagesEl && a) {
+      const i = tabbables(pagesEl).indexOf(a);
+      if (i >= 0) opener.set(nav.here, i);
+    }
     moving = n.here !== look.page;
     back = up;
     nav = n;
     look.page = n.here;
+    if (keys) void tick().then(() => land(up ? (opener.get(n.here) ?? 0) : 0, true));
+  }
+  /** Each page's control that opened the page below it (its place among the page's controls). */
+  const opener = new Map<PanelPage, number>();
+  let pagesEl = $state<HTMLElement>();
+  function land(i: number, again: boolean) {
+    // (The page leaving is inert: only the new one's controls count.)
+    const list = pagesEl ? tabbables(pagesEl) : [];
+    if (!list.length && again) return void requestAnimationFrame(() => land(i, false));
+    const to = list[Math.min(i, list.length - 1)] ?? panelEl?.querySelector<HTMLElement>(".head .back");
+    to?.focus({ preventScroll: true });
   }
 
   const go = (p: PanelPage) => show(goTo(nav, p), false);
@@ -107,11 +128,12 @@
   });
 </script>
 
-<aside class="panel" aria-label={t("Style")} transition:side|global>
+<!-- (Beside the board, which stays as it is: the keyboard comes in, and Tab may go on out.) -->
+<aside class="panel" aria-label={t("Style")} tabindex="-1" bind:this={panelEl} transition:side|global use:modal={{ initial: "self", trap: false }}>
   <div class="head">
     <ViewHeader {crumbs} {sub} onBack={goBack} {onClose} />
   </div>
-  <div class="pages">
+  <div class="pages" bind:this={pagesEl}>
     {#key look.page}
       <div class="page" in:pageIn={{ back }} out:pageOut={{ back }}>
         {#if look.page === "main"}
@@ -325,5 +347,9 @@
     background: color-mix(in srgb, var(--chip) 55%, var(--card));
     border-radius: 10px;
     padding: 8px 12px;
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .panel:focus {
+    outline: none;
   }
 </style>

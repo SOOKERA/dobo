@@ -2,14 +2,18 @@
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
 // Warm-up: the first open of the Style panel (and its pages) must be as smooth as the 999th.
 // What makes a cold open stutter is the pictures it shows: texture tiles (an SVG grain filter
-// rendered into a PNG) and watercolour paintings. So after launch, in idle moments only, one
-// small piece at a time, we make the ones the panel shows first. Nothing here blocks startup or
-// typing: each piece waits for an idle moment, and a busy moment pushes the rest further back.
+// rendered into a PNG) and watercolour paintings. So after launch, in calm moments only (calm.ts:
+// nothing pressed, typed or scrolled for a while, nothing moving on screen), one small piece at a
+// time, we make the ones the panel shows first: its first page. Customise, the board-size
+// paintings, the Themes page and More mixes come later, a minute after launch at the earliest
+// (opened before that, the panel paints what it shows itself, first). Nothing here blocks startup
+// or anything the user does: the user acting pushes the rest further back.
 // Called again when the look changes (new styles, themes or mixes), it only does what's missing.
 import { look } from "./look.svelte";
 import { BACKGROUNDS, OUR_STYLES, OUR_THEMES, PATTERNS, WC_MOODS, WC_OURS, WC_PAINTS, type Look, type WcLook } from "./looks";
 import { paint, painted, swatchPaint, tileMade, tileReady, wcKey } from "./paint.svelte";
 import { isStored, prune } from "./paintStore";
+import { calmMoment } from "./calm";
 
 type Piece = () => Promise<unknown> | void;
 
@@ -92,11 +96,10 @@ let running = false;
 let again = false;
 let pruned = false;
 
-const idle = () =>
-  new Promise<void>((r) => {
-    if ("requestIdleCallback" in window) requestIdleCallback(() => r(), { timeout: 2000 });
-    else setTimeout(r, 50);
-  });
+/** What isn't on the panel's first page waits this long after launch. */
+const LATER_MS = 60_000;
+const launched = performance.now();
+const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Starts (or refreshes) the warm-up. Safe to call often. */
 export function warmStyle(delay = 1200) {
@@ -112,6 +115,7 @@ async function run() {
   try {
     do {
       again = false;
+      // The first page's pieces; then (`later` from that index on) the rest.
       const pieces: Piece[] = [];
       const seenTiles = new Set<string>();
       for (const l of panelLooks()) {
@@ -133,6 +137,7 @@ async function run() {
       // The panel's first page, then Customise, then the board-size paintings a click on
       // Watercolour or one of our five will show, then the rest.
       for (const p of all) if (p.group === "main") add(swatch(p));
+      const later = pieces.length;
       for (const p of all) if (p.group === "customise") add(swatch(p));
       const W = Math.round(look.boardW);
       const H = Math.round(look.boardH);
@@ -149,11 +154,15 @@ async function run() {
           pruned = true;
           return prune();
         });
-      for (const piece of pieces) {
+      for (const [i, piece] of pieces.entries()) {
         // What the panel shows changed meanwhile (a new size while the window is resized, a new
         // mix): start over with the new list rather than painting pictures no one will ask for.
         if (again) break;
-        await idle();
+        if (i >= later)
+          while (!again && performance.now() - launched < LATER_MS) await pause(Math.min(5000, LATER_MS - (performance.now() - launched)));
+        if (again) break;
+        await calmMoment(() => again);
+        if (again) break;
         try {
           await piece();
         } catch {

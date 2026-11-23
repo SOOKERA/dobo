@@ -26,7 +26,7 @@ Dobo and to any work based on it:
    or supported by Sookera.
 
 3. **Names and logos (section 7(e)).** This licence gives no right to use the names "Dobo" or
-   "Sookera", the Dobo note logo, the hand-lettered "dobo" wordmark or the Sookera wordmark, except
+   "Sookera", the Dobo note logo, the hand-lettered "Dobo" wordmark or the Sookera wordmark, except
    as needed for the attribution in term 1. A modified version you distribute must use its own name
    and its own icon.
 

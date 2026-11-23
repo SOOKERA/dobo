@@ -7,18 +7,28 @@
   // it (no Esc, no click beside it). Until Agree and continue, Dobo makes no update check and
   // fetches no link preview (src-tauri/src/consent.rs); the notes work as always.
   import termsMd from "../../TERMS.md?raw";
+  import termsFrMd from "../../TERMS.fr.md?raw";
   import Logo from "./Logo.svelte";
   import { store } from "../lib/store.svelte";
   import { APP_NAME } from "../lib/app";
-  import { sheet } from "../lib/motion";
+  import { fadeQuick, sheet } from "../lib/motion";
+  import { modal } from "../lib/modal";
   import { parseTerms } from "../lib/terms";
-  import { t } from "../lib/i18n.svelte";
+  import { i18n, t } from "../lib/i18n.svelte";
 
   let { onDone }: { onDone: () => void } = $props();
 
   /** Used Dobo before it had terms (its first-start setup was done then). */
   const existing = !!store.settings.onboarded;
-  const blocks = parseTerms(termsMd);
+  const english = parseTerms(termsMd);
+  const french = parseTerms(termsFrMd);
+  /** In French: the courtesy translation first, the English (the one that counts) a click away. */
+  let showEnglish = $state(false);
+  let inFrench = $derived(i18n.lang === "fr" && !showEnglish);
+  let blocks = $derived(inFrench ? french : english);
+  /** The date line, and the translation's own word on which version counts (said above the box). */
+  const dated = (s: string) => s.startsWith("Last updated") || s.startsWith("Dernière mise à jour");
+  const courtesy = (s: string) => s.startsWith("Traduction de courtoisie");
 
   let busy = $state(false);
   let error = $state("");
@@ -38,9 +48,20 @@
   function open(url: string) {
     void store.backend.openUrl(url);
   }
+
+  let termsEl = $state<HTMLElement>();
+  let whichEl = $state<HTMLElement>();
+  /** The other version, read from its start: a page scrolled down into the text goes back up to
+   * the line above it (under the strip the window moves by). */
+  function switchVersion() {
+    showEnglish = !showEnglish;
+    if (!termsEl || !whichEl) return;
+    const top = Math.max(0, whichEl.offsetTop - 44);
+    if (termsEl.scrollTop > top) termsEl.scrollTop = top;
+  }
 </script>
 
-<div class="terms" role="dialog" aria-modal="true" aria-label={t("Terms of use")} transition:sheet|global>
+<div class="terms" role="dialog" aria-modal="true" aria-label={t("Terms of use")} tabindex="-1" bind:this={termsEl} transition:sheet|global use:modal={{ initial: "self" }}>
   <div class="move" data-drag-area aria-hidden="true"></div>
   <div class="page">
     <span class="kicker"><Logo word={false} size={22} />{existing ? t("{app} now has terms of use", { app: APP_NAME }) : t("Welcome to {app}", { app: APP_NAME })}</span>
@@ -50,19 +71,31 @@
         ? t("Please read them: {app} carries on as soon as you agree. Your notes stay as they are.", { app: APP_NAME })
         : t("Before you start, please read {app}’s terms of use. {app} starts as soon as you agree.", { app: APP_NAME })}
     </p>
-    <!-- Focusable so the keyboard can scroll it. (The terms are in English, as published.) -->
+    {#if i18n.lang === "fr"}
+      <!-- The French says which version counts, and switches between the two. -->
+      <p class="which" bind:this={whichEl}>
+        {inFrench ? t("A courtesy translation: the English version is the binding one.") : t("The text below is in English; it is the binding version.")}
+        <button class="link" onclick={switchVersion}>{inFrench ? t("Read the English original") : t("Read the French translation")}</button>
+      </p>
+    {/if}
+    <!-- Focusable so the keyboard can scroll it. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <div class="text" role="document" lang="en" tabindex="0">
-      {#each blocks as b, i (i)}
-        <!-- (The "# Terms of use" heading: the page's own title says it.) -->
-        {#if b.kind === "h2"}
-          <h2>{b.text}</h2>
-        {:else if b.kind === "p" || b.kind === "li"}
-          <svelte:element this={b.kind} class:dated={b.kind === "p" && b.parts.length === 1 && b.parts[0].text.startsWith("Last updated")}>
-            {#each b.parts as p, j (j)}{#if p.url}<button class="link" onclick={() => open(p.url!)}>{p.text}</button>{:else if p.bold}<b>{p.text}</b>{:else}{p.text}{/if}{/each}
-          </svelte:element>
-        {/if}
-      {/each}
+    <div class="text" role="document" lang={inFrench ? "fr" : "en"} tabindex="0">
+      <!-- (The other version fades in where the first one was.) -->
+      {#key inFrench}
+        <div in:fadeQuick={{ duration: 200 }}>
+          {#each blocks as b, i (i)}
+            <!-- (The "# Terms of use" heading: the page's own title says it.) -->
+            {#if b.kind === "h2"}
+              <h2>{b.text}</h2>
+            {:else if (b.kind === "p" || b.kind === "li") && !(b.kind === "p" && courtesy(b.parts[0]?.text ?? ""))}
+              <svelte:element this={b.kind} class:dated={b.kind === "p" && b.parts.length === 1 && dated(b.parts[0].text)}>
+                {#each b.parts as p, j (j)}{#if p.url}<button class="link" onclick={() => open(p.url!)}>{p.text}</button>{:else if p.bold}<b>{p.text}</b>{:else}{p.text}{/if}{/each}
+              </svelte:element>
+            {/if}
+          {/each}
+        </div>
+      {/key}
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="foot">
@@ -124,6 +157,17 @@
     font-size: var(--t-base);
     color: var(--soft);
   }
+  .which {
+    margin: 18px 0 0;
+    font-size: var(--t-md);
+    color: var(--muted);
+  }
+  .which .link {
+    color: var(--soft);
+  }
+  .which + .text {
+    margin-top: 10px;
+  }
   .text {
     margin-top: 22px;
     padding: 6px 20px 14px;
@@ -135,7 +179,7 @@
     color: var(--ink);
   }
   .text:focus-visible {
-    outline: 2px solid var(--ink);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
   .text h2 {
@@ -217,5 +261,9 @@
     .text {
       padding: 4px 14px 12px;
     }
+  }
+  /* (It takes the keyboard itself when it opens: no ring round the whole view.) */
+  .terms:focus {
+    outline: none;
   }
 </style>

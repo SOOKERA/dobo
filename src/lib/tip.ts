@@ -213,7 +213,18 @@ function over(e: PointerEvent) {
     if (current) hide();
     return;
   }
-  // One showing: it glides over to this one. One just gone: this one shows at once.
+  // One showing: it glides over to this one. One just gone: this one shows at once. (A drop spot
+  // made for a drag, under the pointer as the page changes around a drop: in the next frame, so
+  // measuring it doesn't lay the page out again in the middle of the drop's own changes.)
+  if (t.closest("[data-tip-drag]")) {
+    requestAnimationFrame(() => {
+      if (!t.isConnected || !t.matches(":hover") || t === current) return;
+      clearTimeout(timer);
+      if (current || performance.now() - hiddenAt < WARM) show(t);
+      else timer = window.setTimeout(() => t.matches(":hover") && show(t), DELAY);
+    });
+    return;
+  }
   if (current) return show(t);
   const warm = performance.now() - hiddenAt < WARM;
   if (warm) show(t);

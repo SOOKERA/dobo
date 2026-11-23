@@ -11,7 +11,7 @@
   import LinkCard from "./LinkCard.svelte";
   import FileCard from "./FileCard.svelte";
   import StepTrace from "./StepTrace.svelte";
-  import { store } from "../lib/store.svelte";
+  import { store, NO_ITEMS } from "../lib/store.svelte";
   import { itemDrag } from "../lib/itemdrag.svelte";
   import { snap } from "../lib/snap";
   import { fold, widen } from "../lib/motion";
@@ -23,7 +23,7 @@
 
   let editing = $state(false);
   let draft = $state("");
-  let steps = $derived(store.stepsOf.get(item.id) ?? []);
+  let steps = $derived(store.stepsOf.get(item.id) ?? NO_ITEMS);
   let stepsDone = $derived(steps.filter((s) => s.done_at != null).length);
   let focused = $derived(store.focus?.item === item.id);
   let dropHere = $derived(itemDrag.target?.kind === "idea" && itemDrag.target.id === item.id);
@@ -84,12 +84,12 @@
       >
     {/if}
     <span class="acts">
-      <button class="make" data-tip={t("Make it a task")} data-tip-keys="Backspace" onclick={() => store.flipKind(item)}>{t("Make it a task")}</button>
-      <button class="act" data-tip={t("Delete")} data-tip-keys="Delete" aria-label={t("Delete")} onclick={() => store.deleteItem(item)}><Icon name="trash" size={14} /></button>
+      <button class="make" aria-label={t("Make it a task: “{name}”", { name: item.text })} data-tip={t("Make it a task")} data-tip-keys="Backspace" onclick={() => store.flipKind(item)}>{t("Make it a task")}</button>
+      <button class="act" data-tip={t("Delete")} data-tip-keys="Delete" aria-label={t("Delete “{name}”", { name: item.text })} onclick={() => store.deleteItem(item)}><Icon name="trash" size={14} /></button>
     </span>
   </div>
-  {#if item.link}<div class="idea-attach" transition:fold use:snap={lined}><LinkCard link={item.link} /></div>{/if}
-  {#if item.file}<div class="idea-attach" transition:fold use:snap={lined}><FileCard path={item.file} /></div>{/if}
+  {#if item.link}<div class="idea-attach" data-menu-line={item.id} transition:fold use:snap={lined}><LinkCard link={item.link} /></div>{/if}
+  {#if item.file}<div class="idea-attach" data-menu-line={item.id} transition:fold use:snap={lined}><FileCard path={item.file} /></div>{/if}
   {#if steps.length}
     <ul class="idea-steps" transition:fold>
       {#each steps as s (s.id)}

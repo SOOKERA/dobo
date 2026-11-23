@@ -21,10 +21,11 @@ type Params = Record<string, string | number>;
 
 /** French typography: a non-breaking space before : and », after «; a thin one before ; ? !. */
 export function frType(s: string): string {
+  // (« first: a key quoted on its own, « ! », keeps its quotes' spaces, never a thin one.)
   return s
+    .replace(/« /g, "« ")
     .replace(/ :/g, " :")
     .replace(/ ([;?!])/g, " $1")
-    .replace(/« /g, "« ")
     .replace(/ »/g, " »");
 }
 
@@ -36,6 +37,9 @@ class Lingo {
   lang = $derived<Lang>(this.choice === "system" ? this.system : this.choice);
   /** For Intl: dates, numbers, plurals. */
   locale = $derived(this.lang === "fr" ? "fr-FR" : "en-GB");
+  /** Windows shows the time on a 12-hour clock ("3:00 PM"): every time Dobo shows does too, in
+   * either language. Read by Rust (clock.rs), again when Windows' settings change. */
+  hour12 = $state(false);
 }
 export const i18n = new Lingo();
 
@@ -146,12 +150,34 @@ export function keysText(accel: string): string {
 // ---- Dates and times ----
 
 const fmts = new Map<string, Intl.DateTimeFormat>();
-/** A cached Intl.DateTimeFormat for the current language (24-hour clock in both). */
+/** A cached Intl.DateTimeFormat for the current language, for dates (times: `clockTime`). */
 export function dateFmt(opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const id = `${i18n.locale}|${JSON.stringify(opts)}`;
   let f = fmts.get(id);
   if (!f) fmts.set(id, (f = new Intl.DateTimeFormat(i18n.locale, { hourCycle: "h23", ...opts })));
   return f;
+}
+
+/** A time as Windows shows it: "15:00", or "3:00 PM" on a 12-hour clock (the same in French:
+ * the language is the app's, the clock is Windows'). The space before AM/PM never breaks. */
+export function clockTime(h: number, m: number): string {
+  const mm = String(m).padStart(2, "0");
+  if (!i18n.hour12) return `${String(h).padStart(2, "0")}:${mm}`;
+  return `${h % 12 || 12}:${mm}\u00a0${h < 12 ? "AM" : "PM"}`;
+}
+
+/** An hour on the drag ruler: "14" in English, « 14h » in French, or "2 PM" on a 12-hour clock. */
+export function hourMark(h: number): string {
+  if (i18n.hour12) return `${h % 12 || 12}\u00a0${h < 12 ? "AM" : "PM"}`;
+  return i18n.lang === "fr" ? `${h}h` : String(h);
+}
+
+/** A day and its time: "Thu 19 Nov, 15:05" (long: "Thursday 19 November at 15:05"); French
+ * « jeu. 19 nov., 15:05 », « jeudi 19 novembre à 15:05 ». */
+export function dateAndTime(d: Date, long = false): string {
+  const day = dateFmt(long ? { weekday: "long", day: "numeric", month: "long" } : { weekday: "short", day: "numeric", month: "short" }).format(d);
+  const time = clockTime(d.getHours(), d.getMinutes());
+  return long ? `${day} ${i18n.lang === "fr" ? "à" : "at"} ${time}` : `${day}, ${time}`;
 }
 
 /** "Thu" / "jeu." */
@@ -219,13 +245,14 @@ export function list(items: string[]): string {
 /** A window without the board (the quick dump bar): its language as the setting says, and again
  * whenever the setting changes. */
 export function followLanguage(b: {
-  languageNow(): Promise<{ choice: string; system: Lang }>;
+  languageNow(): Promise<{ choice: string; system: Lang; hour12?: boolean }>;
   onEvent(name: "language", cb: (payload: unknown) => void): void;
 }) {
   const ask = () =>
     b.languageNow().then((l) => {
       i18n.system = l.system;
       i18n.choice = readChoice(l.choice);
+      i18n.hour12 = !!l.hour12;
       document.documentElement.lang = i18n.lang;
     });
   b.onEvent("language", () => void ask().catch(() => {}));
@@ -239,7 +266,28 @@ export function followLanguage(b: {
  * can be seen fades: `scope` (the view the switch is made in, which covers the rest) and what
  * floats over it (`data-lang-fade`: a toast, the tooltip). Fading the whole page restyled every
  * element of it each frame. */
-export async function switchLanguage(choice: LangChoice, apply: () => void | Promise<void> = () => {}, scope?: Element | null) {
+export function switchLanguage(choice: LangChoice, apply: () => void | Promise<void> = () => {}, scope?: Element | null): Promise<void> {
+  // One after the other: a second pick while the first still fades (a quick Space, Enter again)
+  // waits for it, so neither cuts the other's fade short or tidies up under it, and the last
+  // pick is the one that stays.
+  asked = choice;
+  const run = switching.then(() => switchNow(choice, apply, scope));
+  switching = run.catch(() => {});
+  void switching.then(() => {
+    if (asked === choice) asked = null;
+  });
+  return run;
+}
+let switching: Promise<void> = Promise.resolve();
+let asked: LangChoice | null = null;
+
+/** The language last picked while a switch is still under way (null when none is): what a new
+ * pick is compared with, since the setting changes only once the words have faded out. */
+export function askedLanguage(): LangChoice | null {
+  return asked;
+}
+
+async function switchNow(choice: LangChoice, apply: () => void | Promise<void>, scope?: Element | null) {
   const before = i18n.lang;
   const nextLang: Lang = choice === "system" ? i18n.system : choice;
   if (before === nextLang || typeof document === "undefined") {
@@ -258,6 +306,27 @@ export async function switchLanguage(choice: LangChoice, apply: () => void | Pro
       ),
     );
   await fade(1, 0, reduced ? 60 : 120);
+  // What the view covers (`data-lang-later`: the board) takes its new words now, but is laid out
+  // again only once the new words have faded in: the whole board laid out anew made a pause
+  // between the fade out and the fade in. (Held at its size meanwhile, so nothing moves; let go
+  // at once if the view starts to close.)
+  const held = scope ? [...document.querySelectorAll<HTMLElement>("[data-lang-later]")].filter((el) => !scope.contains(el)) : [];
+  const sizes = held.map((el) => [el.offsetWidth, el.offsetHeight]);
+  held.forEach((el, i) => {
+    el.style.containIntrinsicSize = `${sizes[i][0]}px ${sizes[i][1]}px`;
+    el.style.contentVisibility = "hidden";
+  });
+  let letGo = () => {
+    letGo = () => {};
+    for (const el of held) el.style.contentVisibility = el.style.containIntrinsicSize = "";
+  };
+  if (held.length && scope) {
+    const watch = () => {
+      if (!scope.isConnected || scope.closest("[inert]")) letGo();
+      else if (held[0].style.contentVisibility) requestAnimationFrame(watch);
+    };
+    requestAnimationFrame(watch);
+  }
   i18n.choice = choice;
   root.lang = nextLang;
   await apply();
@@ -266,6 +335,7 @@ export async function switchLanguage(choice: LangChoice, apply: () => void | Pro
   // What isn't drawn by Svelte (the tooltip showing now) takes its new words too.
   window.dispatchEvent(new Event("dobo-language"));
   await fade(0, 1, reduced ? 80 : 200);
+  letGo();
   for (const p of parts) {
     p.getAnimations().forEach((a) => {
       const kf = (a.effect as KeyframeEffect | null)?.getKeyframes?.()[0] as Record<string, unknown> | undefined;

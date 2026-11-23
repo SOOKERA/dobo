@@ -12,6 +12,7 @@
   import { arrive, leave, widen } from "../lib/motion";
   import { keysText, t } from "../lib/i18n.svelte";
   import { composing } from "../lib/compose";
+  import { takeFocus } from "../lib/modal";
   import type { Kind } from "../lib/types";
 
   let {
@@ -34,6 +35,8 @@
   } = $props();
 
   let draft = $state("");
+  /** Closed by Esc: the keyboard goes back to "+ Add" (a click away leaves it where it went). */
+  let byKey = $state(false);
   let busy = $state(false);
   let input = $state<HTMLInputElement>();
   let parsed = $derived(draft.trim() ? parseCapture(draft, "task", store.now, { tags: false }) : null);
@@ -77,6 +80,7 @@
       // (Esc closes the field, not what is under it.)
       e.stopPropagation();
       e.preventDefault();
+      byKey = true;
       void close();
     }
   }
@@ -105,7 +109,7 @@
         {/if}
       </span>
     {:else}
-      <button class="add" in:arrive={{ delay: 40, duration: 200, y: 0 }} out:leave={{ duration: 110, y: 0 }} aria-label={t("Add a line to {name}", { name })} data-tip={t("Add a task or an idea here")} onclick={() => (active = true)}
+      <button class="add" use:takeFocus={byKey} onfocus={() => (byKey = false)} in:arrive={{ delay: 40, duration: 200, y: 0 }} out:leave={{ duration: 110, y: 0 }} aria-label={t("Add a line to {name}", { name })} data-tip={t("Add a task or an idea here")} onclick={() => (active = true)}
         ><span class="mark"><Icon name="plus" size={14} stroke={2} /></span><span>{t("Add")}</span></button
       >
     {/if}
@@ -162,7 +166,6 @@
     color: var(--muted);
     font-size: var(--t-md);
     cursor: text;
-    opacity: 0.75;
     transition:
       opacity 0.15s,
       color 0.15s,

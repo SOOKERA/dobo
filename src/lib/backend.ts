@@ -3,6 +3,14 @@
 // The app talks to Rust through this. In a plain browser (`npm run dev` without Tauri) a mock
 // keeps everything in localStorage, so the UI can be previewed and tested there
 // (add ?w=dump to the address to preview the quick dump bar).
+//
+// The order of calls: most commands run one after another on Rust's main thread, in the order
+// sent. A few run off it (`#[tauri::command(async)]` in lib.rs: restore, dumpItem, savePicture,
+// addPictureFile, saveNoteImage, the backup commands, the Sticky Notes count and import, openPath,
+// reveal…), and one of those can finish AFTER a command sent later. So always await an async
+// command before the next call that reads or writes the same rows (undo awaits restore; the dump
+// bar awaits dumpItem before setting the link): a "send, then edit" without awaiting may land on
+// a row that isn't written yet.
 import { nextAfterDone } from "./repeat";
 import { dockWidth, widthForScreen } from "./dock";
 import type {
@@ -14,6 +22,7 @@ import type {
   Note,
   Picture,
   Rhythm,
+  Thumb,
   RingAction,
   Space,
   WindowInfo,
@@ -27,6 +36,7 @@ export type EventName =
   | "panel-hide-request"
   | "ring"
   | "item-updated"
+  | "picture-added"
   | "reload"
   | "focus-item"
   | "open-tidy"
@@ -36,11 +46,17 @@ export type EventName =
   | "focus-note"
   | "later-item"
   | "open-lookback"
+  /** Global shortcuts another app holds at start (or after a restore): [{ which, keys }]. */
+  | "shortcut-taken"
   | "lookback-ready"
   | "peek-shown"
   | "dark-mode"
   | "language"
-  | "update-status";
+  /** Windows switched between a 12- and a 24-hour clock (true: 12-hour). */
+  | "clock-format"
+  | "update-status"
+  /** The automatic backup didn't work (its error; said once until one works again). */
+  | "backup-failed";
 
 /** Dobo's own update, as Settings › Updates shows it (src-tauri/src/updates.rs, View). */
 export interface UpdateView {
@@ -79,8 +95,38 @@ export interface BackupInfo {
   path: string;
   at: number;
   bytes: number;
+  /** The kind: "daily", "manual", "before-restore" or "before-update". */
   reason: string;
+  /** Before an update: the version it was made for. */
+  version: string | null;
+  /** In the data folder's own backups folder, not the one chosen in Settings: a backup before an
+   * update made there instead (the chosen one couldn't be used then). */
+  kept_in_data: boolean;
 }
+
+/** Whether the last automatic backup worked (src-tauri/src/backup.rs, Status). */
+export interface BackupStatus {
+  /** Why it didn't (null: it worked, or none was made yet). */
+  error: string | null;
+  failed_at: number | null;
+  /** A word of its own (the backup made before a restore misses what was typed during it; the
+   * backup before a new version went elsewhere, or couldn't be made), said with `noticeText`. */
+  notice: BackupNotice | null;
+  notice_at: number | null;
+}
+
+/** A word of its own for Settings › Backups as Rust keeps it (backup.rs `Notice`): what it is
+ * and its parts, said in the language of the moment; or, kept by an older version, the finished
+ * words (said as they are). */
+export type BackupNotice =
+  | string
+  | { code: "restore_missed"; args: { error: string; path: string } }
+  | { code: "update_backup_elsewhere"; args: { app: string; version: string; path: string; chosen: string; why?: BackupMissed | null } }
+  | { code: "update_backup_failed"; args: { app: string; version: string; error: string; why?: BackupMissed | null } };
+
+/** Why a backup before an update didn't go where it should (backup.rs `Missed`; none: kept by an
+ * earlier 1.1 build). */
+export type BackupMissed = "no_answer" | "not_writable" | "full" | "failed";
 
 /** Settings › About: how this copy runs and where its notes are. */
 export interface DataInfo {
@@ -91,6 +137,39 @@ export interface DataInfo {
   /** Portable, but the folder next to Dobo.exe can't be written (the usual folder). */
   fallback: boolean;
   version: string;
+}
+
+/** The notes didn't open at start (src-tauri/src/recovery.rs, Problem): the recovery screen. */
+export interface RecoveryProblem {
+  /** damaged: repair, try again, restore or start empty · locked: another program holds the file ·
+   * readonly: it can't be written · failed: it won't open for another reason · portable: a
+   * portable copy can't write in its own folder (asked before the usual one is used). */
+  kind: "damaged" | "locked" | "readonly" | "failed" | "portable";
+  /** SQLite's or Windows' own words. */
+  error: string;
+  /** The data folder, and the notes file in it. */
+  data: string;
+  file: string;
+  /** The file an earlier start put aside (broken-<date>.sqlite, nothing in its place), in the
+   * data folder. */
+  kept_as: string | null;
+  /** The newest backup whose notes are whole, and what it holds (null: it couldn't be counted). */
+  backup: { path: string; at: number; counts: RecoveryCounts | null } | null;
+  /** Damaged: a repaired copy is ready ("Use the repaired notes"). */
+  repaired: boolean;
+  /** What the repaired copy holds (a repair may miss notes it couldn't read). */
+  repaired_counts: RecoveryCounts | null;
+  /** The file put aside (kept_as) reads whole now: it can be put back. */
+  whole_again: boolean;
+  /** Portable: the folder next to Dobo that can't be written, and whether notes are in it. */
+  portable: string | null;
+  portable_notes: boolean;
+}
+export type RecoveryChoice = "repair" | "putback" | "restore" | "empty" | "retry" | "usual";
+/** What notes hold, on a recovery choice's card: every note (archived ones too) and every line. */
+export interface RecoveryCounts {
+  notes: number;
+  lines: number;
 }
 
 export interface Backend {
@@ -109,6 +188,10 @@ export interface Backend {
   /** An Inbox made only to stand in for one an undo put back in the archive: removed while it is
    * still empty (the space had none before). Whether it went. */
   dropEmptyInbox(id: number): Promise<boolean>;
+  /** How many Windows Sticky Notes an import would bring in (0: none, or all already here).
+   * Only reads; nothing comes in until `importStickyNotes`. */
+  countStickyNotes(): Promise<number>;
+  /** Brings in the Windows Sticky Notes not already here. How many came in. */
   importStickyNotes(): Promise<number>;
   windowInfo(): Promise<WindowInfo>;
   hidePanel(): Promise<void>;
@@ -123,6 +206,8 @@ export interface Backend {
   startResize(direction: string): Promise<void>;
   listMonitors(): Promise<MonitorInfo[]>;
   answerRing(itemId: number, action: RingAction): Promise<Item>;
+  /** The board listens: what notifications asked of it before (Dobo started by a click on one). */
+  pageReady(): Promise<[EventName, unknown][]>;
   tidyAnswer(action: string): Promise<void>;
   rhythmPresets(): Promise<Record<"gentle" | "normal" | "insistent", Rhythm>>;
   showDump(): Promise<void>;
@@ -136,8 +221,13 @@ export interface Backend {
   savePicture(noteId: number, itemId: number | null, bytes: Uint8Array, ext: string): Promise<Picture>;
   addPictureFile(noteId: number, itemId: number | null, path: string): Promise<Picture>;
   deletePicture(id: number): Promise<void>;
+  /** A picture's board-size copy, made now unless it was already; null when it is small enough
+   * as it is (thumbs.rs). */
+  makeThumb(path: string): Promise<Thumb | null>;
   releasePicture(id: number, noteId: number): Promise<void>;
   setShortcut(which: "toggle" | "dump" | "search", accel: string): Promise<void>;
+  /** The global shortcuts another app holds ("toggle", "dump"): they do nothing until changed. */
+  shortcutsTaken(): Promise<string[]>;
   getAutostart(): Promise<boolean>;
   setAutostart(on: boolean): Promise<void>;
   /** Undo after a delete: puts them back exactly as they were. */
@@ -150,6 +240,7 @@ export interface Backend {
   reveal(path: string): Promise<void>;
   backupNow(): Promise<BackupInfo>;
   backupList(): Promise<BackupInfo[]>;
+  backupStatus(): Promise<BackupStatus>;
   backupRestore(path: string): Promise<void>;
   backupFolder(): Promise<string>;
   dataInfo(): Promise<DataInfo>;
@@ -165,6 +256,14 @@ export interface Backend {
   updateRestart(): Promise<void>;
   /** Opens the data folder in Explorer. */
   openDataFolder(): Promise<void>;
+  /** At start: what the recovery screen shows (null: the notes opened, the board shows). */
+  recoveryState(): Promise<RecoveryProblem | null>;
+  /** A choice on the recovery screen: null once the notes are open, else what still stands in
+   * the way. Fails when it couldn't be done (nothing changed). */
+  recoveryChoose(choice: RecoveryChoice): Promise<RecoveryProblem | null>;
+  /** The notes are open: the board starts (then the board's page is shown). Gives the name the
+   * damaged file was put aside as, if it was. */
+  recoveryContinue(): Promise<string | null>;
   /** A folder picked in the system dialog (null: cancelled). */
   pickFolder(): Promise<string | null>;
   /** A file's address for <img src>. */
@@ -172,7 +271,8 @@ export interface Backend {
   darkModeNow(): Promise<DarkNow>;
   /** The language setting ("system", "en", "fr") and the language Windows shows its own words in
    * ("fr", else "en"). */
-  languageNow(): Promise<{ choice: string; system: "en" | "fr" }>;
+  /** The language setting, the one Windows speaks, and whether Windows uses a 12-hour clock. */
+  languageNow(): Promise<{ choice: string; system: "en" | "fr"; hour12: boolean }>;
   /** Saves a .ztheme where the person chooses; null when cancelled. */
   exportLook(content: string, name: string): Promise<string | null>;
   /** Reads a .ztheme (the given file, or one picked); [file name, checked contents] or null. */
@@ -186,6 +286,7 @@ export interface Backend {
 
 async function tauriBackend(): Promise<Backend> {
   const { invoke, convertFileSrc } = await import("@tauri-apps/api/core");
+
   const { listen } = await import("@tauri-apps/api/event");
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
@@ -213,6 +314,7 @@ async function tauriBackend(): Promise<Backend> {
     setSetting: (key, value) => invoke("set_setting", { key, value }),
     inboxFor: (space) => invoke("inbox_for", { space }),
     dropEmptyInbox: (id) => invoke("drop_empty_inbox", { id }),
+    countStickyNotes: () => invoke("count_sticky_notes"),
     importStickyNotes: () => invoke("import_sticky_notes"),
     windowInfo: () => invoke("window_info"),
     hidePanel: () => invoke("hide_panel"),
@@ -225,6 +327,7 @@ async function tauriBackend(): Promise<Backend> {
     startResize: (direction) => win.startResizeDragging(direction as never),
     listMonitors: () => invoke("list_monitors"),
     answerRing: (itemId, action) => invoke("answer_ring", { itemId, action }),
+    pageReady: () => invoke("page_ready"),
     tidyAnswer: (action) => invoke("tidy_answer", { action }),
     rhythmPresets: () => invoke("rhythm_presets"),
     showDump: () => invoke("show_dump"),
@@ -238,8 +341,10 @@ async function tauriBackend(): Promise<Backend> {
       invoke("save_picture", bytes, { headers: { "note-id": String(noteId), "item-id": itemId == null ? "" : String(itemId), ext } }),
     addPictureFile: (noteId, itemId, path) => invoke("add_picture_file", { noteId, itemId, path }),
     deletePicture: (id) => invoke("delete_picture", { id }),
+    makeThumb: (path) => invoke("make_thumb", { path }),
     releasePicture: (id, noteId) => invoke("release_picture", { id, noteId }),
     setShortcut: (which, accel) => invoke("set_shortcut", { which, accel }),
+    shortcutsTaken: () => invoke("shortcuts_taken"),
     getAutostart: () => invoke("get_autostart"),
     setAutostart: (on) => invoke("set_autostart", { on }),
     restore: (notes, items, pictures) => invoke("restore", { notes, items, pictures }),
@@ -249,6 +354,7 @@ async function tauriBackend(): Promise<Backend> {
     reveal: (path) => invoke("reveal", { path }),
     backupNow: () => invoke("backup_now"),
     backupList: () => invoke("backup_list"),
+    backupStatus: () => invoke("backup_status"),
     backupRestore: (path) => invoke("backup_restore", { path }),
     backupFolder: () => invoke("backup_folder"),
     dataInfo: () => invoke("data_info"),
@@ -258,6 +364,9 @@ async function tauriBackend(): Promise<Backend> {
     updateCheck: () => invoke("update_check"),
     updateRestart: () => invoke("update_restart"),
     openDataFolder: () => invoke("open_data_folder"),
+    recoveryState: () => invoke("recovery_state"),
+    recoveryChoose: (choice) => invoke("recovery_choose", { choice }),
+    recoveryContinue: () => invoke("recovery_continue"),
     pickFolder: async () => {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const { t } = await import("./i18n.svelte");
@@ -450,7 +559,28 @@ function mockBackend(): Backend {
   const listeners: Record<string, ((p: unknown) => void)[]> = {};
   const emit = (name: string, p: unknown) => listeners[name]?.forEach((cb) => cb(p));
   const ok = <T,>(v: T) => Promise.resolve(structuredClone(v));
-  let previewUpdate: UpdateView = { current: "1.0.0", latest: null, notes: null, ready: false, busy: false, error: null, checked: false, last_checked: null };
+  const recover = params.get("recover");
+  const previewKept = `broken-${new Date().toISOString().slice(0, 10)}.sqlite`;
+  let previewChosen: RecoveryChoice | null = null;
+  let previewContinueFailed = false;
+  let previewProblem: RecoveryProblem | null =
+    recover === "damaged" || recover === "locked" || recover === "readonly" || recover === "failed" || recover === "portable"
+      ? {
+          kind: recover,
+          error: recover === "damaged" ? (params.has("whole") ? "" : "database disk image is malformed") : recover === "locked" ? "The process cannot access the file because it is being used by another process. (os error 32)" : recover === "readonly" ? "Access is denied. (os error 5)" : recover === "portable" ? "" : "disk I/O error",
+          data: "C:\\Users\\you\\AppData\\Roaming\\com.sookera.ztodo",
+          file: "C:\\Users\\you\\AppData\\Roaming\\com.sookera.ztodo\\ztodo.sqlite",
+          kept_as: recover === "damaged" && params.has("aside") ? previewKept : null,
+          // (…&counts=0: none could be counted; …&one: one note and one line.)
+          backup: recover === "damaged" || recover === "failed" ? (params.get("backup") === "0" ? null : { path: "preview/backup", at: Date.now() - 26 * 3600_000, counts: params.get("counts") === "0" ? null : params.has("one") ? { notes: 1, lines: 1 } : { notes: 24, lines: 187 } }) : null,
+          repaired: recover === "damaged" && params.has("repaired"),
+          repaired_counts: recover === "damaged" && params.has("repaired") && params.get("counts") !== "0" ? (params.has("one") ? { notes: 1, lines: 1 } : { notes: 23, lines: 171 }) : null,
+          whole_again: recover === "damaged" && params.has("aside") && params.has("whole"),
+          portable: recover === "portable" ? "E:\\Dobo\\data" : null,
+          portable_notes: recover === "portable" && params.has("notes"),
+        }
+      : null;
+  let previewUpdate: UpdateView = { current: "1.1.0", latest: null, notes: null, ready: false, busy: false, error: null, checked: false, last_checked: null };
   const findItem = (id: number) => data.items.find((i) => i.id === id)!;
   const spawnNext = (it: Item) => {
     if (!it.repeat || it.due_at == null || it.kind !== "task") return;
@@ -483,7 +613,23 @@ function mockBackend(): Backend {
     const now = inboxSpaces();
     for (const space of had) if (!now.has(space)) inboxOf(space);
   };
+  const STICKY_COLORS = ["Butter", "Sage", "Rose", "Sky", "Lilac", "Peach", "Ocean", "Sand", "Stone"];
+  /** The preview's sample sticky notes: [id, first line, more lines…]. */
+  const previewSticky = (): [string, string, ...string[]][] =>
+    params.get("sticky") === "0"
+      ? []
+      : [
+          ["p1", "Call the plumber"],
+          ["p2", "Gift ideas", "A good pen for Sam", "Tickets for the concert"],
+          ["p3", "Read later", "The long article on sleep"],
+        ];
+  const stickyIds = (): string[] => (Array.isArray(data.settings.sticky_ids) ? [...(data.settings.sticky_ids as string[])] : []);
   const BACKUPS = "ztodo-mock-backups";
+  /** The preview's data folder (?copy=…, see dataInfo). */
+  const previewDataDir = () => {
+    const c = params.get("copy");
+    return c === "installed" || c === "kept" || c === "fallback" ? "C:\\Users\\you\\AppData\\Roaming\\com.sookera.ztodo" : c === "dev" ? "D:\\Projects\\Dobo\\data" : "D:\\Apps\\Dobo\\data";
+  };
   const backups = (): (BackupInfo & { data: Everything })[] => {
     try {
       return JSON.parse(localStorage.getItem(BACKUPS) || "[]");
@@ -589,7 +735,28 @@ function mockBackend(): Backend {
       }
       return empty;
     },
-    importStickyNotes: () => Promise.resolve(0),
+    // The preview has a few sample sticky notes, as a Windows PC with Sticky Notes would
+    // (none with ?sticky=0). Brought in as the app does: a note each, a one-line one into the
+    // Inbox, never twice.
+    countStickyNotes: async () => previewSticky().filter(([id]) => !stickyIds().includes(id)).length,
+    importStickyNotes: async () => {
+      const ids = stickyIds();
+      const found = previewSticky().filter(([id]) => !ids.includes(id));
+      found.forEach(([id, title, ...lines], i) => {
+        const noteId = lines.length ? nextId("notes") : inboxOf("work");
+        if (lines.length) {
+          const sort = data.notes.reduce((m, n) => Math.max(m, n.sort), 0) + 1;
+          data.notes.push({ id: noteId, title, space: "work", palette: "soft", color: STICKY_COLORS[i % STICKY_COLORS.length], sort, archived: false, created_at: Date.now(), wide: false, folded: false, paper: "plain" });
+        }
+        const base = data.items.filter((x) => x.note_id === noteId).reduce((m, x) => Math.max(m, x.sort), -1) + 1;
+        (lines.length ? lines : [title]).forEach((text, k) => data.items.push(blankItem({ id: nextId("items"), note_id: noteId, kind: "task", text, sort: base + k, created_at: Date.now() })));
+        ids.push(id);
+      });
+      data.settings.sticky_ids = ids;
+      if (found.length) data.settings.sticky_imported = found.length;
+      save();
+      return found.length;
+    },
     windowInfo: () => {
       const chosen = ((params.get("mode") as WindowInfo["mode"]) || (data.settings.mode as WindowInfo["mode"]) || "docked") as WindowInfo["mode"];
       return ok({ mode: chosen, chosen, docked_possible: true, side: (data.settings.side as "left" | "right") || "right", float_on_top: !!data.settings.float_on_top, width: dockWidth(widthForScreen(data.settings.docked_widths, "preview", data.settings.docked_width), window.innerWidth, false) });
@@ -624,6 +791,7 @@ function mockBackend(): Backend {
         { key: "DISPLAY1@0,0", name: "\\\\.\\DISPLAY1", x: 0, y: 0, width: 2560, height: 1440, scale: 1, primary: true },
         { key: "DISPLAY2@2560,180", name: "\\\\.\\DISPLAY2", x: 2560, y: 180, width: 1920, height: 1080, scale: 1, primary: false },
       ]),
+    pageReady: async () => [],
     answerRing: (itemId, action) => {
       const it = findItem(itemId);
       const now = Date.now();
@@ -668,7 +836,15 @@ function mockBackend(): Backend {
       emit("item-updated", structuredClone(it));
       return ok(it);
     },
-    openPath: () => Promise.resolve(),
+    // A file on a share asks about its computer first, as the app (preview: \\nas\…); a path
+    // with "missing" in it is gone.
+    openPath: (path) => {
+      const host = /^[\\/]{2}([^\\/]+)/.exec(path)?.[1]?.toLowerCase();
+      const hosts = Array.isArray(data.settings.file_hosts) ? (data.settings.file_hosts as string[]) : [];
+      if (host && !hosts.includes(host)) return Promise.reject(`ask-host:${host}`);
+      if (path.includes("missing")) return Promise.reject("Couldn’t find that file: moved or deleted?");
+      return Promise.resolve();
+    },
     openUrl: (url) => {
       window.open(url, "_blank", "noopener");
       return Promise.resolve();
@@ -686,6 +862,8 @@ function mockBackend(): Backend {
       save();
       return Promise.resolve();
     },
+    // (The browser preview keeps its pictures as they are.)
+    makeThumb: () => Promise.resolve(null),
     releasePicture: (id, noteId) => {
       data.pictures = data.pictures.map((p) => (p.id === id ? { ...p, item_id: null, note_id: noteId } : p));
       save();
@@ -696,6 +874,7 @@ function mockBackend(): Backend {
       save();
       return Promise.resolve();
     },
+    shortcutsTaken: () => Promise.resolve([]),
     getAutostart: () => Promise.resolve(!!data.settings.autostart_mock),
     setAutostart: (on) => {
       data.settings.autostart_mock = on;
@@ -728,11 +907,49 @@ function mockBackend(): Backend {
     reveal: () => Promise.resolve(),
     backupNow: () => {
       const at = Date.now();
-      const info: BackupInfo = { name: `dobo-${new Date(at).toISOString().slice(0, 16).replace("T", "_")}-manual`, path: `preview/${at}`, at, bytes: JSON.stringify(data).length, reason: "manual" };
-      localStorage.setItem(BACKUPS, JSON.stringify([{ ...info, data: structuredClone(data) }, ...backups()].slice(0, 14)));
+      const info: BackupInfo = { name: `dobo-${new Date(at).toISOString().slice(0, 16).replace("T", "_")}-manual`, path: `preview/${at}`, at, bytes: JSON.stringify(data).length, reason: "manual", version: null, kept_in_data: false };
+      // (Each kind keeps its own last few, as the app.)
+      const kept = [{ ...info, data: structuredClone(data) }, ...backups()].filter((b, i, all) => all.filter((x) => x.reason === b.reason).indexOf(b) < (b.reason === "manual" ? 10 : 14));
+      localStorage.setItem(BACKUPS, JSON.stringify(kept));
+      delete data.settings.backup_error;
+      save();
       return ok(info);
     },
-    backupList: () => ok(backups().map((b) => ({ name: b.name, path: b.path, at: b.at, bytes: b.bytes, reason: b.reason }))),
+    // (?backups=sample: one or two of each kind; one made before an update in the data folder,
+    // the chosen folder not answering then.)
+    backupList: () =>
+      ok(
+        params.get("backups") === "sample"
+          ? (
+              [
+                ["daily", 2, null, false],
+                ["daily", 26, null, false],
+                ["daily", 50, null, false],
+                ["manual", 5, null, false],
+                ["before-restore", 30, null, false],
+                ["before-update", 74, "1.1.0", true],
+                ["before-update", 900, "1.0.1", false],
+              ] as const
+            ).map(([reason, h, version, kept_in_data], i) => ({ name: `sample-${i}`, path: `preview/sample-${i}`, at: Date.now() - h * 3600_000, bytes: 2_400_000 + i * 31_000, reason, version, kept_in_data }))
+          : backups().map((b) => ({ name: b.name, path: b.path, at: b.at, bytes: b.bytes, reason: b.reason, version: b.version ?? null, kept_in_data: false })),
+      ),
+    // (A preview shows a failed one with backup_error set in its settings.)
+    backupStatus: () => {
+      const error = typeof data.settings.backup_error === "string" ? data.settings.backup_error : null;
+      // (?notice=elsewhere | elsewhere-full | elsewhere-writable | elsewhere-failed | failed |
+      // failed-full | failed-writable: a word about the backup before an update.)
+      const [what, why] = (params.get("notice") ?? "").split("-");
+      const missed = why === "full" ? "full" : why === "writable" ? "not_writable" : why === "failed" ? "failed" : null;
+      const sample: BackupNotice | null =
+        what === "elsewhere"
+          ? { code: "update_backup_elsewhere", args: { app: "Dobo", version: "1.1.0", path: `${previewDataDir()}\\backups\\dobo-2026-11-23_090000-before-update-1.1.0`, chosen: "E:\\Backups\\Dobo", why: missed ?? "no_answer" } }
+          : what === "failed"
+            ? { code: "update_backup_failed", args: { app: "Dobo", version: "1.1.0", error: "disk I/O error", why: missed ?? "failed" } }
+            : null;
+      const n = sample ?? data.settings.backup_notice;
+      const notice = typeof n === "string" || (n && typeof n === "object" && "code" in n) ? (n as BackupNotice) : null;
+      return ok({ error, failed_at: error ? Number(data.settings.backup_failed_at) || Date.now() : null, notice, notice_at: notice ? Date.now() : null } satisfies BackupStatus);
+    },
     backupRestore: (path) => {
       const b = backups().find((x) => x.path === path);
       if (b) {
@@ -742,14 +959,13 @@ function mockBackend(): Backend {
       }
       return Promise.resolve();
     },
-    backupFolder: () => Promise.resolve(String(data.settings.backup_dir || "…\\Dobo\\backups (preview)")),
+    // (By default in the data folder, as the app's.)
+    backupFolder: () => Promise.resolve(String(data.settings.backup_dir || `${previewDataDir()}\\backups`)),
     // ?copy=installed | kept | fallback | dev shows the other cases (default: a new portable copy).
     dataInfo: () => {
       const c = params.get("copy");
-      const usual = "C:\\Users\\you\\AppData\\Roaming\\com.sookera.ztodo";
       const kind = c === "installed" ? "installed" : c === "dev" ? "dev" : "portable";
-      const dir = c === "installed" || c === "kept" || c === "fallback" ? usual : c === "dev" ? "D:\\Projects\\Dobo\\data" : "D:\\Apps\\Dobo\\data";
-      return ok({ kind, dir, kept_existing: c === "kept", fallback: c === "fallback", version: "1.0.0" } satisfies DataInfo);
+      return ok({ kind, dir: previewDataDir(), kept_existing: c === "kept", fallback: c === "fallback", version: "1.1.0" } satisfies DataInfo);
     },
     acceptTerms: () => {
       data.settings.terms_accepted = "2026-11-21";
@@ -784,12 +1000,36 @@ function mockBackend(): Backend {
       return Promise.resolve();
     },
     openDataFolder: () => Promise.resolve(),
+    // ?recover=damaged | locked | readonly | failed | portable shows the recovery screen (…&backup=0:
+    // none to put back; …&stuck: Try again finds it still held; …&broken: putting back fails;
+    // damaged…&repaired: a repaired copy is ready; damaged…&aside: an earlier start put it aside,
+    // …&aside&whole: and it reads whole now; portable…&notes: notes are in the folder that can't
+    // be written; …&nocontinue: the board fails to come in once after a choice; …&counts=0: what
+    // the repair and the backup hold couldn't be counted; …&one: one note and one line).
+    recoveryState: () => ok(previewProblem),
+    recoveryChoose: (choice) =>
+      new Promise((done, fail) =>
+        setTimeout(() => {
+          if (!previewProblem) return done(null);
+          if (choice === "retry" && params.has("stuck")) return done(structuredClone(previewProblem));
+          if (choice === "restore" && params.has("broken")) return fail("That backup couldn't be put back (disk I/O error).");
+          previewChosen = choice;
+          previewProblem = null;
+          done(null);
+        }, choice === "retry" ? 500 : 900),
+      ),
+    recoveryContinue: () =>
+      params.has("nocontinue") && !previewContinueFailed
+        ? ((previewContinueFailed = true), Promise.reject("The notes couldn’t be opened (disk I/O error)."))
+        : Promise.resolve(previewChosen === "restore" || previewChosen === "empty" || previewChosen === "repair" ? (recover === "damaged" || recover === "failed" ? previewKept : null) : null),
     pickFolder: () => Promise.resolve(window.prompt("Folder for the backups", String(data.settings.backup_dir || "D:\\Backups\\Dobo"))),
     fileSrc: (path) => path,
     languageNow: () =>
       Promise.resolve({
         choice: String(data.settings.language ?? "system"),
-        system: params.get("lang") === "fr" || (!params.get("lang") && /^fr/i.test(navigator.language)) ? "fr" : "en",
+        system: params.get("lang") === "fr" || (!params.get("lang") && /^fr\b/i.test(navigator.language)) ? "fr" : "en",
+        // ?clock=12 previews Windows set to a 12-hour clock.
+        hour12: params.get("clock") === "12",
       }),
     darkModeNow: () => {
       const m = (data.settings.dark_mode ?? {}) as { mode?: string; from?: string; until?: string };
@@ -844,4 +1084,48 @@ function mockBackend(): Backend {
   };
 }
 
-export const backendPromise: Promise<Backend> = inTauri ? tauriBackend() : Promise.resolve(mockBackend());
+/** Told when a change to the notes couldn't be saved (the disk is full or read-only, the notes
+ * file can't be written): the board says so and shows what is really saved, rather than a
+ * change that will be gone at the next start. */
+let saveFailed: ((error: unknown) => void) | null = null;
+export function onSaveFailed(cb: (error: unknown) => void) {
+  saveFailed = cb;
+}
+
+/** The calls that change the notes or the settings. */
+const WRITES = [
+  "createNote",
+  "updateNote",
+  "deleteNote",
+  "reorderNotes",
+  "createItem",
+  "updateItem",
+  "deleteItem",
+  "setSetting",
+  "restore",
+  "setItemLink",
+  "deletePicture",
+  "releasePicture",
+] as const satisfies readonly (keyof Backend)[];
+
+/** Each change that fails (refused, or thrown at once) is told to `onSaveFailed`, then fails as
+ * before for its caller. */
+export function guardWrites(b: Backend): Backend {
+  for (const name of WRITES) {
+    const run = b[name] as (...args: unknown[]) => Promise<unknown>;
+    const told = (e: unknown) => {
+      saveFailed?.(e);
+      return Promise.reject(e);
+    };
+    (b as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
+      try {
+        return run.apply(b, args).catch(told);
+      } catch (e) {
+        return told(e);
+      }
+    };
+  }
+  return b;
+}
+
+export const backendPromise: Promise<Backend> = (inTauri ? tauriBackend() : Promise.resolve(mockBackend())).then(guardWrites);

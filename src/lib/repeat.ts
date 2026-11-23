@@ -16,7 +16,10 @@ const DAY_WORDS: [RegExp, number][] = [
   [/^(fri(day)?s?|vendredis?)$/i, 5],
   [/^(sat(urday)?s?|samedis?)$/i, 6],
 ];
-const DAY_ALT = "sundays?|sun|mondays?|mon|tuesdays?|tues?|wednesdays?|wed|thursdays?|thurs?|fridays?|fri|saturdays?|sat|dimanches?|lundis?|mardis?|mercredis?|jeudis?|vendredis?|samedis?";
+// (Each day's longest form first, so "Thursday" is taken whole; "Thu" is Thursday too.)
+const DAY_ALT = "sundays?|sun|mondays?|mon|tuesdays?|tues?|wednesdays?|wed|thursdays?|thurs?|thu|fridays?|fri|saturdays?|sat|dimanches?|lundis?|mardis?|mercredis?|jeudis?|vendredis?|samedis?";
+// Between days: ",", "and", "&", "et", and ", and" / ", et".
+const DAY_SEP = String.raw`\s*(?:,\s*(?:and|et|&)?|and|&|et)\s*`;
 
 function dayOf(word: string): number | null {
   for (const [re, n] of DAY_WORDS) if (re.test(word)) return n;
@@ -36,11 +39,12 @@ const never = { kind: "never" } as const;
  * weeks"… in a typed line. ("Weekly" alone stays a word: it is often a task's name.) */
 export function findRepeat(text: string): FoundRepeat | null {
   const tries: [RegExp, (m: RegExpMatchArray) => Repeat | null][] = [
-    // every 2 weeks · toutes les 3 semaines · every 10 days · tous les 2 mois
+    // every 2 weeks · toutes les 3 semaines · every 10 days · tous les 2 mois · every other week
     [
-      /\b(?:every|each)\s+(\d{1,2})\s+(days?|weeks?|months?)\b|\btou(?:te)?s\s+les\s+(\d{1,2})\s+(jours|semaines|mois)\b/i,
+      /\b(?:every|each)\s+(\d{1,2}|other)(?:st|nd|rd|th)?\s+(days?|weeks?|months?)\b|\btou(?:te)?s\s+les\s+(\d{1,2})\s+(jours|semaines|mois)\b/i,
       (m) => {
-        const n = Number(m[1] ?? m[3]);
+        // ("Every other week" and "every 2nd week" are every 2 weeks, not the 2nd of the month.)
+        const n = m[1]?.toLowerCase() === "other" ? 2 : Number(m[1] ?? m[3]);
         const unit = (m[2] ?? m[4]).toLowerCase();
         const freq = unit.startsWith("d") || unit.startsWith("j") ? "day" : unit.startsWith("w") || unit.startsWith("s") ? "week" : "month";
         return { freq, interval: Math.max(1, n), days: [], monthday: null, ends: never };
@@ -62,10 +66,10 @@ export function findRepeat(text: string): FoundRepeat | null {
     ],
     // every Monday and Thursday · tous les lundis et jeudis · chaque lundi
     [
-      new RegExp(`\\b(?:every|each|tous\\s+les|chaque)\\s+((?:${DAY_ALT})(?:\\s*(?:,|and|&|et)\\s*(?:${DAY_ALT}))*)\\b`, "i"),
+      new RegExp(`\\b(?:every|each|tous\\s+les|chaque)\\s+((?:${DAY_ALT})(?:${DAY_SEP}(?:${DAY_ALT}))*)\\b`, "i"),
       (m) => {
         const days = m[1]
-          .split(/\s*(?:,|and|&|et)\s*/i)
+          .split(new RegExp(DAY_SEP, "i"))
           .map((w) => dayOf(w.trim()))
           .filter((d): d is number => d != null);
         return days.length ? { freq: "week", interval: 1, days: [...new Set(days)].sort(), monthday: null, ends: never } : null;
@@ -125,35 +129,52 @@ export function firstOccurrence(rule: Repeat, h: number, m: number, now = new Da
   return d;
 }
 
-/** The occurrence after `prev`, same time of day (as the Rust side computes it). */
+/** A day's time as the clock shows it, in milliseconds. A time the clocks skip that night
+ * (02:30 when they go forward) is the first minute after it that exists (03:00), as the Rust
+ * side counts it; one that comes twice is the first. */
+export function wallClock(y: number, mo: number, d: number, h: number, m: number): number {
+  for (let k = 0; k <= 180; k++) {
+    const x = new Date(y, mo, d, h, m + k);
+    const want = new Date(Date.UTC(y, mo, d, h, m + k));
+    if (x.getHours() === want.getUTCHours() && x.getMinutes() === want.getUTCMinutes()) return x.getTime();
+  }
+  return new Date(y, mo, d, h, m).getTime();
+}
+
+/** The occurrence after `prev`, at the repeat's own time of day (else the time of `prev`), as
+ * the Rust side computes it. */
 export function nextOccurrence(rule: Repeat, prev: number): number | null {
   const p = new Date(prev);
   const n = Math.max(1, rule.interval || 1);
-  const d = new Date(p);
+  const own = /^(\d{1,2}):(\d{2})$/.exec(rule.at ?? "");
+  const [h, m] = own ? [Number(own[1]), Number(own[2])] : [p.getHours(), p.getMinutes()];
+  // (The day is counted at noon: no clock change moves it to another date.)
+  const d = new Date(p.getFullYear(), p.getMonth(), p.getDate(), 12);
+  const at = (x: Date) => wallClock(x.getFullYear(), x.getMonth(), x.getDate(), h, m);
   switch (rule.freq) {
     case "day":
       d.setDate(d.getDate() + n);
-      return d.getTime();
+      return at(d);
     case "weekday":
       do d.setDate(d.getDate() + 1);
       while (d.getDay() === 0 || d.getDay() === 6);
-      return d.getTime();
+      return at(d);
     case "week": {
       const days = rule.days?.length ? rule.days : [p.getDay()];
       const start = weekStart(p);
       for (let k = 1; k <= 7 * n + 7; k++) {
-        const c = new Date(p);
+        const c = new Date(d);
         c.setDate(c.getDate() + k);
         const weeks = Math.round((weekStart(c) - start) / (7 * 86400000));
-        if (weeks % n === 0 && days.includes(c.getDay())) return c.getTime();
+        if (weeks % n === 0 && days.includes(c.getDay())) return at(c);
       }
       return null;
     }
     case "month": {
       const want = rule.monthday ?? p.getDate();
-      const c = new Date(p.getFullYear(), p.getMonth() + n, 1, p.getHours(), p.getMinutes());
+      const c = new Date(p.getFullYear(), p.getMonth() + n, 1, 12);
       c.setDate(Math.min(want, daysInMonth(c.getFullYear(), c.getMonth())));
-      return c.getTime();
+      return at(c);
     }
   }
 }

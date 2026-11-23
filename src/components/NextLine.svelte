@@ -8,7 +8,14 @@
   import { t } from "../lib/i18n.svelte";
   import { arrive, easeHeight, fadeQuick, glideTo, leave } from "../lib/motion";
 
-  let next = $derived(store.timed.slice(0, 3));
+  // (The same three as before stay the same list: the entries are measured for their glide only
+  // when what shows changes, not each time any line changes.)
+  let shown: typeof store.timed = [];
+  let next = $derived.by(() => {
+    const n = store.timed.slice(0, 3);
+    if (n.length === shown.length && n.every((x, i) => x === shown[i])) return shown;
+    return (shown = n);
+  });
 </script>
 
 <div class="wrap" use:easeHeight>
@@ -16,6 +23,7 @@
     {#if next.length}
       <div class="then" in:arrive={{ delay: 110, duration: 240, y: -3 }} out:leave={{ duration: 110, y: -3 }}>
         <span class="lead">{t("Next")}</span>
+        <span class="list">
         {#each next as it (it.id)}
           {@const late = (it.due_at ?? 0) < store.now.getTime()}
           <span class="entry" data-tip={it.text} animate:glideTo in:arrive={{ delay: 60, duration: 220, y: 0 }} out:fadeQuick={{ duration: 160 }}>
@@ -23,6 +31,7 @@
             <span class="text">{it.text}</span>
           </span>
         {/each}
+        </span>
       </div>
     {/if}
   </div>
@@ -48,8 +57,20 @@
     gap: var(--s5);
     padding: var(--s3) var(--s6) 0 calc(var(--s6) + var(--s1));
     font-size: var(--t-md);
-    overflow: hidden;
     white-space: nowrap;
+  }
+  /* Whole entries only: one that can't show its time and a few words goes onto a second line,
+     which never shows (never a time cut in half). */
+  .list {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    line-height: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--s5);
+    overflow: hidden;
   }
   .lead {
     font-family: var(--serif);
@@ -58,12 +79,16 @@
     color: var(--muted);
     flex-shrink: 0;
   }
+  /* At least its time and a few words (a narrower panel shows fewer entries); wider, up to its
+     whole text. */
   .entry {
     display: inline-flex;
     align-items: baseline;
     gap: var(--s2);
+    flex: 1 0 auto;
+    width: 10em;
+    max-width: max-content;
     min-width: 0;
-    flex-shrink: 1;
     overflow: hidden;
   }
   .time {

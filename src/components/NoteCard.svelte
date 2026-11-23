@@ -8,7 +8,7 @@
   import IdeaRow from "./IdeaRow.svelte";
   import AddLine from "./AddLine.svelte";
   import NotePictures from "./NotePictures.svelte";
-  import { store } from "../lib/store.svelte";
+  import { store, NO_PICTURES } from "../lib/store.svelte";
   import { itemDrag } from "../lib/itemdrag.svelte";
   import { fileDrop } from "../lib/filedrop.svelte";
   import { snap } from "../lib/snap";
@@ -17,25 +17,35 @@
   import type { Item, Note } from "../lib/types";
   import { around, t } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
+  import type { Point } from "../lib/contextmenu";
 
   let {
     note,
     items,
     tone,
     menuOpen,
+    menuAt = null,
     lifted,
+    tilt = -2.5,
     onMenu,
     onGrab,
     onWiden = null,
+    width = null,
   }: {
     note: Note;
     items: Item[];
     tone: Tone;
     menuOpen: boolean;
+    /** Its menu opened by a right-click: where (else under its ⋯). */
+    menuAt?: Point | null;
     lifted: boolean;
+    /** While lifted: its tilt (deg), swaying with the carry. */
+    tilt?: number;
     onMenu: (open: boolean) => void;
     onGrab: (e: PointerEvent) => void;
     onWiden?: ((e: PointerEvent) => void) | null;
+    /** Its width on the board (its pictures show from their thumbs when sharp enough). */
+    width?: number | null;
   } = $props();
 
   let lined = $derived(note.paper === "ruled" || note.paper === "grid");
@@ -49,7 +59,7 @@
   let ideas = $derived(items.filter((i) => i.kind === "idea"));
   // (The quick tour's lines live in the Inbox strip, never in a note.)
   let open = $derived(tasks.filter((t) => t.done_at == null).length);
-  let pictures = $derived(store.picturesByNote.get(note.id) ?? []);
+  let pictures = $derived(store.picturesByNote.get(note.id) ?? NO_PICTURES);
   let meta = $derived(
     [tasks.length ? t("{n} to do", { n: open }) : "", ideas.length ? t("{n} ideas", { n: ideas.length }) : ""].filter(Boolean).join(" · "),
   );
@@ -134,6 +144,7 @@
   data-drop-note={note.id}
   bind:this={cardEl}
   style:--rule={tone.corner}
+  style:--lift-tilt={lifted ? `${tilt.toFixed(2)}deg` : null}
 >
   <div class="lift-shadow" aria-hidden="true"></div>
   <div class="peel" style:--peel={tone.corner} aria-hidden="true"></div>
@@ -144,7 +155,7 @@
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="head" class:editing={editingTitle} onpointerdown={grab} ondblclick={startTitle}>
-    <button class="dot" aria-label={t("Note colour and options")} onclick={() => onMenu(!menuOpen)}><span style:background={tone.dot}></span></button>
+    <button class="dot" aria-label={t("Colour and options for “{name}”", { name: noteTitle(note) })} data-tip={t("Note colour and options")} onclick={() => onMenu(!menuOpen)}><span style:background={tone.dot}></span></button>
     {#if editingTitle}
       <input
         class="title-input"
@@ -166,8 +177,8 @@
     {/if}
     <span class="meta">{meta}{note.folded ? ` · ${t("folded")}` : ""}</span>
     <span class="end">
-    <button class="more" class:shown={menuOpen} aria-label={t("Note menu")} aria-expanded={menuOpen} onclick={() => onMenu(!menuOpen)}><Icon name="more" size={16} /></button>
-    <button class="chev" class:shown={note.folded} aria-label={note.folded ? t("Unfold note") : t("Fold note to its title")} aria-expanded={!note.folded} data-tip={note.folded ? t("Unfold") : t("Fold to its title")} data-tip-keys="F" onclick={toggleFold}
+    <button class="more" class:shown={menuOpen} aria-haspopup="dialog" aria-label={t("Menu for “{name}”", { name: noteTitle(note) })} data-tip={t("Note menu")} aria-expanded={menuOpen} onclick={() => onMenu(!menuOpen)}><Icon name="more" size={16} /></button>
+    <button class="chev" class:shown={note.folded} aria-label={note.folded ? t("Unfold “{name}”", { name: noteTitle(note) }) : t("Fold “{name}” to its title", { name: noteTitle(note) })} aria-expanded={!note.folded} data-tip={note.folded ? t("Unfold") : t("Fold to its title")} data-tip-keys="F" onclick={toggleFold}
       ><Icon name={note.folded ? "chev-down" : "chev-up"} size={15} stroke={2.2} /></button
     >
     </span>
@@ -184,7 +195,7 @@
     </ul>
   {/if}
 
-  <div use:snap={lined}><NotePictures {pictures} /></div>
+  <div use:snap={lined}><NotePictures {pictures} {width} /></div>
 
   {#if ideas.length}
     <div class="ideas" transition:fold class:alone={!tasks.length && !pictures.length} style:--tint={tone.bg} style:--idea-ink={tone.ink} style:--corner={tone.corner}>
@@ -204,7 +215,7 @@
   {/if}
 
   {#if menuOpen}
-    <NoteMenu {note} onClose={() => onMenu(false)} />
+    <NoteMenu {note} at={menuAt} onClose={() => onMenu(false)} />
   {/if}
 </article>
 
@@ -219,9 +230,13 @@
     transform-origin: 50% 30%;
     transition: transform 0.18s var(--ease-out), border-color 0.15s;
   }
+  /* (The tilt is set on the card alone, a property its contents don't inherit: a carry restyles
+     the card on each move, not everything in it. Its own layer while lifted: it is drawn once,
+     then only moved and turned.) */
   .card.lifted {
-    transform: rotate(var(--tilt, -2.5deg)) scale(1.04);
+    transform: rotate(var(--lift-tilt)) scale(1.04);
     transition: transform 0.12s linear;
+    will-change: transform;
   }
   .card.drop {
     border-color: var(--ink);
@@ -536,13 +551,19 @@
   .lined .tasks {
     padding: 0 var(--s2);
   }
+  /* Half a line clear of the last task, and the tint starts half a line above the first idea:
+     one line in all, so the 24 px rhythm holds (the band's own rules start with its ideas). */
   .lined .ideas {
     gap: 0;
-    padding: 0 var(--s4);
+    margin-top: 12px;
+    padding: 12px var(--s4) 0;
     background-image: var(--lines);
+    background-position: 0 12px;
   }
   .lined .ideas.alone {
     margin-top: 0;
+    padding-top: 0;
+    background-position: 0 0;
   }
   .lined .empty {
     padding-top: 0;

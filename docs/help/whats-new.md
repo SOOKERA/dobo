@@ -1,5 +1,36 @@
 # What's new
 
+## 1.1.0
+
+Dobo 1.1.0 speaks French from Setup on, takes even better care of your notes, and fits in more closely with Windows.
+
+### Highlights
+
+- **Setup in French.** Setup now has **English | Français** at the top (English first), and Dobo opens in the language you pick.
+- **If your notes don’t open,** Dobo shows a calm recovery screen instead of an error: **Use the repaired notes**, or put back the newest backup. The damaged file is always kept aside, never deleted.
+- **Right-click menus of Dobo’s own** on notes and lines (or **Shift+F10** and the Menu key), with **Copy as text** to paste a whole note anywhere.
+- **Grouped reminders.** When several ring at once, or came due while the PC slept, one notification holds them all: “3 reminders”, with **Open Dobo**.
+- **Your Windows clock.** Times show as “15:00” or “3:00 PM”, the way Windows does, and follow it the moment you change it.
+- **Work hours across midnight.** A night shift from 22:00 to 06:00 switches between Work and Personal at the right times, and its look back covers the whole night.
+- **Lighter pictures.** The board shows smaller copies of your pictures, so it opens faster and uses far less memory. The viewer still shows the original, and GIFs keep moving.
+- **Files on network shares.** A file in a shared folder or on a NAS asks once for that computer (**Allow**), then opens like any other.
+- **Windows Sticky Notes asks first.** Nothing comes in by itself any more: “Bring in your 5 Windows Sticky Notes?”, with **Import** or **Not now**.
+- **The true logo,** the textured note, in the header, Setup, the taskbar and Start.
+- **A soft crossfade** when you change the style or the theme, light and dark included.
+- **The terms in French,** a courtesy translation with the English original one click away.
+
+### Also
+
+- **Backups** come in kinds: daily, made by hand, before a restore, and a new one before each update. Each kind is kept apart, so the ones you make never push out the daily ones. And Dobo starts faster.
+- **Steps** stay quiet while their task is ticked.
+- **Repeats** keep their time when the clocks change.
+- **Keyboard and screen readers:** the arrows move between notes as they sit on screen, the hours ruler works as a slider, and buttons say which note or line they act on.
+- **Many fixes,** among them “every Mon and Thu” ringing on Thursdays too, “tonight” in the evening and “at 3” in the afternoon.
+
+### Going back to 1.0.0
+
+If you put Dobo 1.0.0 back, it rings the steps of ticked tasks again, and keeps only 14 backups in all (it deletes the oldest ones beyond that).
+
 ## 1.0.0
 
 The first release of Dobo: tasks and ideas on a board of notes, for Windows, in English and French.

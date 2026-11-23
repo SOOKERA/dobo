@@ -5,7 +5,10 @@
 //! Windows: real toasts with buttons. Each button opens a `ztodo:` link, which Windows hands
 //! to Dobo (the running one gets it through the single-instance plugin), so the buttons work
 //! even later from the notification centre. Dobo registers its name/icon (AppUserModelID)
-//! and the `ztodo:` link for the current user at each start.
+//! and the `ztodo:` link for the current user at start, when it may (`may_take_link`): the
+//! installed copy always; any other (a portable copy, a development build) only when no copy has
+//! it yet or the one that has it is gone, so a portable copy run once never takes the links of
+//! the installed one's notifications.
 //! Linux: notifications with actions where the desktop supports them. macOS: plain
 //! notifications; the Now card in the panel has the buttons.
 
@@ -120,33 +123,60 @@ mod imp {
         )
     }
 
-    pub fn show(n: &Notice) {
-        let xml = xml(n);
-        let tag = n.tag.clone();
-        std::thread::spawn(move || unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let r = (|| -> windows::core::Result<()> {
-                let doc = XmlDocument::new()?;
-                doc.LoadXml(&HSTRING::from(xml.as_str()))?;
-                let toast = ToastNotification::CreateToastNotification(&doc)?;
-                toast.SetTag(&HSTRING::from(tag.as_str()))?;
-                toast.SetGroup(&HSTRING::from(GROUP))?;
-                ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?.Show(&toast)
-            })();
-            if let Err(e) = r {
-                eprintln!("Couldn't show the notification: {e}");
-            }
+    enum Job {
+        Show { xml: String, tag: String },
+        Clear { tag: String },
+    }
+
+    /// One thread shows and clears the notifications, in the order asked: a reminder answered
+    /// right as it rang never has its notification shown after it was cleared (one thread each
+    /// could run the other way round).
+    fn send(job: Job) {
+        static WORKER: OnceLock<std::sync::mpsc::Sender<Job>> = OnceLock::new();
+        let tx = WORKER.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            std::thread::spawn(move || {
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                }
+                for job in rx {
+                    run(job);
+                }
+            });
+            tx
         });
+        let _ = tx.send(job);
+    }
+
+    fn run(job: Job) {
+        match job {
+            Job::Show { xml, tag } => {
+                let r = (|| -> windows::core::Result<()> {
+                    let doc = XmlDocument::new()?;
+                    doc.LoadXml(&HSTRING::from(xml.as_str()))?;
+                    let toast = ToastNotification::CreateToastNotification(&doc)?;
+                    toast.SetTag(&HSTRING::from(tag.as_str()))?;
+                    toast.SetGroup(&HSTRING::from(GROUP))?;
+                    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?.Show(&toast)
+                })();
+                if let Err(e) = r {
+                    eprintln!("Couldn't show the notification: {e}");
+                }
+            }
+            Job::Clear { tag } => {
+                if let Ok(h) = ToastNotificationManager::History() {
+                    let _ = h.RemoveGroupedTagWithId(&HSTRING::from(tag.as_str()), &HSTRING::from(GROUP), &HSTRING::from(AUMID));
+                }
+            }
+        }
+    }
+
+    pub fn show(n: &Notice) {
+        send(Job::Show { xml: xml(n), tag: n.tag.clone() });
     }
 
     pub fn clear(tag: &str) {
-        let tag = tag.to_string();
-        std::thread::spawn(move || unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            if let Ok(h) = ToastNotificationManager::History() {
-                let _ = h.RemoveGroupedTagWithId(&HSTRING::from(tag.as_str()), &HSTRING::from(GROUP), &HSTRING::from(AUMID));
-            }
-        });
+        send(Job::Clear { tag: tag.to_string() });
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -169,17 +199,31 @@ mod imp {
         }
     }
 
-    /// The name and icon shown on notifications, and the `ztodo:` link the buttons use.
+    /// The name and icon shown on notifications, and the `ztodo:` link the buttons use, when this
+    /// copy may have them (`may_take_link`).
     pub fn register(icon_png: &std::path::Path) {
         let Ok(exe) = std::env::current_exe() else { return };
-        let exe = exe.to_string_lossy().to_string();
-        let base = format!(r"Software\Classes\AppUserModelId\{AUMID}");
-        set(&base, Some("DisplayName"), crate::APP_NAME);
-        set(&base, Some("IconUri"), &icon_png.to_string_lossy());
-        let proto = format!(r"Software\Classes\{SCHEME}");
-        set(&proto, None, &format!("URL:{}", crate::APP_NAME));
-        set(&proto, Some("URL Protocol"), "");
-        set(&format!(r"{proto}\shell\open\command"), None, &format!("\"{exe}\" \"%1\""));
+        register_under(r"Software\Classes", icon_png, &exe, crate::paths::is_installed());
+    }
+
+    /// `register` under `classes` (the current user's Software\Classes; a test key in tests).
+    /// Returns whether this copy took the link.
+    pub(super) fn register_under(classes: &str, icon_png: &std::path::Path, exe: &std::path::Path, installed: bool) -> bool {
+        let base = format!(r"{classes}\AppUserModelId\{AUMID}");
+        let proto = format!(r"{classes}\{SCHEME}");
+        let command = format!(r"{proto}\shell\open\command");
+        let mine = super::may_take_link(crate::install::reg::get(&command, None).as_deref(), exe, installed);
+        // (The name the notifications show is the same for every copy: set when missing.)
+        if mine || crate::install::reg::get(&base, Some("DisplayName")).is_none() {
+            set(&base, Some("DisplayName"), crate::APP_NAME);
+            set(&base, Some("IconUri"), &icon_png.to_string_lossy());
+        }
+        if mine {
+            set(&proto, None, &format!("URL:{}", crate::APP_NAME));
+            set(&proto, Some("URL Protocol"), "");
+            set(&command, None, &format!("\"{}\" \"%1\"", exe.display()));
+        }
+        mine
     }
 
     #[cfg(test)]
@@ -263,6 +307,22 @@ pub fn register(icon_png: &std::path::Path) {
     imp::register(icon_png);
 }
 
+/// May this copy (`exe`) take the `ztodo:` link, now `current` (the command registered, if any)?
+/// The installed copy always. Any other copy only when there is none, or the copy it names is gone
+/// (deleted, or a build that moved): never from a copy that is still there, so running a portable
+/// copy once leaves the installed one's notifications working.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn may_take_link(current: Option<&str>, exe: &std::path::Path, installed: bool) -> bool {
+    if installed {
+        return true;
+    }
+    let Some(command) = current.filter(|c| !c.trim().is_empty()) else { return true };
+    match crate::install::entry_program(command) {
+        Some(program) => !program.is_file() || crate::install::same_folder(&program.to_string_lossy(), exe),
+        None => true,
+    }
+}
+
 #[cfg(not(windows))]
 pub fn register(_icon_png: &std::path::Path) {}
 
@@ -289,5 +349,50 @@ mod token_tests {
         assert_eq!(std::fs::read_to_string(dir.join("link-secret")).unwrap(), t);
         assert_ne!(random_hex(), random_hex());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    /// The installed copy always takes the link; another copy only when none is there, or the
+    /// copy it names is gone.
+    #[test]
+    fn a_portable_copy_never_takes_the_installed_ones_link() {
+        let here = std::env::current_exe().unwrap();
+        let other = std::path::Path::new(r"Z:\Gone\Dobo.exe");
+        let installed = format!("\"{}\" \"%1\"", here.display());
+        let portable = std::path::Path::new(r"E:\Dobo\Dobo.exe");
+        assert!(may_take_link(None, portable, false), "none yet");
+        assert!(may_take_link(Some(""), portable, false), "empty");
+        assert!(!may_take_link(Some(&installed), portable, false), "another copy's, still there");
+        assert!(may_take_link(Some(&installed), &here, false), "its own (again)");
+        assert!(may_take_link(Some(&format!("\"{}\" \"%1\"", other.display())), portable, false), "the copy named is gone");
+        assert!(may_take_link(Some(&installed), portable, true), "the installed copy always");
+        assert!(may_take_link(Some("nonsense"), portable, false));
+    }
+
+    /// In the registry (a test key of its own, never the real one): a portable copy leaves the
+    /// installed one's link as it is, the installed copy takes it back.
+    #[cfg(windows)]
+    #[test]
+    fn the_link_in_the_registry_follows_the_rule() {
+        use crate::install::reg;
+        // (Deleted when the test ends, also when it fails.)
+        let key = reg::TestKey::new("notify");
+        let classes = format!(r"{}\Classes", key.0);
+        let command = format!(r"{classes}\{SCHEME}\shell\open\command");
+        let icon = std::path::Path::new(r"C:\icon.png");
+        let installed = std::env::current_exe().unwrap();
+        let portable = std::path::Path::new(r"E:\Dobo\Dobo.exe");
+        assert!(imp::register_under(&classes, icon, portable, false), "none yet: the portable copy takes it");
+        assert_eq!(reg::get(&command, None), Some(format!("\"{}\" \"%1\"", portable.display())));
+        assert!(imp::register_under(&classes, icon, &installed, true), "the installed copy takes it over");
+        assert!(!imp::register_under(&classes, icon, portable, false), "and keeps it");
+        assert_eq!(reg::get(&command, None), Some(format!("\"{}\" \"%1\"", installed.display())));
+        assert_eq!(reg::get(&format!(r"{classes}\AppUserModelId\{AUMID}"), Some("DisplayName")).as_deref(), Some(crate::APP_NAME));
+        drop(key);
+        assert_eq!(reg::get(&command, None), None, "the test's key is gone");
     }
 }

@@ -1,6 +1,6 @@
 # Keyboard shortcuts
 
-The whole board works from the keyboard, and most things have a gesture too. These are the keys out of the box. The three marked "changeable" can be changed in **Settings › Keyboard** (**Change**, then press the new keys; **Reset** goes back).
+The whole board works from the keyboard, and most things have a gesture too. These are the keys out of the box. The three marked "changeable" can be changed in **Settings › Keyboard** (**Change**, then press the new keys; **Reset** goes back). A new one needs Ctrl, Alt or Win (Shift alone only with a key that never types, such as F1 to F24), and can't be Shift+F10, Windows' menu key.
 
 ## From anywhere
 
@@ -17,7 +17,7 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Shift+Enter | Add the line as an idea |
 | ! at the end of a line | Make it a deadline |
 | # and a name | Send the line to a note (↑ / ↓ choose, Space completes) |
-| Ctrl+F · / | Search (Ctrl+F is changeable; in Settings, it searches the settings) |
+| Ctrl+F · / | Search (Ctrl+F is changeable; in Settings, it searches the settings; / does nothing in Tidy, the Archive, the picture viewer and New note, where Ctrl+F closes them first) |
 | Ctrl+Shift+S | Style (again: close it) |
 | Ctrl+Shift+P · Ctrl+, | Settings (again: close them) |
 | F1 | The ? menu: the tour, keys, Archive, Help (again: Settings › Help) |
@@ -32,8 +32,8 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Keys | What it does |
 |---|---|
 | Down (in the empty entry line) | Step onto the board |
-| Up / Down | Move between lines (the Inbox strip is a stop too) |
-| Left / Right | Move between notes |
+| Up / Down | Move between lines (the Inbox strip is a stop too); past a note's last line, the note right below it |
+| Left / Right | Move to the note in the next column, level with the line |
 | Enter (on the Inbox strip) | Open or fold it |
 | Space | Tick the task |
 | Enter · F2 | Edit the line (on a note's title: rename it) |
@@ -41,8 +41,11 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Delete | Delete the line |
 | Ctrl+Up / Ctrl+Down | Move the line |
 | F | Fold or unfold the note (on the Inbox strip: fold or open it) |
+| Shift+F10 · Menu key | The note's or the line's menu, as its **⋯** (an idea's: Copy text, Make it a task, Delete) |
 | Page Up / Page Down · Home / End | Scroll the board |
 | Esc | Leave the board, then hide |
+
+Opening a view or a menu (Search, Settings, Style, a note's or a line's menu, from its **⋯**, a right-click or Shift+F10) only puts the selected line aside: once it closes, the line is selected again and the arrows go on from there. Tab to a button on the board lets it go.
 
 ## Tidy
 
@@ -51,7 +54,7 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | T · I | A task · an idea |
 | 1–9 | Pick a note |
 | Up / Down | Where in the note |
-| Enter | Put it away |
+| Enter | Put it away (with the keyboard on a button or a choice, such as Close or another note, Enter presses that one) |
 | L | Keep for later |
 | D | Delete |
 
@@ -61,10 +64,13 @@ The whole board works from the keyboard, and most things have a gesture too. The
 |---|---|
 | Up / Down, Enter, Esc | Search: move, jump to it, close |
 | Left / Right, Esc | Picture viewer: browse, close |
+| Left / Right (Shift), Home / End, Enter, Esc | Pick on today's hours: 15 minutes (an hour) earlier or later, first / last hour, set, close |
+| Up / Down, Page Up / Page Down, Home / End, digits, Left / Right, A / P, Enter | A time in Settings (My day, work hours, the tidy reminder, dark mode by hours): one more or less, 3 hours or 10 minutes, the first or last, type it ("930" is 09:30), between hours, minutes and AM/PM, AM or PM, save now (it also saves when you stop or leave it) |
+| Up / Down, Page Up / Page Down, Home / End, digits, Left / Right, Enter | A repeat's **Last day** (task menu › Repeat › Ends › On a date): one more or less, a week, a quarter or 5 years, the first or last, type it ("19", "3" for March, "2027"), between day, month and year, save now (it also saves when you stop or leave it) |
 | → or Enter, ←, Esc | Quick tour: next, back, close |
 | Shift (while dropping on the hours) | The exact minute instead of the quarter hour |
 | Esc (while carrying a line) | Send it back |
-| Arrows · Home / End, Enter or Space | Move between cards, colours and choices in Style and Settings; pick |
+| Arrows · Home / End, Enter or Space | Move between cards, colours and choices (in Style, Settings, Tidy, the welcome window, New note, a note's menu and a task's reminder kinds); Enter or Space picks. In a row of options, such as Light · Dark, the arrows only move, so nothing changes on the way: Space or Enter picks, and Tab goes on past the row |
 | F2 · double-click | Rename your own style, theme or mix |
 
 ## Mouse and gestures
@@ -88,8 +94,10 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Drag the docked panel's inner edge | Change its width |
 | Drag the top of any view (floating) | Move the window |
 | Ctrl + wheel | Note size |
+| Right-click a note or a line (or press and hold it, with a finger or a pen) | Its menu, where you click: the same as its **⋯** (an idea's: Copy text, Make it a task, Delete) |
 | Right-click an empty spot of the board | Change background…, Archived notes…, Take the tour |
 | Right-click a colour in a note's menu | Change that colour |
+| Right-click selected words or a link | Copy, or Copy link (in a field: cut, copy, paste) |
 | Double-click a note's picture | Open the picture viewer |
 | Paste with the mouse over a note | Add the picture to that note |
 | Drop a picture or a file on a note | Keep it there |

@@ -453,7 +453,9 @@ Function PageLeaveReinstall
       ; [APP] end
 
       ; Other errors? show generic error message and return to select un/reinstall page
-      MessageBox MB_ICONEXCLAMATION "$(unableToUninstall)"
+      ; [APP] In the language the window shows (installer/ui.nsh: AppUnableToUninstall).
+      Call AppUnableToUninstall
+      ; [APP] end
       Abort
     ${EndIf}
 
@@ -555,6 +557,11 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
+  ; [APP] English until the window's language choice says otherwise, never Windows' language
+  ; (installer/ui.nsh: APP_LANG_INIT; a silent or passive run keeps the language saved before).
+  !insertmacro APP_LANG_INIT
+  ; [APP] end
+
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY
   !endif
@@ -643,17 +650,22 @@ Section WebView2
     ${If} $UpdateMode <> 1
       !if "${INSTALLWEBVIEW2MODE}" == "downloadBootstrapper"
         Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
-        DetailPrint "$(webview2Downloading)"
+        ; [APP] The lines under the bar in the language the window shows (AppT, installer/ui.nsh).
+        !insertmacro AppT $AppTx webview2Downloading
+        DetailPrint $AppTx
         NSISdl::download "https://go.microsoft.com/fwlink/p/?LinkId=2124703" "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         Pop $0
         ${If} $0 == "success"
-          DetailPrint "$(webview2DownloadSuccess)"
+          !insertmacro AppT $AppTx webview2DownloadSuccess
+          DetailPrint $AppTx
         ${Else}
-          DetailPrint "$(webview2DownloadError)"
+          !insertmacro AppT $AppTx webview2DownloadError
+          DetailPrint $AppTx
           ; [APP] Said under the bar, with Close (installer/ui.nsh: AppFail).
-          !insertmacro AppFail "$(webview2AbortError)"
+          !insertmacro AppT $AppTx webview2AbortError
+          !insertmacro AppFail $AppTx
           ; [APP] end
-          Abort "$(webview2AbortError)"
+          Abort $AppTx
         ${EndIf}
         StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         Goto install_webview2
@@ -662,7 +674,8 @@ Section WebView2
       !if "${INSTALLWEBVIEW2MODE}" == "embedBootstrapper"
         Delete "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         File "/oname=$TEMP\MicrosoftEdgeWebview2Setup.exe" "${WEBVIEW2BOOTSTRAPPERPATH}"
-        DetailPrint "$(installingWebview2)"
+        !insertmacro AppT $AppTx installingWebview2
+        DetailPrint $AppTx
         StrCpy $6 "$TEMP\MicrosoftEdgeWebview2Setup.exe"
         Goto install_webview2
       !endif
@@ -670,7 +683,8 @@ Section WebView2
       !if "${INSTALLWEBVIEW2MODE}" == "offlineInstaller"
         Delete "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
         File "/oname=$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe" "${WEBVIEW2INSTALLERPATH}"
-        DetailPrint "$(installingWebview2)"
+        !insertmacro AppT $AppTx installingWebview2
+        DetailPrint $AppTx
         StrCpy $6 "$TEMP\MicrosoftEdgeWebView2RuntimeInstaller.exe"
         Goto install_webview2
       !endif
@@ -678,17 +692,21 @@ Section WebView2
       Goto webview2_done
 
       install_webview2:
-        DetailPrint "$(installingWebview2)"
+        !insertmacro AppT $AppTx installingWebview2
+        DetailPrint $AppTx
         ; $6 holds the path to the webview2 installer
         ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
         ${If} $1 = 0
-          DetailPrint "$(webview2InstallSuccess)"
+          !insertmacro AppT $AppTx webview2InstallSuccess
+          DetailPrint $AppTx
         ${Else}
-          DetailPrint "$(webview2InstallError)"
+          !insertmacro AppT $AppTx webview2InstallError
+          DetailPrint $AppTx
           ; [APP] Said under the bar, with Close (installer/ui.nsh: AppFail).
-          !insertmacro AppFail "$(webview2AbortError)"
+          !insertmacro AppT $AppTx webview2AbortError
+          !insertmacro AppFail $AppTx
           ; [APP] end
-          Abort "$(webview2AbortError)"
+          Abort $AppTx
         ${EndIf}
       webview2_done:
     ${EndIf}
@@ -697,7 +715,8 @@ Section WebView2
       ${VersionCompare} "${MINIMUMWEBVIEW2VERSION}" "$4" $R0
       ${If} $R0 = 1
         update_webview:
-          DetailPrint "$(installingWebview2)"
+          !insertmacro AppT $AppTx installingWebview2
+          DetailPrint $AppTx
           ${If} ${RunningX64}
             ReadRegStr $R1 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate" "path"
           ${Else}
@@ -711,9 +730,11 @@ Section WebView2
             ; Modified from "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft EdgeWebView\ModifyPath"
             ExecWait `"$R1" /install appguid=${WEBVIEW2APPGUID}&needsadmin=true` $1
             ${If} $1 = 0
-              DetailPrint "$(webview2InstallSuccess)"
+              !insertmacro AppT $AppTx webview2InstallSuccess
+              DetailPrint $AppTx
             ${Else}
-              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE "$(webview2InstallError)" IDIGNORE ignore IDRETRY update_webview
+              !insertmacro AppT $AppTx webview2InstallError
+              MessageBox MB_ICONEXCLAMATION|MB_ABORTRETRYIGNORE $AppTx IDIGNORE ignore IDRETRY update_webview
               Quit
               ignore:
             ${EndIf}
@@ -880,7 +901,10 @@ Function un.onInit
     !insertmacro MULTIUSER_UNINIT
   !endif
 
-  !insertmacro MUI_UNGETLANGUAGE
+  ; [APP] The language Setup ran in, or English; never a language dialog (installer/ui.nsh:
+  ; APP_UN_LANG_INIT, which is MUI_UNGETLANGUAGE for an app without French).
+  !insertmacro APP_UN_LANG_INIT
+  ; [APP] end
 
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}

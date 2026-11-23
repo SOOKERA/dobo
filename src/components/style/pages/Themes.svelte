@@ -11,6 +11,7 @@
   import { OUR_THEMES, background, sameLook, themeShownName, type Look, type Ref, type ThemeRef } from "../../../lib/looks";
   import { glideRing } from "../../../lib/motion";
   import { t, tMaybe } from "../../../lib/i18n.svelte";
+  import { shownHHMM } from "../../../lib/time";
 
   let { go }: { go: (p: PanelPage) => void } = $props();
 
@@ -30,7 +31,7 @@
     const dm = look.darkMode;
     const lightName = styleName(look.board.light, look.board.lightFrom);
     const darkName = look.board.dark ? styleName(look.board.dark, look.board.darkFrom) : lightName;
-    if (dm.mode === "hours") return look.dark ? t("dark until {time}, then {name}", { time: dm.until, name: lightName }) : t("light until {time}, then {name}", { time: dm.from, name: darkName });
+    if (dm.mode === "hours") return look.dark ? t("dark until {time}, then {name}", { time: shownHHMM(dm.until), name: lightName }) : t("light until {time}, then {name}", { time: shownHHMM(dm.from), name: darkName });
     if (dm.mode === "windows") return look.dark ? t("follows Windows · dark now, {name}", { name: darkName }) : t("follows Windows · light now, {name}", { name: lightName });
     return dm.mode === "dark" ? t("always dark · {name}", { name: darkName }) : t("always light · {name}", { name: lightName });
   });

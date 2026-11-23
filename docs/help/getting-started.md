@@ -12,8 +12,8 @@ The first time, Dobo opens a small welcome window in the middle of your screen. 
 
    Click **Continue**. You can change this any time in **Settings › Window** (see [Docked or floating](docked-and-floating.md)).
 2. **A few keys to remember**: **Ctrl+Shift+Space** opens or hides Dobo and **Ctrl+Shift+D** is the quick dump into the Inbox: these two work from anywhere. **Ctrl+F** searches, inside Dobo. Change them in **Settings › Keyboard**.
-3. **Start with Windows** is on. Reminders only ring while Dobo runs, and it waits quietly in the tray.
-4. **Windows Sticky Notes**: if you use them, Dobo has already copied them in on this first start, without asking ("Your 4 sticky notes are already on the board."). If none came in, **Bring them in** tries again. Dobo reads a copy of Sticky Notes' database on this PC, so your Sticky Notes stay as they are and nothing leaves your PC. Later, it's in **Settings › Start › Bring in the notes from Windows Sticky Notes again**.
+3. **Start Dobo with Windows** is on. Reminders only ring while Dobo runs, and it waits quietly in the tray.
+4. **Windows Sticky Notes**: if you use them, the welcome asks "Bring in your 4 Windows Sticky Notes?". **Import** copies them onto the board (a note each; a one-line one goes into the Inbox). **Not now** leaves them, and Dobo doesn't ask again. Nothing is brought in without asking. Dobo reads a copy of Sticky Notes' database on this PC, so your Sticky Notes stay as they are and nothing leaves your PC. Later, it's in **Settings › Start › Bring in the notes from Windows Sticky Notes**. With no sticky notes on this PC, this part isn't shown.
 
 Click **Start**. The welcome window closes and Dobo goes to its place.
 

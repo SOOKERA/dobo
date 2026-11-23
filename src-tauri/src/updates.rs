@@ -84,7 +84,7 @@ pub fn verify(m: &Manifest) -> Result<(), String> {
 }
 
 fn verify_with(key: &VerifyingKey, m: &Manifest) -> Result<(), String> {
-    let refused = || tr!("This update isn't signed by Dobo's publisher, so it wasn't installed.", "Cette mise à jour n’est pas signée par l’éditeur de Dobo : elle n’a pas été installée.");
+    let refused = || tr!("This update isn’t signed by Dobo’s publisher, so it wasn’t installed.", "Cette mise à jour n’est pas signée par l’éditeur de Dobo : elle n’a pas été installée.");
     // A plain version and a real checksum (both end up in file names and links).
     if parse_version(&m.version).is_none() || m.sha256.len() != 64 || !m.sha256.chars().all(|c| c.is_ascii_hexdigit()) || m.size == 0 {
         return Err(refused());
@@ -283,7 +283,7 @@ fn forget_old_put_back_note() {
 
 /// Dobo's folder accepts new files (a copy in Program Files or on a read-only drive doesn't).
 fn folder_writable() -> Result<(), Fail> {
-    let dir = exe().and_then(|e| e.parent().map(Path::to_path_buf)).ok_or_else(|| Fail::other(tr!("Can't find where Dobo is.", "Impossible de trouver où est Dobo.")))?;
+    let dir = exe().and_then(|e| e.parent().map(Path::to_path_buf)).ok_or_else(|| Fail::other(tr!("Can’t find where Dobo is.", "Impossible de trouver où est Dobo.")))?;
     let test = dir.join(format!(".dobo-write-test-{}-{}", std::process::id(), crate::db::now_ms()));
     match std::fs::OpenOptions::new().write(true).create_new(true).open(&test) {
         Ok(f) => {
@@ -292,7 +292,7 @@ fn folder_writable() -> Result<(), Fail> {
             Ok(())
         }
         Err(_) => Err(Fail::other(tr!(
-            "Dobo can't save the update in its folder ({}): Windows doesn't allow changes there. Move the Dobo folder somewhere you can change files, such as Documents, then try again.",
+            "Dobo can’t save the update in its folder ({}): Windows doesn’t allow changes there. Move the Dobo folder somewhere you can change files, such as Documents, then try again.",
             "Dobo ne peut pas enregistrer la mise à jour dans son dossier ({}) : Windows n’y autorise pas les modifications. Déplacez le dossier de Dobo là où vous pouvez modifier des fichiers, comme Documents, puis réessayez.",
             dir.display()
         ))),
@@ -320,7 +320,7 @@ pub struct View {
 static STATE: Mutex<Option<View>> = Mutex::new(None);
 
 fn first_view() -> View {
-    let error = rolled_back_version().map(|v| tr!("Dobo {} didn't start properly, so Dobo {} was put back.", "Dobo {} n’a pas démarré correctement : Dobo {} a été remis.", v, current()));
+    let error = rolled_back_version().map(|v| tr!("Dobo {} didn’t start properly, so Dobo {} was put back.", "Dobo {} n’a pas démarré correctement : Dobo {} a été remis.", v, current()));
     View { current: current().into(), error, last_checked: last_check().map(|s| s as i64 * 1000).filter(|&s| s > 0), ..Default::default() }
 }
 
@@ -353,7 +353,7 @@ impl Fail {
         Fail { msg, passing: false }
     }
     fn unreachable() -> Self {
-        Fail { msg: tr!("Couldn't reach Dobo's update page. Check your connection, then try again.", "Impossible de joindre la page des mises à jour de Dobo. Vérifiez votre connexion, puis réessayez."), passing: true }
+        Fail { msg: tr!("Couldn’t reach Dobo’s update page. Check your connection, then try again.", "Impossible de joindre la page des mises à jour de Dobo. Vérifiez votre connexion, puis réessayez."), passing: true }
     }
 }
 
@@ -371,7 +371,7 @@ fn agent() -> ureq::Agent {
 /// Said when GitHub's answer came from somewhere else (`from_github`).
 fn not_from_github() -> Fail {
     Fail::other(tr!(
-        "Dobo's update page sent it somewhere other than GitHub, so nothing was downloaded.",
+        "Dobo’s update page sent it somewhere other than GitHub, so nothing was downloaded.",
         "La page des mises à jour de Dobo l’a envoyé ailleurs que sur GitHub : rien n’a été téléchargé."
     ))
 }
@@ -381,7 +381,7 @@ fn fetch_manifest(http: &ureq::Agent) -> Result<Manifest, Fail> {
         Ok(r) => r,
         Err(ureq::Error::Status(404, _)) => return Err(Fail::other(tr!("No Dobo release is published yet.", "Aucune version de Dobo n’est encore publiée."))),
         Err(ureq::Error::Status(code, _)) if code >= 500 => return Err(Fail::unreachable()),
-        Err(ureq::Error::Status(code, _)) => return Err(Fail::other(tr!("Dobo's update page answered {}.", "La page des mises à jour de Dobo a répondu {}.", code))),
+        Err(ureq::Error::Status(code, _)) => return Err(Fail::other(tr!("Dobo’s update page answered {}.", "La page des mises à jour de Dobo a répondu {}.", code))),
         Err(ureq::Error::Transport(_)) => return Err(Fail::unreachable()),
     };
     if !from_github(r.get_url()) {
@@ -389,7 +389,7 @@ fn fetch_manifest(http: &ureq::Agent) -> Result<Manifest, Fail> {
     }
     let mut text = String::new();
     r.into_reader().take(64 * 1024).read_to_string(&mut text).map_err(|_| Fail::unreachable())?;
-    let m: Manifest = serde_json::from_str(&text).map_err(|_| Fail::other(tr!("Dobo's update page sent something unexpected.", "La page des mises à jour de Dobo a envoyé quelque chose d’inattendu.")))?;
+    let m: Manifest = serde_json::from_str(&text).map_err(|_| Fail::other(tr!("Dobo’s update page sent something unexpected.", "La page des mises à jour de Dobo a envoyé quelque chose d’inattendu.")))?;
     verify(&m).map_err(Fail::other)?;
     Ok(m)
 }
@@ -420,7 +420,7 @@ fn remove_old_parts() {
 }
 
 fn download(http: &ureq::Agent, m: &Manifest) -> Result<(), Fail> {
-    let (Some(dest), Some(mark)) = (new_exe(), marker()) else { return Err(Fail::other(tr!("Can't find where Dobo is.", "Impossible de trouver où est Dobo."))) };
+    let (Some(dest), Some(mark)) = (new_exe(), marker()) else { return Err(Fail::other(tr!("Can’t find where Dobo is.", "Impossible de trouver où est Dobo."))) };
     folder_writable()?;
     remove_old_parts();
     let cut = || Fail::other(tr!("The update download was cut. Try again.", "Le téléchargement de la mise à jour a été interrompu. Réessayez."));
@@ -454,7 +454,7 @@ fn download(http: &ureq::Agent, m: &Manifest) -> Result<(), Fail> {
     drop(file);
     // The checksum of what is really on disk, not of what was received.
     if size != m.size || sha256_file(&part).ok().as_deref() != Some(m.sha256.as_str()) {
-        return Err(Fail::other(tr!("The downloaded update doesn't match its signed checksum, so it wasn't kept.", "La mise à jour téléchargée ne correspond pas à sa somme de contrôle signée : elle n’a pas été gardée.")));
+        return Err(Fail::other(tr!("The downloaded update doesn’t match its signed checksum, so it wasn’t kept.", "La mise à jour téléchargée ne correspond pas à sa somme de contrôle signée : elle n’a pas été gardée.")));
     }
     let _ = std::fs::remove_file(&dest);
     std::fs::rename(&part, &dest).map_err(|e| Fail::other(e.to_string()))?;
@@ -625,6 +625,73 @@ fn lock_exists(_lock: &str) -> bool {
     false
 }
 
+/// The lock a start holds while it looks at updates (`apply_at_start`): `<identifier>-update`.
+fn start_lock_name() -> String {
+    format!("{}-update", INSTANCE_LOCK.trim_end_matches("-sim"))
+}
+
+/// The start lock, held by this process (a handle to a named mutex it owns).
+static START_LOCK: Mutex<Option<StartLock>> = Mutex::new(None);
+
+struct StartLock(#[cfg(windows)] windows_sys::Win32::Foundation::HANDLE);
+// SAFETY: a handle is only a number; it is released on the thread that owns the mutex (the one
+// that took it: Dobo's main thread, before and after Tauri's setup).
+unsafe impl Send for StartLock {}
+
+#[cfg(windows)]
+impl Drop for StartLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+        // SAFETY: a mutex this process owns, released then closed once.
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
+}
+
+/// Takes the start lock, waiting up to `wait` for another start to be done with it.
+fn take_start_lock(wait: Duration) -> bool {
+    take_start_lock_named(&start_lock_name(), wait)
+}
+
+/// The same with a lock of another name (the tests: never the real Dobo's, which may be starting
+/// meanwhile).
+#[cfg(windows)]
+fn take_start_lock_named(name: &str, wait: Duration) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated name; the handle is kept (released by `StartLock`) or closed.
+    unsafe {
+        let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if h.is_null() {
+            // No lock to be had (no rights): as before there was one.
+            return true;
+        }
+        let r = WaitForSingleObject(h, wait.as_millis().min(u32::MAX as u128) as u32);
+        if r == WAIT_OBJECT_0 || r == WAIT_ABANDONED {
+            *START_LOCK.lock().unwrap_or_else(|e| e.into_inner()) = Some(StartLock(h));
+            true
+        } else {
+            CloseHandle(h);
+            false
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn take_start_lock_named(_name: &str, _wait: Duration) -> bool {
+    true
+}
+
+/// Tauri has started (its single-instance lock is up): another start may look at updates now,
+/// and will see this one running.
+pub fn release_start_lock() {
+    drop(START_LOCK.lock().unwrap_or_else(|e| e.into_inner()).take());
+}
+
 /// What to do with a version on trial at start.
 #[derive(Debug, PartialEq)]
 enum TrialStep {
@@ -729,6 +796,13 @@ pub fn apply_at_start() -> bool {
             std::thread::sleep(Duration::from_millis(250));
         }
         waited = !another_instance_running();
+    }
+    // Two starts at once (sign-in's and a click, a double-click): one at a time from here until
+    // the single-instance lock is up (`release_start_lock`, when Tauri has started), so they
+    // never both swap or roll back files, and the second sees the first running. One that waits
+    // too long changes nothing.
+    if !take_start_lock(Duration::from_secs(5)) {
+        return false;
     }
     // Another Dobo is running and uses this exe: change nothing under it (this start only hands
     // over to it). "Restart now" waited for the old one to quit.
@@ -882,8 +956,8 @@ fn restart_args(pid: u32, hidden: bool) -> Vec<String> {
 /// "Restart now": starts this exe again, told to wait until this process has quit (the update is
 /// put in place then). The caller quits right after.
 pub fn restart(hidden: bool) -> Result<(), String> {
-    let exe = exe().ok_or_else(|| tr!("Can't find where Dobo is.", "Impossible de trouver où est Dobo."))?;
-    std::process::Command::new(exe).args(restart_args(std::process::id(), hidden)).spawn().map_err(|e| tr!("Couldn't restart Dobo: {}", "Impossible de redémarrer Dobo : {}", e))?;
+    let exe = exe().ok_or_else(|| tr!("Can’t find where Dobo is.", "Impossible de trouver où est Dobo."))?;
+    std::process::Command::new(exe).args(restart_args(std::process::id(), hidden)).spawn().map_err(|e| tr!("Couldn’t restart Dobo: {}", "Impossible de redémarrer Dobo : {}", e))?;
     Ok(())
 }
 
@@ -1155,6 +1229,43 @@ mod tests {
         assert!(!is_due(100_000, 100_000 + 3600));
         assert!(is_due(100_000, 100_000 + 24 * 3600));
         assert!(is_due(200_000, 100_000));
+    }
+
+    /// One start at a time looks at updates. (Under a lock of the test's own: never the real
+    /// Dobo's, which may be starting meanwhile.)
+    #[test]
+    fn two_starts_never_look_at_updates_at_once() {
+        assert_eq!(start_lock_name(), "com.sookera.ztodo-update");
+        let name = format!("dobo-test-start-lock-{}-{}", std::process::id(), crate::db::now_ms());
+        let take = {
+            let name = name.clone();
+            move |wait| take_start_lock_named(&name, wait)
+        };
+        assert!(take(Duration::from_millis(100)));
+        // Another start (another thread stands in for another process: the mutex is held by this
+        // thread) waits, then changes nothing.
+        let t2 = take.clone();
+        let other = std::thread::spawn(move || {
+            let t = Instant::now();
+            let got = t2(Duration::from_millis(200));
+            (got, t.elapsed())
+        })
+        .join()
+        .unwrap();
+        #[cfg(windows)]
+        {
+            assert!(!other.0, "held by the first start");
+            assert!(other.1 >= Duration::from_millis(150));
+        }
+        release_start_lock();
+        let after = std::thread::spawn(move || {
+            let got = take(Duration::from_millis(200));
+            release_start_lock();
+            got
+        })
+        .join()
+        .unwrap();
+        assert!(after, "free once the first has started");
     }
 
     /// The single-instance lock follows the identifier (tauri.conf.json).

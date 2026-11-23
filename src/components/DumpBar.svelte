@@ -82,7 +82,7 @@
       }
       setTimeout(close, reduce.matches ? 600 : 900);
     } catch (e) {
-      toast = () => t("Couldn't dump it: {error}", { error: String(e) });
+      toast = () => t("Couldn’t dump it: {error}", { error: String(e) });
     } finally {
       busy = false;
     }
@@ -92,6 +92,8 @@
     // (A key that finishes a composed character, a dead key's accent or an IME's word, isn't ours.)
     if (composing(e)) return;
     if (e.key === "Enter") {
+      // (On a button, Enter presses that one: "Leave it out", "Remove this picture".)
+      if ((e.target as Element).closest?.("button, a[href]")) return;
       e.preventDefault();
       dump();
     } else if (e.key === "Escape") {
@@ -113,7 +115,7 @@
 <div class="wrap" class:shown>
   <div class="bar" role="dialog" aria-label={t("Quick dump")}>
     <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M3 4a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v9l-6 6H4a1 1 0 0 1-1-1z" fill="currentColor"></path><path d="M13 19v-5a1 1 0 0 1 1-1h5" fill="#E9C46A"></path></svg>
-    <label for="dump" class="visually-hidden">{t("Dump into the inbox")}</label>
+    <label for="dump" class="visually-hidden">{t("Dump into the Inbox")}</label>
     <input id="dump" bind:this={input} bind:value={text} placeholder={t("Dump it here")} autocomplete="off" spellcheck="true" />
     {#each pics as p, i (p.url)}
       <button class="pic" in:blip out:blip aria-label={t("Remove this picture")} data-tip={t("Remove this picture")} data-tip-side="left" onclick={() => (pics = pics.filter((_, k) => k !== i))}><img src={p.url} alt="" /></button>
@@ -129,10 +131,10 @@
         <span class="src-text">{keepLink ? t("Keeps the link to") : t("Without the link to")} <b>{source.title || host}</b> · {host}</span>
         <button onclick={() => (keepLink = !keepLink)}>{keepLink ? t("Leave it out") : t("Keep it")}</button>
       </span>
-      <span class="esc" in:fadeQuick={{ duration: 200 }}>{t("Esc closes")}</span>
+      <span class="pill esc" in:fadeQuick={{ duration: 200 }}>{t("Esc closes")}</span>
     {:else}
-      <span in:fadeQuick={{ duration: 200 }}>{t("Into the Inbox, nothing to decide. Paste a picture too.")}</span>
-      <span class="esc" in:fadeQuick={{ duration: 200 }}>{t("Esc closes")}</span>
+      <span class="pill" in:fadeQuick={{ duration: 200 }}>{t("Into the Inbox, nothing to decide. Paste a picture too.")}</span>
+      <span class="pill esc" in:fadeQuick={{ duration: 200 }}>{t("Esc closes")}</span>
     {/if}
   </div>
 </div>
@@ -222,24 +224,40 @@
     align-items: center;
     gap: var(--s3);
     min-height: 28px;
-    padding: 0 var(--s1);
     font-size: var(--t-sm);
-    color: #f3f1ec;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   }
+  /* Whatever the desktop behind (a white page, a dark photo), every word under the bar sits on a
+     small frosted pill of the bar's own card colour, in light and dark alike. */
+  .pill,
   .src,
   .toast {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    padding: 4px 6px 4px 10px;
-    border-radius: 10px;
-    background: rgba(20, 22, 26, 0.72);
-    text-shadow: none;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--card) 86%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    backdrop-filter: blur(10px) saturate(1.2);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent), 0 4px 12px rgba(0, 0, 0, 0.12);
+    color: var(--soft);
+  }
+  .pill {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .src {
+    padding: 0 3px 0 10px;
+  }
+  .src,
+  .toast {
+    color: var(--ink);
   }
   .toast {
-    padding: 5px 12px 5px 6px;
+    padding: 0 12px 0 3px;
     animation: pop 0.25s var(--ease-out);
   }
   @keyframes pop {
@@ -270,12 +288,12 @@
   }
   .src button {
     flex-shrink: 0;
-    height: 22px;
+    height: 20px;
     padding: 0 8px;
     border: 0;
     border-radius: 6px;
-    background: rgba(255, 255, 255, 0.14);
-    color: #fff;
+    background: var(--chip);
+    color: var(--ink);
     font-size: var(--t-xs);
     cursor: pointer;
   }

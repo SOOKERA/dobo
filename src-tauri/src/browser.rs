@@ -24,6 +24,10 @@ fn looks_like_url(v: &str) -> Option<String> {
     if v.is_empty() || v.contains(char::is_whitespace) || !v.contains('.') {
         return None;
     }
+    // An e-mail address (or anything with a sign-in before the host) is never a page's address.
+    if !v.contains("://") && v.split(['/', '?', '#']).next().is_some_and(|host| host.contains('@')) {
+        return None;
+    }
     if v.starts_with("http://") || v.starts_with("https://") {
         Some(v.to_string())
     } else if v.contains("://") {
@@ -51,17 +55,38 @@ fn clean_title(title: &str, app: &str) -> String {
     t.to_string()
 }
 
+/// How a browser names its address bar's own box, for the browsers known to: Chrome's, Edge's,
+/// Brave's, Opera's (and Chromium's own builds') has the class "OmniboxViewViews", Firefox's the automation id
+/// "urlbar-input". The others (Vivaldi, Arc…) name it otherwise: their first box, straight away
+/// (asking for a name they don't use would walk the whole window for nothing first).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum BarName {
+    Class(&'static str),
+    Id(&'static str),
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn bar_name(app: &str) -> Option<BarName> {
+    match app {
+        "chrome.exe" | "msedge.exe" | "brave.exe" | "opera.exe" | "chromium.exe" | "thorium.exe" => Some(BarName::Class("OmniboxViewViews")),
+        "firefox.exe" => Some(BarName::Id("urlbar-input")),
+        _ => None,
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
     use windows::Win32::Foundation::{CloseHandle, HWND};
     use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
-    use windows::Win32::System::Variant::{VARIANT, VT_I4};
+    use windows::Win32::System::Variant::{VARIANT, VT_BSTR, VT_I4, VariantClear};
     use windows::Win32::UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationValuePattern, TreeScope_Descendants, UIA_ControlTypePropertyId, UIA_EditControlTypeId,
-        UIA_ValuePatternId,
+        CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationValuePattern, TreeScope_Descendants, UIA_AutomationIdPropertyId, UIA_ClassNamePropertyId,
+        UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_ValuePatternId,
     };
+    use windows::core::{BSTR, Interface};
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
     use windows::core::PWSTR;
 
@@ -95,19 +120,62 @@ mod imp {
         }
     }
 
-    fn address_bar(hwnd: HWND) -> Option<String> {
+    fn address_bar(hwnd: HWND, app: &str) -> Option<String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+            with_time_limits(&uia);
             let root = uia.ElementFromHandle(hwnd).ok()?;
             let mut v = VARIANT::default();
             (*v.Anonymous.Anonymous).vt = VT_I4;
             (*v.Anonymous.Anonymous).Anonymous.lVal = UIA_EditControlTypeId.0;
-            let cond = uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &v).ok()?;
-            let edit = root.FindFirst(TreeScope_Descendants, &cond).ok()?;
+            let box_ = uia.CreatePropertyCondition(UIA_ControlTypePropertyId, &v).ok()?;
+            // The address bar itself, asked for by name (not the find bar's or a sidebar's box),
+            // so the search stops there, early in the window, never walking into the page's own
+            // fields. A browser that isn't known to name it so: its first box, as before.
+            let named = bar_name(app).and_then(|name| {
+                let (property, value) = match name {
+                    BarName::Class(c) => (UIA_ClassNamePropertyId, c),
+                    BarName::Id(i) => (UIA_AutomationIdPropertyId, i),
+                };
+                let mut value = text(value);
+                let n = uia.CreatePropertyCondition(property, &value).and_then(|n| uia.CreateAndCondition(&box_, &n));
+                let _ = VariantClear(&mut value);
+                n.ok()
+            });
+            let edit = match named {
+                Some(n) => root.FindFirst(TreeScope_Descendants, &n).ok().or_else(|| root.FindFirst(TreeScope_Descendants, &box_).ok())?,
+                None => root.FindFirst(TreeScope_Descendants, &box_).ok()?,
+            };
+            // Being typed in: what it holds may be words not yet sent (a search, an e-mail
+            // address), never taken as the page's address.
+            if edit.CurrentHasKeyboardFocus().is_ok_and(|f| f.as_bool()) {
+                return None;
+            }
             let pattern: IUIAutomationValuePattern = edit.GetCurrentPatternAs(UIA_ValuePatternId).ok()?;
             let value = pattern.CurrentValue().ok()?.to_string();
             looks_like_url(&value)
+        }
+    }
+
+    /// A text for a UI Automation condition (cleared with `VariantClear` after use).
+    unsafe fn text(s: &str) -> VARIANT {
+        let mut v = VARIANT::default();
+        unsafe {
+            (*v.Anonymous.Anonymous).vt = VT_BSTR;
+            (*v.Anonymous.Anonymous).Anonymous.bstrVal = std::mem::ManuallyDrop::new(BSTR::from(s));
+        }
+        v
+    }
+
+    /// A browser that doesn't answer UI Automation quickly (busy, hung) never holds up the dump
+    /// bar's thread for long.
+    unsafe fn with_time_limits(uia: &IUIAutomation) {
+        if let Ok(u2) = uia.cast::<IUIAutomation2>() {
+            unsafe {
+                let _ = u2.SetConnectionTimeout(1000);
+                let _ = u2.SetTransactionTimeout(1000);
+            }
         }
     }
 
@@ -118,7 +186,7 @@ mod imp {
         }
         let app = exe_of(h);
         let title = clean_title(&title_of(h), &app);
-        let url = if BROWSERS.contains(&app.as_str()) { address_bar(h) } else { None };
+        let url = if BROWSERS.contains(&app.as_str()) { address_bar(h, &app) } else { None };
         Source { url, title, app }
     }
 }
@@ -145,8 +213,23 @@ mod tests {
         assert_eq!(looks_like_url("github.com/sookera").as_deref(), Some("https://github.com/sookera"));
         assert_eq!(looks_like_url("https://a.b/c").as_deref(), Some("https://a.b/c"));
         assert!(looks_like_url("search words here").is_none());
+        // Typed, not a page: an e-mail address.
+        assert!(looks_like_url("john.doe@corp.com").is_none());
+        assert!(looks_like_url("me@site.fr/x").is_none());
+        assert_eq!(looks_like_url("example.com/@user").as_deref(), Some("https://example.com/@user"));
         assert_eq!(clean_title("Hangar Y files - Google Chrome", "chrome.exe"), "Hangar Y files");
         assert_eq!(clean_title("Docs - Personal - Microsoft Edge", "msedge.exe"), "Docs");
         assert_eq!(clean_title("ChanelVR - Unreal Editor", "unrealeditor.exe"), "ChanelVR - Unreal Editor");
+    }
+
+    #[test]
+    fn the_address_bar_is_asked_for_by_name_only_where_it_has_that_name() {
+        for app in ["chrome.exe", "msedge.exe", "brave.exe", "opera.exe", "chromium.exe", "thorium.exe"] {
+            assert_eq!(bar_name(app), Some(BarName::Class("OmniboxViewViews")), "{app}");
+        }
+        assert_eq!(bar_name("firefox.exe"), Some(BarName::Id("urlbar-input")));
+        for app in ["vivaldi.exe", "arc.exe"] {
+            assert_eq!(bar_name(app), None, "{app}: its first box, straight away");
+        }
     }
 }

@@ -12,7 +12,7 @@ Yes. Dobo backs up your notes and pictures once a day and keeps the last 14 (**S
 Yes: copy a backup to the new PC, choose its folder in **Settings › Backups**, and restore it. A portable Dobo moves with its folder. See [Move your notes to another PC](backups-and-data.md#move-your-notes-to-another-pc).
 
 **Why didn't a reminder ring?**
-Reminders only ring while Dobo runs. Closing the window keeps it in the tray; **Quit Dobo** stops it. Keep **Settings › Start › Start Dobo with the computer** on, and check that Windows lets Dobo show notifications (and that Do not disturb is off). A note in the Archive stays quiet until you restore it.
+Reminders only ring while Dobo runs. Closing the window keeps it in the tray; **Quit Dobo** stops it. Keep **Settings › Start › Start Dobo with Windows** on, and check that Windows lets Dobo show notifications (and that Do not disturb is off). A note in the Archive stays quiet until you restore it.
 
 **Where did my line go?**
 A line without a **#note** goes to the Inbox, the strip at the top of the board. Click the strip to open it.
@@ -27,7 +27,7 @@ Open the Archive (**Archive (2)** at the bottom of the board, or the **?** menu)
 **Take the tour** in the **?** menu at the board's corner (**F1**), the header's **⋯** menu, the board's right-click menu, or **Settings › Help**.
 
 **Will it change my Windows Sticky Notes?**
-No. Dobo reads a copy of them. You can bring them in again later from **Settings › Start**.
+No. Dobo reads a copy of them, and brings them in only when you ask: on the first start, or later from **Settings › Start**.
 
 **How do I switch to French (or English)?**
 **Settings › Appearance › Language / Langue**: **Follow Windows**, **English** or **Français**. It changes at once, no restart. Dobo understands times in both languages, whichever one it's in.

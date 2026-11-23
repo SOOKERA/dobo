@@ -12,9 +12,12 @@
   import StepTrace from "./StepTrace.svelte";
   import ViewHeader, { type Crumb } from "./ViewHeader.svelte";
   import { store } from "../lib/store.svelte";
+  import { thumbs } from "../lib/thumbs.svelte";
   import { swatchOf } from "../lib/palette";
   import { look } from "../lib/look.svelte";
   import { pushLayer } from "../lib/layers";
+  import { modal, takeFocus } from "../lib/modal";
+  import { tick } from "svelte";
   import { noteTitle } from "../lib/names";
   import { APP_NAME } from "../lib/app";
   import { arrive, easeHeight, fadeQuick, fold, glide, glideTo, imgFade, leave, reduced, sheet } from "../lib/motion";
@@ -37,8 +40,14 @@
   // While it asks, Esc (or Back) answers "Keep them" first.
   $effect(() => {
     if (!confirmEmpty) return;
-    return pushLayer(() => (confirmEmpty = false));
+    return pushLayer(keepAll);
   });
+  /** "Keep them" (or Esc): the keyboard goes back to "Empty archive…". */
+  let kept = $state(false);
+  function keepAll() {
+    kept = true;
+    confirmEmpty = false;
+  }
 
   /** The first lines, as the note shows them: open tasks, then done ones, then ideas. */
   function preview(n: Note): { tasks: Item[]; ideas: Item[]; more: number } {
@@ -108,11 +117,25 @@
 
   async function restore(n: Note) {
     leaving.set(n.id, "restore");
+    const i = notes.indexOf(n);
     await store.unarchive(n);
+    await nextCard(i);
   }
   async function remove(n: Note) {
     leaving.set(n.id, "delete");
+    const i = notes.indexOf(n);
     await store.deleteNote(n);
+    await nextCard(i);
+  }
+  /** A card gone (restored, deleted) with the keyboard on it: the keyboard goes to the card now at
+   * its place (its Restore), else the one before, else the Archive itself. */
+  async function nextCard(i: number) {
+    await tick();
+    const a = document.activeElement;
+    if (a && a !== document.body && !a.closest("[inert]") && sheetEl?.contains(a) && a !== sheetEl) return;
+    const cards = [...(sheetEl?.querySelectorAll<HTMLElement>(".list > article") ?? [])].filter((c) => !c.inert);
+    const to = cards[Math.min(i, cards.length - 1)]?.querySelector<HTMLElement>(".foot .strong");
+    (to ?? sheetEl)?.focus({ preventScroll: true });
   }
   async function emptyAll() {
     confirmEmpty = false;
@@ -121,9 +144,11 @@
   }
 
   let sheetEl = $state<HTMLElement>();
-  $effect(() => {
-    const a = document.activeElement as HTMLElement | null;
-    if (!a || a === document.body || !sheetEl?.contains(a)) sheetEl?.focus({ preventScroll: true });
+  // Once a toast has shown here ("Restored · Undo"), the page keeps room under its last row, so
+  // it can scroll clear of the toast (kept until the view closes: nothing jumps as it goes).
+  let toastRoom = $state(false);
+  $effect.pre(() => {
+    if (store.toast) toastRoom = true;
   });
 
   // Opening: the list fades in a card at a time; a card that comes back (Undo) just arrives.
@@ -136,7 +161,7 @@
 </script>
 
 <!-- (Focused when it opens, so the keyboard is in it: Backspace / Alt+Left go back from here.) -->
-<div class="sheet" role="dialog" aria-label={t("Archive")} tabindex="-1" bind:this={sheetEl} transition:sheet|global>
+<div class="sheet" class:toast-room={toastRoom} role="dialog" aria-label={t("Archive")} tabindex="-1" bind:this={sheetEl} transition:sheet|global use:modal={{ initial: "self" }}>
   <div class="top" data-drag-area={store.win.mode === "floating" || undefined}>
     <ViewHeader {crumbs} big={24} sub={notes.length ? t("{n} notes", { n: notes.length }) : ""} {onBack} {onClose} />
   </div>
@@ -151,13 +176,14 @@
           <span class="confirm" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
             <span class="ask">{t("Delete all {n} archived notes?", { n: notes.length })}</span>
             <span class="btns">
-              <button class="small" onclick={() => (confirmEmpty = false)}>{t("Keep them")}</button>
+              <!-- (The keyboard comes to the safe choice.) -->
+              <button class="small" use:takeFocus onclick={keepAll}>{t("Keep them")}</button>
               <button class="small danger" onclick={emptyAll}>{t("Delete all")}</button>
             </span>
           </span>
         {:else}
           <span class="confirm" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}>
-            <button class="small" onclick={() => (confirmEmpty = true)}><Icon name="trash" size={14} />{t("Empty archive…")}</button>
+            <button class="small" use:takeFocus={kept} onfocus={() => (kept = false)} onclick={() => (confirmEmpty = true)}><Icon name="trash" size={14} />{t("Empty archive…")}</button>
           </span>
         {/if}
       </span>
@@ -211,7 +237,7 @@
         {/if}
         {#if pics.length}
           <div class="pics" aria-hidden="true">
-            {#each pics.slice(0, 4) as pic (pic.id)}<img src={store.src(pic.path)} alt="" loading="lazy" draggable="false" use:imgFade />{/each}
+            {#each pics.slice(0, 4) as pic (pic.id)}<img src={store.thumbSrc(pic)} alt="" loading="lazy" decoding="async" draggable="false" use:imgFade onerror={() => thumbs.failed(pic)} />{/each}
             {#if pics.length > 4}<span class="pics-more">+{pics.length - 4}</span>{/if}
           </div>
         {/if}
@@ -219,7 +245,7 @@
           <span class="when">{when(n)}</span>
           <span class="acts">
             <button class="act del" aria-label={t("Delete “{name}”", { name: noteTitle(n) })} data-tip={t("Delete · Undo can bring it back")} onclick={() => remove(n)}><Icon name="trash" size={15} /></button>
-            <button class="small strong" data-tip={t("Back on the board, at its place")} onclick={() => restore(n)}>{t("Restore")}</button>
+            <button class="small strong" aria-label={t("Restore “{name}”", { name: noteTitle(n) })} data-tip={t("Back on the board, at its place")} onclick={() => restore(n)}>{t("Restore")}</button>
           </span>
         </div>
       </article>
@@ -245,6 +271,9 @@
     overflow-y: auto;
     padding: 0 var(--s6) var(--s6);
     background: var(--ground);
+  }
+  .sheet.toast-room {
+    padding-bottom: calc(var(--s6) + 60px);
   }
   .top {
     position: sticky;
@@ -330,12 +359,12 @@
     background: color-mix(in srgb, var(--ink) 86%, var(--card));
   }
   .small.danger {
-    background: var(--late-ink);
-    border-color: var(--late-ink);
+    background: var(--danger-fill);
+    border-color: var(--danger-fill);
     color: #fff;
   }
   .small.danger:hover {
-    background: color-mix(in srgb, var(--late-ink) 88%, #000);
+    background: color-mix(in srgb, var(--danger-fill) 88%, #000);
   }
 
   /* The cards: a grid that fills the width (one column in a narrow panel). */
