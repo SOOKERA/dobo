@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
-// Dobo Setup's pictures (Sookera installer template 1.1.3). From Dobo's repo root:
+// Dobo Setup's pictures (Sookera installer template 1.1.5). From Dobo's repo root:
 //   node art/installer-art.mjs art/dobo.config.mjs src-tauri/installer/art
 // (needs Playwright's Chromium: npx playwright install chromium). APP_SLIDES in
 // src-tauri/installer/app.nsh must equal the number of slides.

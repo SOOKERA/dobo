@@ -1,7 +1,8 @@
 // The installer's pictures for any app: the feature slides on the left of the window, the logo,
-// the switches, the folder box and the buttons, each in a dark and a light version (Setup follows
-// Windows). Drawn with Playwright's Chromium at twice the size; Setup scales them to the screen
-// (nsis/ui.nsh: AppImage). Made from Pako's scripts/installer-art.mjs (Pako 1.3.0).
+// the switches (and the steps they slide through), the folder box and the buttons, each in a dark
+// and a light version (Setup follows Windows). Drawn with Playwright's Chromium at twice the
+// size; Setup scales them to the screen (nsis/ui.nsh: AppImage). Made from Pako's
+// scripts/installer-art.mjs (Pako 1.3.0).
 //
 //   node installer-art.mjs <app config .mjs> <output folder>
 //   e.g. node art/installer-art.mjs art/pako.config.mjs ../Pako/src-tauri/installer/art
@@ -104,11 +105,20 @@ const logoHtml = (k) =>
     div{display:flex;align-items:center;gap:12px;width:160px;height:44px;justify-content:center}
   </style></head><body><div>${cfg.logo(k, { ...looks[k], accent: accentOf(k) }, dataUrl)}</div></body></html>`;
 
-const sw = (k, on) => {
+// A switch, p of the way from off (0) to on (1): the knob moves 14 px and the track eases from
+// its off colour to the accent. Setup shows off, the steps sw1..sw9 (p = 0.1 to 0.9) and on as
+// the switch slides (template 1.1.5, nsis/ui.nsh: AppSwTick). The knob takes its on colour half
+// way, not gradually: with a dark knob on a light accent (Dobo's dark look), a knob easing from
+// white to dark while the track eases from dark to light would vanish into it on the way. The
+// steps move the knob with a transform, which Chromium draws at its exact place (a fractional
+// left would be rounded to the pixel and step unevenly).
+const SW_STEPS = 10;
+const sw = (k, p) => {
   const c = looks[k];
+  const track = p <= 0 ? c.off : p >= 1 ? accentOf(k) : `color-mix(in srgb, ${accentOf(k)} ${(p * 100).toFixed(1)}%, ${c.off})`;
   return `<!doctype html><html><head><style>html,body{margin:0;background:${c.bg}}
-    i{display:block;position:relative;width:32px;height:18px;border-radius:9px;background:${on ? accentOf(k) : c.off}}
-    i:after{content:"";position:absolute;top:2px;${on ? "right" : "left"}:2px;width:14px;height:14px;border-radius:50%;background:${on ? onAccentOf(k) : "#fff"};box-shadow:0 1px 2px rgba(0,0,0,.2)}
+    i{display:block;position:relative;width:32px;height:18px;border-radius:9px;background:${track}}
+    i:after{content:"";position:absolute;top:2px;left:${p >= 1 ? 16 : 2}px;${p > 0 && p < 1 ? `transform:translateX(${14 * p}px);` : ""}width:14px;height:14px;border-radius:50%;background:${p >= 0.5 ? onAccentOf(k) : "#fff"};box-shadow:0 1px 2px rgba(0,0,0,.2)}
   </style></head><body><i></i></body></html>`;
 };
 
@@ -175,8 +185,9 @@ for (const k of ["d", "l"]) {
   for (let i = 0; i < slides.length; i++) await render(`slide${i + 1}-${k}`, slideHtml(i, k), 530, 540, "jpeg");
   if (french) for (let i = 0; i < slides.length; i++) await render(`slide${i + 1}-${k}-fr`, slideHtml(i, k, "fr"), 530, 540, "jpeg");
   await render(`logo-${k}`, logoHtml(k), 160, 44);
-  await render(`on-${k}`, sw(k, true), 32, 18);
-  await render(`off-${k}`, sw(k, false), 32, 18);
+  await render(`on-${k}`, sw(k, 1), 32, 18);
+  await render(`off-${k}`, sw(k, 0), 32, 18);
+  for (let n = 1; n < SW_STEPS; n++) await render(`sw${n}-${k}`, sw(k, n / SW_STEPS), 32, 18);
   await render(`field-${k}`, field(k), 282, 32);
   for (const [name, label, width, kind] of buttons) {
     for (const st of kind === "main" ? ["n", "h", "x"] : ["n", "h"]) {

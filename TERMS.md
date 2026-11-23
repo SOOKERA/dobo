@@ -1,6 +1,6 @@
 # Terms of use
 
-Last updated 21 November 2026
+Last updated 23 November 2026
 
 These terms cover Dobo, an app made by Sookera. Sookera's terms for all its apps and its website are at
 [sookera.com/terms](https://sookera.com/terms). By installing or using Dobo, you accept these terms. If you
@@ -32,17 +32,20 @@ important, and keep copies of notes that matter: Dobo makes backups, and you can
 
 ## What Dobo does and doesn't do
 
-- Dobo has no account, no ads, no analytics and no crash reports.
-- It goes online only to fetch the title and picture of a web page you put in a note, and once a day to check
-  for a new version of Dobo (you can turn that off in Settings › Updates). An update is used only if it is
-  signed by Sookera.
+- Dobo has no account, no ads, no analytics and no automatic crash reports.
+- It goes online only to fetch the title and picture of a web page you put in a note, once a day to check
+  for a new version of Dobo (you can turn that off in Settings › Updates), and to send a problem report when you
+  ask. An update is used only if it is signed by Sookera.
+- A problem report goes only when you send it yourself (Report a problem, in the ? menu), with what Dobo shows
+  you before you send it. We keep it private and use it only to fix Dobo.
 - Your notes, pictures and backups stay on your computer (or in Dobo's portable folder). We never receive them.
 
 ## Other services
 
 The web pages whose title and picture Dobo fetches belong to others, with their own terms. We don't control
 them, and we aren't responsible for their content or their availability. Dobo's updates come from GitHub
-(github.com/sookera/dobo-releases), which has its own terms.
+(github.com/sookera/dobo-releases), which has its own terms. The problem reports you send go through Sookera's
+report service on Cloudflare and are kept on GitHub, each with its own terms.
 
 ## Liability
 

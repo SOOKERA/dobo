@@ -50,6 +50,11 @@
 ReserveFile "${APP_ART}\*.jpg"
 ReserveFile "${APP_ART}\*.png"
 
+; The switches' steps between off and on (template 1.1.5: they slide), drawn by the art script.
+!if ! /FileExists "${APP_ART}\sw9-l.png"
+  !error "art\sw1-d.png ... sw9-l.png are missing: template 1.1.5's switches slide between off and on. Take its art/installer-art.mjs and run it again."
+!endif
+
 ; [APP] French (app.nsh: APP_FRENCH 1) needs the art script's French pictures too (a slide's `fr`
 ; in the art config makes slideN-d-fr.jpg, the buttons' b-<name>-<state>-d-fr.png...).
 !if ${APP_FRENCH} == 1
@@ -237,9 +242,45 @@ Var AppUiChoice      ; read by PageLeaveReinstall instead of its old radio butto
 Var AppDesktop
 Var AppStart
 Var AppBrowsers
-Var AppSwDesk
+Var AppSwDesk        ; the switches' pictures (the uninstaller's two use Desk and Start)
 Var AppSwStart
 Var AppSwBrow
+; The switches' slide (template 1.1.5, AppSwTick). Each switch shows its own picture (AppSwFace,
+; 24-bit: the control draws it as it is), into which the step to show is copied. The steps:
+; off (0), AppSwB1..9 in between, on (10), drawn by the art script (sw1..sw9). Per switch (1 to 3):
+; P where it is now, G where it goes, A where it was when it set off (0 to 1000), T when (ms),
+; K the step shown.
+Var AppSwB1
+Var AppSwB2
+Var AppSwB3
+Var AppSwB4
+Var AppSwB5
+Var AppSwB6
+Var AppSwB7
+Var AppSwB8
+Var AppSwB9
+Var AppSwFace1
+Var AppSwFace2
+Var AppSwFace3
+Var AppSwDcA
+Var AppSwDcB
+Var AppSwW
+Var AppSwH
+Var AppSwP1
+Var AppSwP2
+Var AppSwP3
+Var AppSwG1
+Var AppSwG2
+Var AppSwG3
+Var AppSwA1
+Var AppSwA2
+Var AppSwA3
+Var AppSwT1
+Var AppSwT2
+Var AppSwT3
+Var AppSwK1
+Var AppSwK2
+Var AppSwK3
 Var AppPathCtl
 Var AppNoteCtl
 Var AppHeld          ; 1 = Install can't be clicked (the folder won't do)
@@ -1144,11 +1185,334 @@ Function ${UN}AppHideNav
   Pop $2
 FunctionEnd
 
+; ---------- the switches slide between off and on (template 1.1.5) ----------
+; The knob moves and the colour eases, both ways, in 180 ms (eased out); a switch flipped again
+; on the way turns back from where it is. With Windows' "Animation effects" off it changes at
+; once. Each step is drawn into the switch's own picture and straight onto the screen (as the
+; slides are), never through the control's own painting: nothing flashes.
+
+; Once, when the look is known: the steps' pictures, each switch's own picture, two drawings.
+Function ${UN}AppSwLoad
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  StrCpy $AppA2 32
+  StrCpy $AppA3 18
+  StrCpy $AppA1 "on-$AppLook.png"
+  Call ${UN}AppImage
+  StrCpy $AppBmpOn $AppRet
+  StrCpy $AppA1 "off-$AppLook.png"
+  Call ${UN}AppImage
+  StrCpy $AppBmpOff $AppRet
+  !insertmacro AppSwRead "${UN}" 1
+  !insertmacro AppSwRead "${UN}" 2
+  !insertmacro AppSwRead "${UN}" 3
+  !insertmacro AppSwRead "${UN}" 4
+  !insertmacro AppSwRead "${UN}" 5
+  !insertmacro AppSwRead "${UN}" 6
+  !insertmacro AppSwRead "${UN}" 7
+  !insertmacro AppSwRead "${UN}" 8
+  !insertmacro AppSwRead "${UN}" 9
+  !insertmacro AppScale $AppSwW 32
+  !insertmacro AppScale $AppSwH 18
+  System::Call "user32::GetDC(p 0) p .r0"
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppSwDcA $1
+  System::Call "gdi32::CreateCompatibleDC(p r0) p .r1"
+  StrCpy $AppSwDcB $1
+  System::Call "user32::ReleaseDC(p 0, p r0)"
+  ; Each switch's own picture: 24-bit, the switch's size on screen (the picture's handle in $3,
+  ; its pixels' address in $4).
+  IntOp $1 0 - $AppSwH
+  System::Call "*(i 40, i $AppSwW, i r1, &i2 1, &i2 24, i 0, i 0, i 0, i 0, i 0, i 0, i 0) p .r2"
+  System::Call "gdi32::CreateDIBSection(p 0, p r2, i 0, *p .r4, p 0, i 0) p .r3"
+  StrCpy $AppSwFace1 $3
+  System::Call "gdi32::CreateDIBSection(p 0, p r2, i 0, *p .r4, p 0, i 0) p .r3"
+  StrCpy $AppSwFace2 $3
+  System::Call "gdi32::CreateDIBSection(p 0, p r2, i 0, *p .r4, p 0, i 0) p .r3"
+  StrCpy $AppSwFace3 $3
+  System::Free $2
+  StrCpy $AppSwDesk 0
+  StrCpy $AppSwStart 0
+  StrCpy $AppSwBrow 0
+  ; All off until a page says otherwise (AppSwSet).
+  StrCpy $AppA2 0
+  StrCpy $AppA1 1
+  Call ${UN}AppSwSet
+  StrCpy $AppA1 2
+  Call ${UN}AppSwSet
+  StrCpy $AppA1 3
+  Call ${UN}AppSwSet
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA3 = a step (0 = off to 10 = on) -> $AppRet = its picture.
+Function ${UN}AppSwFrame
+  ${If} $AppA3 <= 0
+    StrCpy $AppRet $AppBmpOff
+  ${ElseIf} $AppA3 >= 10
+    StrCpy $AppRet $AppBmpOn
+  ${ElseIf} $AppA3 = 1
+    StrCpy $AppRet $AppSwB1
+  ${ElseIf} $AppA3 = 2
+    StrCpy $AppRet $AppSwB2
+  ${ElseIf} $AppA3 = 3
+    StrCpy $AppRet $AppSwB3
+  ${ElseIf} $AppA3 = 4
+    StrCpy $AppRet $AppSwB4
+  ${ElseIf} $AppA3 = 5
+    StrCpy $AppRet $AppSwB5
+  ${ElseIf} $AppA3 = 6
+    StrCpy $AppRet $AppSwB6
+  ${ElseIf} $AppA3 = 7
+    StrCpy $AppRet $AppSwB7
+  ${ElseIf} $AppA3 = 8
+    StrCpy $AppRet $AppSwB8
+  ${Else}
+    StrCpy $AppRet $AppSwB9
+  ${EndIf}
+  ; A step that couldn't be read: the nearer end.
+  ${If} $AppRet = 0
+    ${If} $AppA3 < 5
+      StrCpy $AppRet $AppBmpOff
+    ${Else}
+      StrCpy $AppRet $AppBmpOn
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+; $AppA1 = a switch (1 to 3): it shows the step nearest to where it is ($AppSwP), unless that step
+; shows already; $AppA2 = 1: even then (a switch just made).
+Function ${UN}AppSwDraw
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  ${If} $AppA1 = 1
+    StrCpy $0 $AppSwP1
+    StrCpy $1 $AppSwK1
+    StrCpy $2 $AppSwDesk
+    StrCpy $3 $AppSwFace1
+  ${ElseIf} $AppA1 = 2
+    StrCpy $0 $AppSwP2
+    StrCpy $1 $AppSwK2
+    StrCpy $2 $AppSwStart
+    StrCpy $3 $AppSwFace2
+  ${Else}
+    StrCpy $0 $AppSwP3
+    StrCpy $1 $AppSwK3
+    StrCpy $2 $AppSwBrow
+    StrCpy $3 $AppSwFace3
+  ${EndIf}
+  IntOp $0 $0 * 10
+  IntOp $0 $0 + 500
+  IntOp $0 $0 / 1000
+  ${If} "$0" != "$1"
+  ${OrIf} $AppA2 = 1
+    ${If} $AppA1 = 1
+      StrCpy $AppSwK1 $0
+    ${ElseIf} $AppA1 = 2
+      StrCpy $AppSwK2 $0
+    ${Else}
+      StrCpy $AppSwK3 $0
+    ${EndIf}
+    StrCpy $AppA3 $0
+    Call ${UN}AppSwFrame
+    StrCpy $1 1
+    ; A picture that couldn't be made: nothing is drawn (never a black switch).
+    ${If} $AppRet = 0
+    ${OrIf} $3 = 0
+      StrCpy $1 0
+    ${EndIf}
+  ${Else}
+    StrCpy $1 0
+  ${EndIf}
+  ${If} $1 = 1
+    ; Into the switch's own picture, which is held only for the copy (a picture control can't
+    ; draw one that is held somewhere else)...
+    System::Call "gdi32::SelectObject(p $AppSwDcA, p $AppRet) p .r4"
+    System::Call "gdi32::SelectObject(p $AppSwDcB, p r3) p .r5"
+    System::Call "gdi32::BitBlt(p $AppSwDcB, i 0, i 0, i $AppSwW, i $AppSwH, p $AppSwDcA, i 0, i 0, i 0x00CC0020)"
+    ; ...and straight onto the screen in one copy, when it shows: the control isn't asked to
+    ; paint it again (DCX_CACHE | DCX_CLIPSIBLINGS: the focus ring stays).
+    ${If} $2 != ""
+    ${AndIf} $2 <> 0
+      System::Call "user32::IsWindowVisible(p r2) i .r0"
+      ${If} $0 <> 0
+        System::Call "user32::GetDCEx(p r2, p 0, i 0x12) p .r0"
+        System::Call "gdi32::BitBlt(p r0, i 0, i 0, i $AppSwW, i $AppSwH, p $AppSwDcB, i 0, i 0, i 0x00CC0020)"
+        System::Call "user32::ReleaseDC(p r2, p r0)"
+        System::Call "user32::ValidateRect(p r2, p 0)"
+      ${EndIf}
+    ${EndIf}
+    System::Call "gdi32::SelectObject(p $AppSwDcA, p r4)"
+    System::Call "gdi32::SelectObject(p $AppSwDcB, p r5)"
+  ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; $AppA1 = a switch (1 to 3), $AppA2 = on (1) or off (0): it shows that at once (a new page).
+Function ${UN}AppSwSet
+  Push $0
+  IntOp $0 $AppA2 * 1000
+  ${If} $AppA1 = 1
+    StrCpy $AppSwP1 $0
+    StrCpy $AppSwG1 $0
+    StrCpy $AppSwA1 $0
+  ${ElseIf} $AppA1 = 2
+    StrCpy $AppSwP2 $0
+    StrCpy $AppSwG2 $0
+    StrCpy $AppSwA2 $0
+  ${Else}
+    StrCpy $AppSwP3 $0
+    StrCpy $AppSwG3 $0
+    StrCpy $AppSwA3 $0
+  ${EndIf}
+  Push $AppA2
+  StrCpy $AppA2 1
+  Call ${UN}AppSwDraw
+  Pop $AppA2
+  Pop $0
+FunctionEnd
+
+; $AppA1 = a switch (1 to 3), $AppA2 = on (1) or off (0): it slides there from where it is (so
+; one flipped again on the way turns back), or is there at once with Windows' "Animation
+; effects" off.
+Function ${UN}AppSwTo
+  Push $0
+  Push $1
+  IntOp $0 $AppA2 * 1000
+  System::Call "kernel32::GetTickCount() i .r1"
+  ${If} $AppA1 = 1
+    StrCpy $AppSwG1 $0
+    StrCpy $AppSwA1 $AppSwP1
+    StrCpy $AppSwT1 $1
+  ${ElseIf} $AppA1 = 2
+    StrCpy $AppSwG2 $0
+    StrCpy $AppSwA2 $AppSwP2
+    StrCpy $AppSwT2 $1
+  ${Else}
+    StrCpy $AppSwG3 $0
+    StrCpy $AppSwA3 $AppSwP3
+    StrCpy $AppSwT3 $1
+  ${EndIf}
+  StrCpy $0 1
+  System::Call "user32::SystemParametersInfoW(i 0x1042, i 0, *i .r0, i 0)" ; SPI_GETCLIENTAREAANIMATION
+  ${If} $0 = 0
+    Call ${UN}AppSwSet
+  ${Else}
+    ${NSD_CreateTimer} ${UN}AppSwTick 10
+  ${EndIf}
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; One step of the switches on the move (as often as Windows' timer allows), timed by the clock:
+; a busy PC skips steps instead of slowing them down. Stops when all have arrived.
+Function ${UN}AppSwTick
+  Push $AppA1
+  Push $AppA2
+  Push $AppA3
+  Push $AppRet
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  System::Call "kernel32::GetTickCount() i .r0"
+  !insertmacro AppSwStep "${UN}" 1
+  !insertmacro AppSwStep "${UN}" 2
+  !insertmacro AppSwStep "${UN}" 3
+  ${If} $AppSwP1 = $AppSwG1
+  ${AndIf} $AppSwP2 = $AppSwG2
+  ${AndIf} $AppSwP3 = $AppSwG3
+    ${NSD_KillTimer} ${UN}AppSwTick
+  ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+  Pop $AppRet
+  Pop $AppA3
+  Pop $AppA2
+  Pop $AppA1
+FunctionEnd
+
+; The page with the switches is left: they stop where they're going, and their controls are gone.
+Function ${UN}AppSwLeave
+  ${NSD_KillTimer} ${UN}AppSwTick
+  StrCpy $AppSwDesk 0
+  StrCpy $AppSwStart 0
+  StrCpy $AppSwBrow 0
+  StrCpy $AppSwP1 $AppSwG1
+  StrCpy $AppSwP2 $AppSwG2
+  StrCpy $AppSwP3 $AppSwG3
+FunctionEnd
+
 !macroend
 
 !macro AppHideItem ID
   GetDlgItem $2 $HWNDPARENT ${ID}
   ShowWindow $2 ${SW_HIDE}
+!macroend
+
+; The switches' slide: a whole one takes this long (ms), part of one (turning back) its share.
+!define APP_SW_MS 180
+
+; One in-between step of the switches (art/sw<N>-<look>.png) -> $AppSwB<N>.
+!macro AppSwRead UN N
+  StrCpy $AppA1 "sw${N}-$AppLook.png"
+  Call ${UN}AppImage
+  StrCpy $AppSwB${N} $AppRet
+!macroend
+
+; AppSwTick for switch N ($0 = now, ms): where it is by now, eased out (cubic).
+!macro AppSwStep UN N
+  ${If} $AppSwP${N} <> $AppSwG${N}
+    IntOp $1 $0 - $AppSwT${N}
+    IntOp $2 $AppSwG${N} - $AppSwA${N}
+    ; The time for this way: its share of the whole slide's, at least 60 ms.
+    IntOp $3 $2 * ${APP_SW_MS}
+    ${IfThen} $3 < 0 ${|} IntOp $3 0 - $3 ${|}
+    IntOp $3 $3 / 1000
+    ${IfThen} $3 < 60 ${|} StrCpy $3 60 ${|}
+    ${If} $1 >= $3
+    ${OrIf} $1 < 0
+      StrCpy $AppSwP${N} $AppSwG${N}
+    ${Else}
+      ; A + (G - A) × (1 - (1 - t)³), t = $1 / $3, in thousandths.
+      IntOp $4 $1 * 1000
+      IntOp $4 $4 / $3
+      IntOp $4 1000 - $4
+      IntOp $5 $4 * $4
+      IntOp $5 $5 / 1000
+      IntOp $5 $5 * $4
+      IntOp $5 $5 / 1000
+      IntOp $5 1000 - $5
+      IntOp $5 $5 * $2
+      IntOp $5 $5 / 1000
+      IntOp $AppSwP${N} $AppSwA${N} + $5
+    ${EndIf}
+    StrCpy $AppA1 ${N}
+    StrCpy $AppA2 0
+    Call ${UN}AppSwDraw
+  ${EndIf}
 !macroend
 
 ; One slide's picture: N (1..5), SFX ("" or "-fr") -> VAR.
@@ -1280,16 +1644,7 @@ Function AppGuiInit
   StrCpy $AppA3 44
   Call AppImage
   StrCpy $AppBmpLogo $AppRet
-  StrCpy $AppA1 "on-$AppLook.png"
-  StrCpy $AppA2 32
-  StrCpy $AppA3 18
-  Call AppImage
-  StrCpy $AppBmpOn $AppRet
-  StrCpy $AppA1 "off-$AppLook.png"
-  StrCpy $AppA2 32
-  StrCpy $AppA3 18
-  Call AppImage
-  StrCpy $AppBmpOff $AppRet
+  Call AppSwLoad
   StrCpy $AppA1 "field-$AppLook.png"
   StrCpy $AppA2 282
   StrCpy $AppA3 32
@@ -1827,9 +2182,13 @@ Function AppTick
   ${EndIf}
   !if ${APP_FRENCH} == 1
   ; [APP] The French slides are read one per tick, never while a slide moves (a picture takes a
-  ; few hundredths of a second), so the first switch to French is instant.
+  ; few hundredths of a second), so the first switch to French is instant. Nor while a switch
+  ; slides (template 1.1.5: it would stop for that moment).
   ${If} $AppSFReady < ${APP_SLIDES}
   ${AndIf} $AppIntro <> 1
+  ${AndIf} $AppSwP1 = $AppSwG1
+  ${AndIf} $AppSwP2 = $AppSwG2
+  ${AndIf} $AppSwP3 = $AppSwG3
     IntOp $1 $0 - $AppFadeT0
     ${If} $1 > 800
     ${OrIf} $1 < 0
@@ -1875,6 +2234,19 @@ Function AppMainPage
   StrCpy $AppB2Ctl 0
   Call AppSlidePanel
   StrCpy $AppCanMove 0
+  ; The switches show what is set, at once (AppSwSet: the pictures they are made with).
+  Call AppSwLeave
+  StrCpy $AppA1 1
+  StrCpy $AppA2 $AppDesktop
+  Call AppSwSet
+  StrCpy $AppA1 2
+  StrCpy $AppA2 $AppStart
+  Call AppSwSet
+  !if ${APP_BROWSER_SWITCH} == 1
+  StrCpy $AppA1 3
+  StrCpy $AppA2 $AppBrowsers
+  Call AppSwSet
+  !endif
   Call AppMainBuild
   Call AppCheckRunning
   ${NSD_CreateTimer} AppTick 100
@@ -1918,7 +2290,7 @@ Function AppMainBuild
   !insertmacro AppT $AppTx appDesktop
   !insertmacro AppLabel $0 554 225 240 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 AppToggleDesk
-  !insertmacro AppPicture $AppSwDesk 804 225 32 18 $AppBmpOff
+  !insertmacro AppPicture $AppSwDesk 804 225 32 18 $AppSwFace1
   ${NSD_OnClick} $AppSwDesk AppToggleDesk
   !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 804 225 32 18 $AppTx
   ${NSD_OnClick} $AppPxDesk AppToggleDesk
@@ -1926,7 +2298,7 @@ Function AppMainBuild
   !insertmacro AppT $AppTx appStartWithWindows
   !insertmacro AppLabel $0 554 265 240 18 0x50000180 $AppFBody TEXT BG $AppTx
   ${NSD_OnClick} $0 AppToggleStart
-  !insertmacro AppPicture $AppSwStart 804 265 32 18 $AppBmpOff
+  !insertmacro AppPicture $AppSwStart 804 265 32 18 $AppSwFace2
   ${NSD_OnClick} $AppSwStart AppToggleStart
   !insertmacro AppProxy $AppPxStart ${APP_CHECK} 804 265 32 18 $AppTx
   ${NSD_OnClick} $AppPxStart AppToggleStart
@@ -1940,7 +2312,7 @@ Function AppMainBuild
   !insertmacro AppT $AppTx appBrowsersSub
   !insertmacro AppLabel $0 554 323 240 16 0x50000180 $AppFTiny MUT BG $AppTx
   ${NSD_OnClick} $0 AppToggleBrowsers
-  !insertmacro AppPicture $AppSwBrow 804 313 32 18 $AppBmpOff
+  !insertmacro AppPicture $AppSwBrow 804 313 32 18 $AppSwFace3
   ${NSD_OnClick} $AppSwBrow AppToggleBrowsers
   !insertmacro AppProxy $AppPxBrow ${APP_CHECK} 804 313 32 18 $1
   ${NSD_OnClick} $AppPxBrow AppToggleBrowsers
@@ -2215,23 +2587,17 @@ Function AppLangApply
 FunctionEnd
 !endif
 
+; The switches as they are now (a switch on its way goes on from there): each is drawn into its
+; new control (AppMainBuild makes them again when the language changes).
 Function AppShowSwitches
-  ${If} $AppDesktop = 1
-    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOn
-  ${Else}
-    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOff
-  ${EndIf}
-  ${If} $AppStart = 1
-    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOn
-  ${Else}
-    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOff
-  ${EndIf}
+  StrCpy $AppA2 1
+  StrCpy $AppA1 1
+  Call AppSwDraw
+  StrCpy $AppA1 2
+  Call AppSwDraw
   !if ${APP_BROWSER_SWITCH} == 1
-  ${If} $AppBrowsers = 1
-    SendMessage $AppSwBrow ${STM_SETIMAGE} 0 $AppBmpOn
-  ${Else}
-    SendMessage $AppSwBrow ${STM_SETIMAGE} 0 $AppBmpOff
-  ${EndIf}
+  StrCpy $AppA1 3
+  Call AppSwDraw
   !endif
   ; Screen readers read each switch's on/off from its stand-in.
   SendMessage $AppPxDesk ${BM_SETCHECK} $AppDesktop 0
@@ -2241,21 +2607,32 @@ Function AppShowSwitches
   !endif
 FunctionEnd
 
+; A click (the switch, its words, or Space on its stand-in): the setting flips at once, the
+; switch slides there (AppSwTo).
 Function AppToggleDesk
   Pop $0
   IntOp $AppDesktop 1 - $AppDesktop
-  Call AppShowSwitches
+  StrCpy $AppA1 1
+  StrCpy $AppA2 $AppDesktop
+  Call AppSwTo
+  SendMessage $AppPxDesk ${BM_SETCHECK} $AppDesktop 0
 FunctionEnd
 Function AppToggleStart
   Pop $0
   IntOp $AppStart 1 - $AppStart
-  Call AppShowSwitches
+  StrCpy $AppA1 2
+  StrCpy $AppA2 $AppStart
+  Call AppSwTo
+  SendMessage $AppPxStart ${BM_SETCHECK} $AppStart 0
 FunctionEnd
 !if ${APP_BROWSER_SWITCH} == 1
 Function AppToggleBrowsers
   Pop $0
   IntOp $AppBrowsers 1 - $AppBrowsers
-  Call AppShowSwitches
+  StrCpy $AppA1 3
+  StrCpy $AppA2 $AppBrowsers
+  Call AppSwTo
+  SendMessage $AppPxBrow ${BM_SETCHECK} $AppBrowsers 0
 FunctionEnd
 !endif
 
@@ -2532,6 +2909,7 @@ Function AppMainLeave
   ${EndIf}
   ${NSD_KillTimer} AppTick
   ${NSD_KillTimer} AppFade
+  Call AppSwLeave
   ; Installed before the first slide came in: the last page shows it at once.
   StrCpy $AppIntro 0
   !insertmacro AppRingNone
@@ -2712,6 +3090,7 @@ Function un.AppGuiInit
   File "${APP_ART}\logo-*.png"
   File "${APP_ART}\on-*.png"
   File "${APP_ART}\off-*.png"
+  File "${APP_ART}\sw?-*.png"
   File "${APP_ART}\b-uninstall-*.png"
   File "${APP_ART}\b-cancel-*.png"
   File "${APP_ART}\b-close-*.png"
@@ -2727,16 +3106,7 @@ Function un.AppGuiInit
   StrCpy $AppA3 44
   Call un.AppImage
   StrCpy $AppBmpLogo $AppRet
-  StrCpy $AppA1 "on-$AppLook.png"
-  StrCpy $AppA2 32
-  StrCpy $AppA3 18
-  Call un.AppImage
-  StrCpy $AppBmpOn $AppRet
-  StrCpy $AppA1 "off-$AppLook.png"
-  StrCpy $AppA2 32
-  StrCpy $AppA3 18
-  Call un.AppImage
-  StrCpy $AppBmpOff $AppRet
+  Call un.AppSwLoad
 FunctionEnd
 
 Function un.AppSetTitle
@@ -2764,6 +3134,13 @@ Function un.AppUnPage
   StrCpy $AppHeld 0
   StrCpy $DeleteAppDataCheckboxState 0
   StrCpy $AppDeletePrivate 0
+  ; The switches start off, at once (AppSwSet: the pictures the switches are made with).
+  Call un.AppSwLeave
+  StrCpy $AppA2 0
+  StrCpy $AppA1 1
+  Call un.AppSwSet
+  StrCpy $AppA1 2
+  Call un.AppSwSet
   !insertmacro AppPicture $0 150 18 160 44 $AppBmpLogo
   !insertmacro AppT $AppTx appVersion
   !insertmacro AppLabel $0 24 64 412 16 0x50000081 $AppFTiny MUT BG $AppTx
@@ -2786,7 +3163,7 @@ Function un.AppUnPage
   !insertmacro AppLabel $0 24 183 350 46 0x50000180 $AppFTiny MUT BG $AppTx
   !endif
   ${NSD_OnClick} $0 un.AppToggleData
-  !insertmacro AppPicture $AppSwDesk 404 172 32 18 $AppBmpOff
+  !insertmacro AppPicture $AppSwDesk 404 172 32 18 $AppSwFace1
   ${NSD_OnClick} $AppSwDesk un.AppToggleData
   !insertmacro AppT $AppTx deleteAppData
   !insertmacro AppProxy $AppPxDesk ${APP_CHECK} 404 172 32 18 $AppTx
@@ -2800,7 +3177,7 @@ Function un.AppUnPage
   !insertmacro AppT $AppTx appUnPrivateSub
   !insertmacro AppLabel $0 24 227 350 16 0x50000180 $AppFTiny MUT BG $AppTx
   ${NSD_OnClick} $0 un.AppTogglePrivate
-  !insertmacro AppPicture $AppSwStart 404 216 32 18 $AppBmpOff
+  !insertmacro AppPicture $AppSwStart 404 216 32 18 $AppSwFace2
   ${NSD_OnClick} $AppSwStart un.AppTogglePrivate
   !insertmacro AppT $AppTx appUnPrivate
   !insertmacro AppProxy $AppPxStart ${APP_CHECK} 404 216 32 18 $AppTx
@@ -2831,11 +3208,9 @@ FunctionEnd
 Function un.AppToggleData
   Pop $0
   IntOp $DeleteAppDataCheckboxState 1 - $DeleteAppDataCheckboxState
-  ${If} $DeleteAppDataCheckboxState = 1
-    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOn
-  ${Else}
-    SendMessage $AppSwDesk ${STM_SETIMAGE} 0 $AppBmpOff
-  ${EndIf}
+  StrCpy $AppA1 1
+  StrCpy $AppA2 $DeleteAppDataCheckboxState
+  Call un.AppSwTo
   SendMessage $AppPxDesk ${BM_SETCHECK} $DeleteAppDataCheckboxState 0
 FunctionEnd
 
@@ -2843,11 +3218,9 @@ FunctionEnd
 Function un.AppTogglePrivate
   Pop $0
   IntOp $AppDeletePrivate 1 - $AppDeletePrivate
-  ${If} $AppDeletePrivate = 1
-    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOn
-  ${Else}
-    SendMessage $AppSwStart ${STM_SETIMAGE} 0 $AppBmpOff
-  ${EndIf}
+  StrCpy $AppA1 2
+  StrCpy $AppA2 $AppDeletePrivate
+  Call un.AppSwTo
   SendMessage $AppPxStart ${BM_SETCHECK} $AppDeletePrivate 0
 FunctionEnd
 !endif
@@ -2863,6 +3236,7 @@ FunctionEnd
 
 Function un.AppUnLeave
   ${NSD_KillTimer} un.AppTick
+  Call un.AppSwLeave
   StrCpy $AppB1Ctl 0
   StrCpy $AppB2Ctl 0
   !insertmacro AppRingNone

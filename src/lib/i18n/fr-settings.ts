@@ -234,8 +234,8 @@ export const settings = {
   "Data folder": "Dossier des données",
   "Open folder": "Ouvrir le dossier",
   "Couldn’t open the folder: {error}": "Impossible d’ouvrir le dossier : {error}",
-  "{app} goes online only to fetch the title and picture of a web page you dump, and once a day to check for updates (unless you turn that off). Your notes stay on this computer.":
-    "{app} ne va en ligne que pour chercher le titre et l’image d’une page web que vous déposez, et une fois par jour pour chercher les mises à jour (sauf si vous le désactivez). Vos notes restent sur cet ordinateur.",
+  "{app} goes online only to fetch the title and picture of a web page you dump, once a day to check for updates (unless you turn that off), and to send a problem report when you ask. Your notes stay on this computer.":
+    "{app} ne va en ligne que pour chercher le titre et l’image d’une page web que vous déposez, une fois par jour pour chercher les mises à jour (sauf si vous le désactivez), et pour envoyer un rapport de problème quand vous le demandez. Vos notes restent sur cet ordinateur.",
 
   // ---- Updates ----
   Updates: "Mises à jour",

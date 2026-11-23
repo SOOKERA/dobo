@@ -1,5 +1,18 @@
 # What's new
 
+## 1.1.1
+
+Dobo 1.1.1 lets you tell Sookera when something goes wrong, in a few words, and see first everything that goes with them.
+
+### Highlights
+
+- **Report a problem,** in the **?** menu at the board's corner and in **Settings › Help**. Say what happened, see everything that goes with your words first, then **Send report**, **Send by email** or **Copy details**. Dobo's own problem notes can go with it, with your user folder, file names and anything in quotes taken out, and you can leave them out. Nothing is ever sent by itself. See [Report a problem](report-a-problem.md).
+- **Ideas and questions** have a home: **Share it on GitHub Discussions**, at the bottom of the same page.
+
+### Also
+
+- **Setup's switches slide** between off and on, in Setup and in the uninstaller (at once when Windows' animation effects are off).
+
 ## 1.1.0
 
 Dobo 1.1.0 speaks French from Setup on, takes even better care of your notes, and fits in more closely with Windows.

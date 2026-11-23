@@ -42,7 +42,13 @@ Une autre appli l’utilise peut-être déjà. Choisissez d’autres touches dan
 Faites-la glisser par le haut : l’en-tête, ou la ligne du haut de ce qui est ouvert. Les boutons et les champs qui s’y trouvent ne la déplacent pas.
 
 **Dobo a-t-il besoin d’internet ?**
-Non. Il ne va en ligne que pour les cartes de lien des pages que vous déposez, et une fois par jour pour chercher les mises à jour (sauf si vous le désactivez dans **Paramètres › Mises à jour**), et jamais avant que vous n’acceptiez ses conditions d’utilisation. Voir [Confidentialité](privacy.md).
+Non. Il ne va en ligne que pour les cartes de lien des pages que vous déposez, une fois par jour pour chercher les mises à jour (sauf si vous le désactivez dans **Paramètres › Mises à jour**), et quand vous envoyez vous-même un rapport de problème, jamais avant que vous n’acceptiez ses conditions d’utilisation. Voir [Confidentialité](privacy.md).
+
+**Quelque chose ne va pas. Comment vous le dire ?**
+**Signaler un problème** dans le menu **?** en bas à droite du tableau (**F1**), ou dans **Paramètres › Aide**. Dites ce qui s’est passé, regardez ce qui l’accompagne, puis **Envoyer le rapport** ou **Envoyer par e-mail**. Voir [Signaler un problème](report-a-problem.md). Pour une idée ou une question, passez par [GitHub Discussions](https://github.com/sookera/dobo/discussions).
+
+**Dobo envoie-t-il des rapports de plantage ?**
+Jamais de lui-même. Quand Dobo doit s’arrêter ou ne peut pas démarrer, il écrit une courte ligne sur votre PC, sans votre dossier utilisateur, sans noms de fichiers et sans ce qui est entre guillemets. Cette ligne ne quitte votre PC que dans un rapport que vous envoyez vous-même, et vous pouvez la laisser de côté. Voir [Les problèmes récents](report-a-problem.md#les-problèmes-récents).
 
 **Comment mettre Dobo à jour ?**
 Rien à faire : une fois par jour, Dobo télécharge et vérifie lui-même une nouvelle version, et l’utilise à son prochain démarrage (ou tout de suite, avec **Redémarrer maintenant** dans **Paramètres › Mises à jour**). Si la nouvelle version ne démarre pas correctement, celle que vous aviez est remise. Vos notes ne sont jamais touchées. Voir [Mises à jour](install-and-update.md#mises-à-jour).

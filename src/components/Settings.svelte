@@ -918,6 +918,10 @@
       {/each}
     </div>
     <p class="note">{t("Every key is under Keyboard.")} <button class="link" onclick={seeKeys}>{t("See them")}</button></p>
+    <div class="line report">
+      <span>{t("Report a problem")} <small>{t("Something went wrong? Tell Sookera, in a few words. You see everything that goes with them first.")}</small></span>
+      <button class="small" onclick={() => store.openReport("settings")}>{t("Report…")}</button>
+    </div>
   </section>
 
   <section data-key="About">
@@ -931,7 +935,7 @@
       <button class="small" onclick={openData} disabled={!info}>{t("Open folder")}</button>
     </div>
     {#if openMsg}<p class="error" transition:fold>{words(openMsg)}</p>{/if}
-    <p class="note">{t("{app} goes online only to fetch the title and picture of a web page you dump, and once a day to check for updates (unless you turn that off). Your notes stay on this computer.", { app: APP_NAME })}</p>
+    <p class="note">{t("{app} goes online only to fetch the title and picture of a web page you dump, once a day to check for updates (unless you turn that off), and to send a problem report when you ask. Your notes stay on this computer.", { app: APP_NAME })}</p>
     <!-- The credit the licence's additional terms ask for (NOTICE.md, term 1). -->
     <p class="note credit">
       {t("{app} by Sookera. Free software under the GNU General Public License version 3, with the additional terms in its NOTICE.md file.", { app: APP_NAME })}

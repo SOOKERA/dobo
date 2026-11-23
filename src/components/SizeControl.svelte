@@ -3,7 +3,8 @@
 <script lang="ts">
   // Note size (Small / Normal / Large; stored as compact / comfortable / large), always in reach at the board's corner.
   // Shortcuts: Ctrl+wheel, Ctrl + / Ctrl − / Ctrl 0. After them, "?": a small menu (F1 opens it)
-  // with the quick tour first, the keys, the Archive, and Help & settings (F1 again opens Help).
+  // with the quick tour first, the keys, the Archive, Report a problem, and Help & settings (F1
+  // again opens Help).
   import Icon from "./Icon.svelte";
   import Menu, { type MenuItem } from "./style/parts/Menu.svelte";
   import { askHelp, askTour, helpMenu } from "../lib/tour.svelte";
@@ -32,7 +33,8 @@
     { icon: "tour", label: t("Take the tour"), hint: t("1 min"), primary: true, run: askTour },
     { icon: "keyboard", label: t("Keyboard shortcuts"), run: () => askHelp("Keyboard") },
     { icon: "archive", label: t("Archive"), hint: archived ? String(archived) : undefined, run: () => store.openArchive("board") },
-    { icon: "help", label: t("Help & settings"), sep: true, run: () => askHelp("Help") },
+    { icon: "flag", label: t("Report a problem"), sep: true, run: () => store.openReport("board") },
+    { icon: "help", label: t("Help & settings"), run: () => askHelp("Help") },
   ]);
 </script>
 

@@ -103,5 +103,9 @@
     <rect x="3" y="6" width="18" height="12" rx="2.2" /><path d="M7 10h.01M10.3 10h.01M13.7 10h.01M17 10h.01M8 14h8" />
   {:else if name === "archive"}
     <rect x="3.5" y="4.5" width="17" height="4.5" rx="1.3" /><path d="M5.5 9v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V9" /><path d="M10 13h4" />
+  {:else if name === "send"}
+    <path d="M20.5 3.5 10.6 13.4" /><path d="M20.5 3.5 14.2 20.2l-3.6-6.8-6.8-3.6Z" />
+  {:else if name === "flag"}
+    <path d="M5.5 21V4" /><path d="M5.5 4.5c4-2 6.5 1.8 13 .3v8.4c-6.5 1.5-9-2.3-13-.3" />
   {/if}
 </svg>

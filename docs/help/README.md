@@ -18,4 +18,5 @@ These guides explain what Dobo does, with the names you see in the window.
 - [Backups and your data](backups-and-data.md): daily backups and their kinds, restoring, if your notes don't open, where your notes are, moving to another PC.
 - [Installing and updating](install-and-update.md): Dobo-Setup.exe or the portable Dobo.exe, the terms at first start, updates, silent installs, uninstalling, notification buttons.
 - [Privacy](privacy.md): what stays on your PC, and when Dobo goes online (never before you accept its terms).
+- [Report a problem](report-a-problem.md): tell Sookera when something goes wrong, and see first everything that goes with your words.
 - [Questions](faq.md): short answers to common questions.

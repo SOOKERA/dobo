@@ -1,5 +1,18 @@
 # Nouveautés
 
+## 1.1.1
+
+Dobo 1.1.1 vous permet de dire à Sookera quand quelque chose ne va pas, en quelques mots, en voyant d’abord tout ce qui les accompagne.
+
+### L’essentiel
+
+- **Signaler un problème,** dans le menu **?** en bas à droite du tableau et dans **Paramètres › Aide**. Dites ce qui s’est passé, voyez d’abord tout ce qui accompagne vos mots, puis **Envoyer le rapport**, **Envoyer par e-mail** ou **Copier les détails**. Les notes de problèmes de Dobo peuvent l’accompagner, sans votre dossier utilisateur, sans noms de fichiers et sans ce qui est entre guillemets, et vous pouvez les laisser de côté. Rien ne part jamais tout seul. Voir [Signaler un problème](report-a-problem.md).
+- **Les idées et les questions** ont leur place : **Partagez-la sur GitHub Discussions**, en bas de la même page.
+
+### Et aussi
+
+- **Les interrupteurs de l’installation glissent** entre activé et désactivé, dans l’installation comme dans la désinstallation (d’un coup quand les effets d’animation de Windows sont coupés).
+
 ## 1.1.0
 
 Dobo 1.1.0 parle français dès l’installation, veille encore mieux sur vos notes et s’entend mieux avec Windows.

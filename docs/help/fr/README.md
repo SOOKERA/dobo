@@ -18,4 +18,5 @@ Ces guides expliquent ce que fait Dobo, avec les noms que vous voyez dans la fen
 - [Sauvegardes et données](backups-and-data.md) : sauvegardes quotidiennes et leurs types, restauration, si vos notes ne s’ouvrent pas, où sont vos notes, changer de PC.
 - [Installer et mettre à jour](install-and-update.md) : Dobo-Setup.exe ou Dobo.exe portable, les conditions au premier lancement, les mises à jour, l’installation silencieuse, la désinstallation, les boutons des notifications.
 - [Confidentialité](privacy.md) : ce qui reste sur votre PC, et quand Dobo va en ligne (jamais avant que vous n’acceptiez ses conditions).
+- [Signaler un problème](report-a-problem.md) : dire à Sookera quand quelque chose ne va pas, en voyant d’abord tout ce qui accompagne vos mots.
 - [Questions fréquentes](faq.md) : des réponses courtes.

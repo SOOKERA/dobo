@@ -15,6 +15,7 @@ import { settings } from "./fr-settings";
 import { board } from "./fr-board";
 import { views } from "./fr-views";
 import { style } from "./fr-style";
+import { report } from "./fr-report";
 
-export const parts = { app, settings, board, views, style };
-export const fr = { ...app, ...settings, ...board, ...views, ...style };
+export const parts = { app, settings, board, views, style, report };
+export const fr = { ...app, ...settings, ...board, ...views, ...style, ...report };

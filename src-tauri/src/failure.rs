@@ -16,15 +16,20 @@ fn data_folder() -> Option<PathBuf> {
     crate::paths::place().map(|p| p.dir.clone()).or_else(crate::paths::usual_dir)
 }
 
-/// Adds a dated line to `name` in `dir` (only the error and where it happened: never a note's
-/// words). Returns the file.
+/// Adds a dated line to `name` in `dir` (only the error and where it happened, cleaned: never a
+/// note's words, a file's name or the user folder). Returns the file.
 fn write_note(dir: &Path, name: &str, text: &str) -> Option<PathBuf> {
     std::fs::create_dir_all(dir).ok()?;
     let path = dir.join(name);
     let fresh = std::fs::metadata(&path).is_ok_and(|m| m.len() > NOTE_MAX);
     let mut f = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&path).ok()?;
-    let line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).take(1000).collect();
-    writeln!(f, "{} Dobo {}: {line}", crate::clock::stamp(crate::db::now_ms()), env!("CARGO_PKG_VERSION")).ok()?;
+    // Cleaned as it is written (report.rs): nothing that could say who you are, even here.
+    let line = crate::report::clean(text);
+    // The time with its offset then ("2026-11-23T15:37:00+03:00"), so a report says it as it
+    // was, across clock changes and travel (older lines have "2026-11-23_153700").
+    let now = crate::db::now_ms();
+    let when = crate::clock::iso_local(now).unwrap_or_else(|| crate::clock::stamp(now));
+    writeln!(f, "{when} Dobo {}: {line}", env!("CARGO_PKG_VERSION")).ok()?;
     Some(path)
 }
 
@@ -250,6 +255,9 @@ mod tests {
         let text = std::fs::read_to_string(&p).unwrap();
         assert_eq!(text.lines().count(), 1);
         assert!(text.contains("first second"));
+        // Its time carries its offset, and reads back as written.
+        let stamp = text.split(' ').next().unwrap();
+        assert!(stamp.len() == 25 && stamp.as_bytes()[10] == b'T', "{stamp}");
         std::fs::write(&p, vec![b'x'; (NOTE_MAX + 1) as usize]).unwrap();
         write_note(&dir, "crash.log", "again").unwrap();
         assert!(std::fs::metadata(&p).unwrap().len() < 200, "started again");

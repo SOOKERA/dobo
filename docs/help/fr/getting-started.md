@@ -51,6 +51,6 @@ Cliquez dans la ligne de saisie en haut (elle est prête dès que Dobo s’ouvre
 
 ## L’aide dans Dobo
 
-- Le **?** en bas à droite du tableau ouvre un petit menu : **Faire la visite**, **Raccourcis clavier**, **Archives** et **Aide et paramètres**. **F1** l’ouvre ; **F1** une seconde fois ouvre **Paramètres › Aide**.
+- Le **?** en bas à droite du tableau ouvre un petit menu : **Faire la visite**, **Raccourcis clavier**, **Archives**, **Signaler un problème** et **Aide et paramètres**. **F1** l’ouvre ; **F1** une seconde fois ouvre **Paramètres › Aide**.
 - **Paramètres › Aide** contient la visite, les **Touches à connaître** et les **Gestes**.
 - Pointez n’importe quel bouton : son info-bulle le nomme et montre ses touches.

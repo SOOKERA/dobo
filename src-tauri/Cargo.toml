@@ -1,6 +1,6 @@
 [package]
 name = "dobo"
-version = "1.1.0"
+version = "1.1.1"
 description = "Dobo by Sookera: to-dos & idea board"
 authors = ["Sookera"]
 license = "GPL-3.0-only"

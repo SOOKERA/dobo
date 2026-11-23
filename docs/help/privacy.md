@@ -6,16 +6,18 @@ Dobo keeps your notes on your PC. There's no account, no sign-in, no tracking, a
 
 Everything you put in Dobo: notes, tasks, ideas, steps, pictures, files you drop in (Dobo keeps a link to them, they stay where they are), your styles and settings, and the backups. They're in the data folder shown in **Settings › About**, or, for the backups, in the folder you chose for them (see [Backups and your data](backups-and-data.md)). A portable Dobo keeps them in the `data` folder next to Dobo.exe, or in some cases in your user profile (see [Installing and updating](install-and-update.md#dobo-portable)).
 
-Dobo has no analytics, no crash reports and no "send a report" button: it never sends anything about you or your notes.
+Dobo has no analytics and no automatic crash reports: it never sends anything about you or your notes by itself. A problem report goes only when you send it (see below).
 
 ## When Dobo goes online
 
-**Settings › About** puts it in one sentence: "Dobo goes online only to fetch the title and picture of a web page you dump, and once a day to check for updates (unless you turn that off). Your notes stay on this computer."
+**Settings › About** puts it in one sentence: "Dobo goes online only to fetch the title and picture of a web page you dump, once a day to check for updates (unless you turn that off), and to send a problem report when you ask. Your notes stay on this computer."
 
 Nothing goes online before you accept Dobo's terms of use: in Dobo Setup's window, or at the portable Dobo's first start (see [Installing and updating](install-and-update.md#the-terms-of-use-at-first-start)). Until then, no update check and no link card; everything else works as usual.
 
 1. **Link cards for the pages you dump.** When the quick dump bar keeps the link to the web page you were reading, Dobo fetches that page once, to show its title and picture on a small card. The picture is saved next to your notes, so the card shows offline. Only that page and its picture are fetched (the picture can come from another site, as the page says): your line's words are never sent. Dobo never fetches addresses on your own network (a router, a printer). Click **Leave it out** in the bar and nothing is fetched.
 2. **Updates.** Once a day, Dobo fetches `latest.json` from [github.com/sookera/dobo-releases](https://github.com/sookera/dobo-releases), where its releases are published, to see whether there's a new version. Only when there is does it fetch `Dobo.exe` from there too. It says which version of Dobo is asking, and nothing about you or your notes. You can turn this off in **Settings › Updates** (**Check for updates automatically**): then Dobo checks only when you click **Check for updates**.
+
+3. **A problem report, when you send one.** **Report a problem** (in the **?** menu, or **Settings › Help**) sends nothing before you click **Send report**, and shows first everything that goes with your words: Dobo's version, Setup or portable, your Windows version, Dobo's language and look, and, unless you turn it off, the last problems Dobo noted, without your user folder, folder and file names or anything in quotes, and with links cut to their site (each with its time and your PC's time zone then). It goes to Sookera's report service (reports.sookera.com), which keeps it in a private place on GitHub, only to fix Dobo. Your IP address isn't stored. Never your notes, titles, pictures, files, links or settings. See [Report a problem](report-a-problem.md).
 
 That's all. Nothing else goes online: not your notes, not your searches, not your settings.
 

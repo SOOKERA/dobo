@@ -13,6 +13,7 @@
 // a row that isn't written yet.
 import { nextAfterDone } from "./repeat";
 import { dockWidth, widthForScreen } from "./dock";
+import type { ReportInfo, ReportProblem } from "./report";
 import type {
   Everything,
   Item,
@@ -218,6 +219,12 @@ export interface Backend {
   setItemLink(id: number, link: LinkPreview | null): Promise<Item>;
   openPath(path: string): Promise<void>;
   openUrl(url: string): Promise<void>;
+  /** Help › Report a problem: what a report would carry (Dobo's version, Windows, its own problem notes, cleaned). */
+  reportInfo(): Promise<ReportInfo>;
+  /** Sends a report to Sookera; its reference ("42"). Rejects with a `SendFail`. */
+  reportSend(description: string, look: "light" | "dark", language: "en" | "fr", problems: ReportProblem[]): Promise<string>;
+  /** Opens a new email to support@sookera.com (only that address). */
+  reportMail(url: string): Promise<void>;
   savePicture(noteId: number, itemId: number | null, bytes: Uint8Array, ext: string): Promise<Picture>;
   addPictureFile(noteId: number, itemId: number | null, path: string): Promise<Picture>;
   deletePicture(id: number): Promise<void>;
@@ -337,6 +344,9 @@ async function tauriBackend(): Promise<Backend> {
     setItemLink: (id, link) => invoke("set_item_link", { id, link }),
     openPath: (path) => invoke("open_path", { path }),
     openUrl: (url) => invoke("open_url", { url }),
+    reportInfo: () => invoke("report_info"),
+    reportSend: (description, look, language, problems) => invoke("report_send", { description, look, language, problems }),
+    reportMail: (url) => invoke("report_mail", { url }),
     savePicture: (noteId, itemId, bytes, ext) =>
       invoke("save_picture", bytes, { headers: { "note-id": String(noteId), "item-id": itemId == null ? "" : String(itemId), ext } }),
     addPictureFile: (noteId, itemId, path) => invoke("add_picture_file", { noteId, itemId, path }),
@@ -847,6 +857,41 @@ function mockBackend(): Backend {
     },
     openUrl: (url) => {
       window.open(url, "_blank", "noopener");
+      return Promise.resolve();
+    },
+    // Report a problem: two sample problems (…?problems=0: none); Send answers #42 after a
+    // moment, or fails with ?report=offline / busy / server / refused.
+    reportInfo: () => {
+      const iso = (ms: number) => {
+        const d = new Date(ms);
+        const p = (n: number) => String(n).padStart(2, "0");
+        const m = -d.getTimezoneOffset();
+        const off = `${m < 0 ? "-" : "+"}${p(Math.floor(Math.abs(m) / 60))}:${p(Math.abs(m) % 60)}`;
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${off}`;
+      };
+      const problems: ReportProblem[] =
+        params.get("problems") === "0"
+          ? []
+          : [
+              { time: iso(Date.now() - 26 * 3600_000), area: "crash", message: "called `Option::unwrap()` on a `None` value (src\\reminders.rs:214:31)", version: "1.1.0" },
+              { time: iso(Date.now() - 9 * 86_400_000), area: "startup", message: "couldn’t open %USERPROFILE%\\…\\….sqlite: database is locked", version: "1.0.0" },
+            ];
+      return new Promise((res) => setTimeout(() => res({ version: "1.1.1", installed: true, windows: "Windows 11 Pro 25H2 (build 26200)", problems, total: problems.length }), 120));
+    },
+    reportSend: (description) => {
+      const how = params.get("report");
+      return new Promise((res, rej) =>
+        setTimeout(() => {
+          if (how === "offline" || how === "server") rej({ kind: how });
+          else if (how === "busy") rej({ kind: "busy", retryAfter: 1500 });
+          else if (how === "refused") rej({ kind: "refused", message: "Sookera’s report service didn’t take this report. Use Send by email instead." });
+          else res(description.trim() ? "42" : "");
+        }, 1100),
+      );
+    },
+    reportMail: (url) => {
+      if (!url.startsWith("mailto:support@sookera.com")) return Promise.reject("Only an email to support@sookera.com opens from here.");
+      console.info("[preview] would open", url.slice(0, 120));
       return Promise.resolve();
     },
     savePicture: (noteId, itemId, bytes, ext) => {

@@ -1070,6 +1070,11 @@ class Store {
     this.showToast(() => tr("“{name}” is back on the board", { name: noteTitle(n) }), { label: () => tr("Undo"), run: () => void this.undo() });
   }
 
+  /** Opens Report a problem (App.svelte listens). */
+  openReport(from: "board" | "settings") {
+    window.dispatchEvent(new CustomEvent("dobo-report", { detail: from }));
+  }
+
   /** Opens the Archive page (App.svelte listens). */
   openArchive(from: "board" | "settings") {
     window.dispatchEvent(new CustomEvent("dobo-archive", { detail: from }));

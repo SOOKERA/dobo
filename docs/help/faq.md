@@ -42,7 +42,13 @@ Another app may already use it. Choose new keys in **Settings › Keyboard** (**
 Drag it by its top: the header, or the top row of whatever is open. Buttons and fields there don't move it.
 
 **Does Dobo need the internet?**
-No. It goes online only for link cards of the pages you dump, and once a day to check for updates (unless you turn that off in **Settings › Updates**), and never before you accept its terms of use. See [Privacy](privacy.md).
+No. It goes online only for link cards of the pages you dump, once a day to check for updates (unless you turn that off in **Settings › Updates**), and when you send a problem report yourself, never before you accept its terms of use. See [Privacy](privacy.md).
+
+**Something went wrong. How do I tell you?**
+**Report a problem** in the **?** menu at the board's corner (**F1**), or in **Settings › Help**. Say what happened, check what goes with it, then **Send report** or **Send by email**. See [Report a problem](report-a-problem.md). For an idea or a question, use [GitHub Discussions](https://github.com/sookera/dobo/discussions).
+
+**Does Dobo send crash reports?**
+Never by itself. When Dobo has to stop or can't start, it writes a short line on your PC, with your user folder, file names and anything in quotes taken out. That line leaves your PC only in a report you send yourself, and you can leave it out. See [The recent problems](report-a-problem.md#the-recent-problems).
 
 **How do I update Dobo?**
 You don't have to: once a day, Dobo downloads and checks a new version by itself, and uses it the next time it starts (or now, with **Restart now** in **Settings › Updates**). If the new version doesn't start properly, the one you had is put back. Your notes are never touched. See [Updates](install-and-update.md#updates).

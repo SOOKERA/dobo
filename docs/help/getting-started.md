@@ -51,6 +51,6 @@ Click the entry line at the top (it's ready as soon as Dobo opens), type, and pr
 
 ## Help inside Dobo
 
-- The **?** at the board's bottom-right corner opens a small menu: **Take the tour**, **Keyboard shortcuts**, **Archive** and **Help & settings**. **F1** opens it; **F1** again opens **Settings › Help**.
+- The **?** at the board's bottom-right corner opens a small menu: **Take the tour**, **Keyboard shortcuts**, **Archive**, **Report a problem** and **Help & settings**. **F1** opens it; **F1** again opens **Settings › Help**.
 - **Settings › Help** has the tour, **Keys to know** and **Gestures**.
 - Point at any button: its tooltip names it and shows its keys.

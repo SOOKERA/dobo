@@ -1,6 +1,6 @@
 # Conditions d’utilisation
 
-Dernière mise à jour le 21 novembre 2026
+Dernière mise à jour le 23 novembre 2026
 
 Traduction de courtoisie : seule la version anglaise de ces conditions (TERMS.md) fait foi ; en cas de différence entre les deux, c’est la version anglaise qui s’applique.
 
@@ -34,10 +34,12 @@ que ce soit d’important, et gardez des copies des notes qui comptent : Dobo f
 
 ## Ce que Dobo fait, et ce qu’il ne fait pas
 
-- Dobo n’a ni compte, ni publicité, ni mesure d’audience, ni rapport de plantage.
-- Il ne va en ligne que pour récupérer le titre et l’image d’une page web que vous mettez dans une note, et une fois par jour pour
-  chercher une nouvelle version de Dobo (vous pouvez le désactiver dans Paramètres › Mises à jour). Une mise à jour n’est
-  utilisée que si elle est signée par Sookera.
+- Dobo n’a ni compte, ni publicité, ni mesure d’audience, ni rapport de plantage automatique.
+- Il ne va en ligne que pour récupérer le titre et l’image d’une page web que vous mettez dans une note, une fois par jour pour
+  chercher une nouvelle version de Dobo (vous pouvez le désactiver dans Paramètres › Mises à jour), et pour envoyer un rapport
+  de problème quand vous le demandez. Une mise à jour n’est utilisée que si elle est signée par Sookera.
+- Un rapport de problème ne part que si vous l’envoyez vous-même (Signaler un problème, dans le menu ?), avec ce que Dobo
+  vous montre avant l’envoi. Nous le gardons privé et ne l’utilisons que pour corriger Dobo.
 - Vos notes, vos images et vos sauvegardes restent sur votre ordinateur (ou dans le dossier portable de Dobo). Nous ne les
   recevons jamais.
 
@@ -45,7 +47,9 @@ que ce soit d’important, et gardez des copies des notes qui comptent : Dobo f
 
 Les pages web dont Dobo récupère le titre et l’image appartiennent à d’autres, et ont leurs propres conditions. Nous ne les
 contrôlons pas, et nous ne sommes responsables ni de leur contenu ni de leur disponibilité. Les mises à jour de Dobo viennent de
-GitHub (github.com/sookera/dobo-releases), qui a ses propres conditions.
+GitHub (github.com/sookera/dobo-releases), qui a ses propres conditions. Les rapports de problème que vous envoyez
+passent par le service de rapports de Sookera sur Cloudflare et sont gardés sur GitHub, chacun avec ses propres
+conditions.
 
 ## Responsabilité
 

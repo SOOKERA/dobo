@@ -18,6 +18,7 @@ mod paths;
 mod preview;
 pub mod release;
 mod recovery;
+mod report;
 mod reminders;
 mod rename;
 mod repeat;
@@ -623,6 +624,35 @@ fn dump_item(app: AppHandle, state: State<AppState>, text: String, link: Option<
         let _ = app.emit_to("main", "item-updated", item.clone());
     }
     Ok((item, waiting))
+}
+
+/// Help › Report a problem: what a report would carry (reads Dobo's problem notes, off the
+/// window's thread).
+#[tauri::command]
+async fn report_info() -> R<report::ReportInfo> {
+    tauri::async_runtime::spawn_blocking(report::report_info).await.map_err(|e| e.to_string())
+}
+
+/// Sends the report as the window shows it (online: not before the terms are accepted). The
+/// report's reference, or why it didn't go.
+#[tauri::command]
+async fn report_send(description: String, look: String, language: String, problems: Vec<report::Problem>) -> Result<String, report::SendFail> {
+    consent::check().map_err(|m| report::SendFail::Refused { message: m })?;
+    tauri::async_runtime::spawn_blocking(move || report::send(&description, &look, &language, &problems)).await.map_err(|_| report::SendFail::Server)?
+}
+
+/// Send by email: a new message to support@sookera.com, and only that.
+#[tauri::command]
+fn report_mail(app: AppHandle, url: String) -> R<()> {
+    if !report::mail_link_ok(&url) {
+        return Err(tr!("Only an email to support@sookera.com opens from here.", "Seul un e-mail à support@sookera.com s’ouvre d’ici."));
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|_| {
+        tr!(
+            "Couldn’t open your email app. Use Copy details and paste them into an email to support@sookera.com.",
+            "Impossible d’ouvrir votre messagerie. Utilisez Copier les détails et collez-les dans un e-mail à support@sookera.com."
+        )
+    })
 }
 
 #[tauri::command]
@@ -1843,6 +1873,9 @@ pub fn run() {
             hide_dump,
             dump_item,
             fetch_preview,
+            report_info,
+            report_send,
+            report_mail,
             set_item_link,
             open_path,
             open_url,

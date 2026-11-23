@@ -22,6 +22,7 @@
   import LookBack from "./components/LookBack.svelte";
   import Templates from "./components/Templates.svelte";
   import Archive from "./components/Archive.svelte";
+  import Report from "./components/Report.svelte";
   import Peek from "./components/Peek.svelte";
   import StickyDates from "./components/StickyDates.svelte";
   import BoardBackground from "./components/style/BoardBackground.svelte";
@@ -77,6 +78,8 @@
   let tidyOpen = $state(false);
   let onboarding = $state(false);
   let termsOpen = $state(false);
+  /** Report a problem, and where it was opened from (its Back goes there). */
+  let reportOpen = $state<"board" | "settings" | null>(null);
   /** The notes are read, and the first-run window and the terms are known. */
   let started = $state(false);
   // The recovery screen's word: once the board is in, and not under the first-run window or the
@@ -97,7 +100,7 @@
   // A view over the whole board (or the first-run window, the terms): what is under it is inert,
   // so Tab, typing and clicks never reach it. Under a veiled dialog (Search, a new note) the top
   // bar stays as it is, for the window to be moved by (its Tab stays in the dialog).
-  let fullCover = $derived(settingsOpen || tidyOpen || viewer.open || !!store.archiveOpen || onboarding || termsOpen);
+  let fullCover = $derived(settingsOpen || tidyOpen || viewer.open || !!store.archiveOpen || !!reportOpen || onboarding || termsOpen);
   let covered = $derived(fullCover || searchOpen || store.templatesOpen);
   // (Made inert once the view has arrived: going inert restyles the whole board, about 150 ms on a
   // big board at a slow CPU, which would stall the view's opening. Meanwhile the view keeps the
@@ -168,6 +171,8 @@
     settingsOpen = false;
     searchOpen = false;
     store.archiveOpen = null;
+    // (What was typed in Report a problem stays for its next open.)
+    reportOpen = null;
     viewer.open = false;
     hideTimer = setTimeout(() => store.backend.hidePanel(), reduce.matches ? 0 : 240);
   }
@@ -197,6 +202,7 @@
           [Tidy, { onClose: none }],
           [Search, { onClose: none }],
           [Archive, { from: "board", onBack: none, onClose: none }],
+          [Report, { from: "board", onBack: none, onClose: none }],
           [Templates, { onClose: none }],
         ]),
       1500,
@@ -226,6 +232,7 @@
           tour.close();
           settingsOpen = false;
           searchOpen = false;
+          reportOpen = null;
           tidyOpen = true;
         },
         "focus-item": (id) => {
@@ -257,11 +264,12 @@
         shown = false;
         store.peek = true;
       });
-      window.addEventListener("dobo-tidy", () => (tour.close(), (tidyOpen = true), (settingsOpen = false), (searchOpen = false)));
+      window.addEventListener("dobo-tidy", () => (tour.close(), (tidyOpen = true), (settingsOpen = false), (searchOpen = false), (reportOpen = null)));
       // The window closed or minimised (its × hides it without the slide-out): the tour ends too.
       document.addEventListener("visibilitychange", () => document.hidden && tour.close());
       window.addEventListener("dobo-tour", startTour);
       window.addEventListener("dobo-archive", (e) => openArchive((e as CustomEvent).detail === "settings" ? "settings" : "board"));
+      window.addEventListener("dobo-report", (e) => openReport((e as CustomEvent).detail === "settings" ? "settings" : "board"));
       window.addEventListener("dobo-help", (e) => openHelp((e as CustomEvent).detail === "Keyboard" ? "Keyboard" : "Help"));
       if (!inTauri && new URLSearchParams(location.search).has("peek")) store.peek = true;
       store.backend.onFocusChanged((focused) => {
@@ -501,9 +509,10 @@
   /** Closes whatever is open, then the tour starts (once what closed has mostly gone). */
   function startTour() {
     if (onboarding || tour.open) return;
-    const any = settingsOpen || searchOpen || tidyOpen || look.panelOpen || viewer.open || store.templatesOpen || store.lookbackOpen || !!boardMenuAt || !!store.archiveOpen;
+    const any = settingsOpen || searchOpen || tidyOpen || look.panelOpen || viewer.open || store.templatesOpen || store.lookbackOpen || !!boardMenuAt || !!store.archiveOpen || !!reportOpen;
     settingsOpen = searchOpen = tidyOpen = false;
     store.archiveOpen = null;
+    reportOpen = null;
     look.panelOpen = false;
     viewer.open = false;
     store.templatesOpen = false;
@@ -515,12 +524,12 @@
     store.toast = null;
     // (Not over something opened meanwhile, like Help by F1.)
     setTimeout(() => {
-      if (!onboarding && !settingsOpen && !searchOpen && !tidyOpen && !look.panelOpen && !viewer.open && !store.templatesOpen && !store.archiveOpen) tour.start();
+      if (!onboarding && !settingsOpen && !searchOpen && !tidyOpen && !look.panelOpen && !viewer.open && !store.templatesOpen && !store.archiveOpen && !reportOpen) tour.start();
     }, any && !reduce.matches ? 200 : 0);
   }
   // A full view over the board: the board waits to show notes put back from the archive.
   $effect(() => {
-    store.over = settingsOpen || searchOpen || tidyOpen || !!store.archiveOpen || store.templatesOpen || viewer.open;
+    store.over = settingsOpen || searchOpen || tidyOpen || !!store.archiveOpen || !!reportOpen || store.templatesOpen || viewer.open;
   });
 
   // ---- The Archive ----
@@ -534,6 +543,7 @@
     boardMenuAt = null;
     ideaMenu = null;
     settingsOpen = false;
+    reportOpen = null;
     // ("See archive" has nothing left to say once it is open.)
     if (store.toast?.more) store.toast = null;
     store.archiveOpen = from;
@@ -560,6 +570,7 @@
     tour.close();
     searchOpen = tidyOpen = false;
     store.archiveOpen = null;
+    reportOpen = null;
     look.panelOpen = false;
     viewer.open = false;
     store.templatesOpen = false;
@@ -567,6 +578,30 @@
     ideaMenu = null;
     if (store.ruler?.mode === "click") store.ruler = null;
     settingsAt = { key, n: (settingsAt?.n ?? 0) + 1 };
+    settingsOpen = true;
+  }
+
+  // ---- Report a problem ----
+  function openReport(from: "board" | "settings") {
+    if (onboarding) return;
+    helpMenu.open = false;
+    tour.close();
+    searchOpen = tidyOpen = false;
+    store.archiveOpen = null;
+    look.panelOpen = false;
+    viewer.open = false;
+    store.templatesOpen = false;
+    boardMenuAt = null;
+    ideaMenu = null;
+    settingsOpen = false;
+    reportOpen = from;
+  }
+  /** Back one level: to Settings › Help when it was opened from there, else the board. */
+  function reportBack() {
+    const from = reportOpen;
+    reportOpen = null;
+    if (from !== "settings") return;
+    settingsAt = { key: "Help", n: (settingsAt?.n ?? 0) + 1 };
     settingsOpen = true;
   }
   /** Once, a moment after the first-run setup: a gentle offer, never started by itself. */
@@ -616,6 +651,8 @@
     tidyOpen = false;
     store.templatesOpen = false;
     viewer.open = false;
+    // (Report a problem keeps what you typed for when it opens again.)
+    reportOpen = null;
   }
   function toggleStyle() {
     // (Not under the first-run window or the terms: only they answer then.)
@@ -705,7 +742,7 @@
     // (/ is a key of the board and the views over it, not of Tidy, the Archive, the picture viewer
     // or New note: there, with the keyboard on a choice or a card, it would close them by
     // surprise. The shortcut still opens Search from them, closing them first.)
-    const slash = e.key === "/" && !typing() && !e.ctrlKey && !e.altKey && !e.metaKey && !tidyOpen && !store.archiveOpen && !viewer.open && !store.templatesOpen;
+    const slash = e.key === "/" && !typing() && !e.ctrlKey && !e.altKey && !e.metaKey && !tidyOpen && !store.archiveOpen && !reportOpen && !viewer.open && !store.templatesOpen;
     if (matches(e, store.shortcuts.search) || slash) {
       e.preventDefault();
       openSearch();
@@ -714,7 +751,8 @@
     if (e.key !== "Escape") {
       // The board by keyboard (only when nothing is open on top of it, and the keyboard is on the
       // board itself or the entry line, whose Down steps onto it; elsewhere, only Undo / Redo).
-      const over = settingsOpen || searchOpen || tidyOpen || viewer.open || store.templatesOpen;
+      // (Report a problem: its box has its own Undo, the board none.)
+      const over = settingsOpen || searchOpen || tidyOpen || viewer.open || store.templatesOpen || !!reportOpen;
       const a = document.activeElement;
       // (The place put aside while a view was open, if it hasn't come back yet.)
       if (!over && !store.archiveOpen && keyFree()) unpark();
@@ -1177,6 +1215,9 @@
     {/if}
     {#if store.archiveOpen}
       <Archive from={store.archiveOpen} onBack={archiveBack} onClose={closeArchive} />
+    {/if}
+    {#if reportOpen}
+      <Report from={reportOpen} onBack={reportBack} onClose={() => (reportOpen = null)} />
     {/if}
     {#if tour.open}
       <Tour />

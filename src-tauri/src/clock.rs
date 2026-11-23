@@ -350,6 +350,34 @@ pub fn stamp(ms: i64) -> String {
     format!("{}-{:02}-{:02}_{:02}{:02}{:02}", year4(d.year()), d.month(), d.day(), d.hour(), d.minute(), d.second())
 }
 
+/// "2026-11-23T15:37:00+03:00": the computer's own time then, with its offset from UTC then (the
+/// times in a problem report). None outside the years 0 to 9999 or the calendar.
+pub fn iso_local(ms: i64) -> Option<String> {
+    let d = local(ms)?;
+    let utc = TimeZone::UTC.to_datetime(Timestamp::from_millisecond(ms).ok()?);
+    let minutes = d.duration_since(utc).as_secs().div_euclid(60);
+    if !(0..=9999).contains(&d.year()) || minutes.abs() >= 24 * 60 {
+        return None;
+    }
+    let (sign, m) = if minutes < 0 { ('-', -minutes) } else { ('+', minutes) };
+    Some(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{sign}{:02}:{:02}", d.year(), d.month(), d.day(), d.hour(), d.minute(), d.second(), m / 60, m % 60))
+}
+
+/// The moment a file name's "2026-11-18_173000" (`stamp`) was, on this computer's clock.
+pub fn from_stamp(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() != 17 || b[4] != b'-' || b[7] != b'-' || b[10] != b'_' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r).filter(|x| x.bytes().all(|c| c.is_ascii_digit())).and_then(|x| x.parse().ok()) };
+    let day = Date::new(n(0..4)? as i16, n(5..7)? as i8, n(8..10)? as i8).ok()?;
+    let (h, mi, se) = (n(11..13)?, n(13..15)?, n(15..17)?);
+    if !(0..24).contains(&h) || !(0..60).contains(&mi) || !(0..60).contains(&se) {
+        return None;
+    }
+    crate::repeat::to_ms_in(&Local, day.at(h as i8, mi as i8, se as i8, 0))
+}
+
 /// "2026-11-18" (the local date; for file names and to compare days).
 pub fn local_date(ms: i64) -> String {
     let d = for_names(ms);
