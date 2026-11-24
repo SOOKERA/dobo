@@ -50,11 +50,11 @@ Dobo's window uses Microsoft Edge WebView2, which Windows 11 and most Windows 10
 
 ## Updates
 
-Open **Settings › Updates**:
+Open **Settings › Updates**, second in Settings, right after **Appearance**:
 
-- **Check for updates automatically** (on at first): "Once a day. A new version is downloaded and checked, then used the next time Dobo starts. Your notes are never touched." It also checks while Dobo stays open in the tray for days. If it can't reach the internet, it tries again an hour later.
-- **Check for updates** looks right away, also with the automatic check off.
-- The line next to the button says where things stand. Under it, the version line: "Version 1.1.0 · last checked …" (or "not checked yet"). When the line next to the button only gives the version, the one under it just says "Last checked …" or "Not checked yet". When a new version is downloaded and checked, it says **Dobo {v} is ready** ("It starts the next time Dobo opens, or now with Restart now."), and **Restart now** takes the button's place. The board says it once too, with **Restart now**: "Dobo {v} is ready. It starts the next time Dobo opens."
+- The first line names your copy, "Dobo 1.2.0 · Installed" (or "· Portable"), and says under it where things stand: "Not checked yet." or "Last checked …", "You’re up to date.", "Checking for updates…", or that a new version is out. With the automatic check on, it adds "Dobo looks once a day." Its button, **Check for updates**, looks right away, also with the automatic check off. When a new version is downloaded and checked, the line says "Dobo 1.2.1 is ready. It starts the next time Dobo opens.", with what the new version brings under it, and **Restart now** takes the button's place. The board says it once too, with **Restart now**. When something goes wrong (no connection, a folder Dobo can't change), the reason shows under the line.
+- **Check for updates automatically** (on at first): "A new version is downloaded and checked, then used the next time Dobo starts. Your notes are never touched." It looks once a day, also while Dobo stays open in the tray for days. If it can't reach the internet, it tries again an hour later.
+- **What’s new**: **Read** shows what this version of Dobo brings. It also shows by itself, once, the first time Dobo opens after an update: every version since the one you had, newest first ("What’s new since Dobo 1.1.0"), with links to the guides on dobo.sookera.com. A new install shows nothing. **Got it** or **‹ Back** returns to where you came from; **×** or **Esc** goes straight to the board. It's in the **?** menu at the board's corner too.
 
 How an update works:
 

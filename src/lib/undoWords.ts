@@ -13,6 +13,7 @@ const BACK: Partial<Record<Key, [Key, Key]>> = {
   Deleted: ["Task put back", "Task deleted again"],
   "Idea deleted": ["Idea put back", "Idea deleted again"],
   "Note added": ["Note taken out", "Note added again"],
+  "Note made from a line": ["Line back in its place", "Note made again"],
   "Note deleted": ["Note put back", "Note deleted again"],
   Archived: ["Note out of the archive", "Note archived again"],
   Restored: ["Note back in the archive", "Note back on the board"],

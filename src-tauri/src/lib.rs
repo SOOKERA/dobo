@@ -27,6 +27,7 @@ mod terms;
 mod thumbs;
 mod tray;
 pub mod updates;
+mod whatsnew;
 mod window;
 
 use db::{Everything, Item, Note, Picture};

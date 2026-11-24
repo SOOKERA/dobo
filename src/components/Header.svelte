@@ -64,7 +64,7 @@
     compact
       ? [
           ...(styleIn ? [{ icon: "brush", label: t("Style"), hint: "Ctrl+Shift+S", run: onStyle }] : []),
-          ...(newIn ? [{ icon: "note-plus", label: t("New note"), run: () => (store.templatesOpen = true) }] : []),
+          ...(newIn ? [{ icon: "note-plus", label: t("New note"), run: () => store.openTemplates() }] : []),
           lookBack,
           { icon: "settings", label: t("Settings"), hint: "Ctrl+Shift+P", run: onSettings },
           ...(floating ? [{ icon: "ontop", label: t("Always on top"), hint: store.win.float_on_top ? t("On") : t("Off"), run: () => store.setFloatOnTop(!store.win.float_on_top) }] : []),
@@ -225,7 +225,7 @@
     <button class="style-btn" data-tour="style" class:on={look.panelOpen} aria-label={t("Style")} aria-pressed={look.panelOpen} data-tip={t("Style")} data-tip-keys="Ctrl+Shift+S" onclick={onStyle}><Icon name="brush" size={16} /><span>{t("Style")}</span></button>
     {/if}
     {#if !newIn}
-    <button class="tool" aria-label={t("New note")} data-tip={t("New note, empty or from a template")} onclick={() => (store.templatesOpen = true)}><Icon name="note-plus" /></button>
+    <button class="tool" aria-label={t("New note")} data-tip={t("New note, empty or from a template")} onclick={() => store.openTemplates()}><Icon name="note-plus" /></button>
     {/if}
     <button class="tool" aria-label={t("Tidy the Inbox, {n} waiting", { n: waiting })} data-tip={waiting ? t("Tidy the Inbox ({n} waiting)", { n: waiting }) : t("The Inbox is clear")} onclick={onTidy}>
       <Icon name="inbox" />

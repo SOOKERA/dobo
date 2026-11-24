@@ -315,13 +315,15 @@ pub struct View {
     pub checked: bool,
     /// When the last check that worked was made (ms), this session or before.
     pub last_checked: Option<i64>,
+    /// This copy updates itself (`enabled`): a development or test build never looks.
+    pub enabled: bool,
 }
 
 static STATE: Mutex<Option<View>> = Mutex::new(None);
 
 fn first_view() -> View {
     let error = rolled_back_version().map(|v| tr!("Dobo {} didn’t start properly, so Dobo {} was put back.", "Dobo {} n’a pas démarré correctement : Dobo {} a été remis.", v, current()));
-    View { current: current().into(), error, last_checked: last_check().map(|s| s as i64 * 1000).filter(|&s| s > 0), ..Default::default() }
+    View { current: current().into(), error, last_checked: last_check().map(|s| s as i64 * 1000).filter(|&s| s > 0), enabled: enabled(), ..Default::default() }
 }
 
 pub fn view() -> View {

@@ -4,7 +4,7 @@
 // the selection ring glides from chip to chip, a row's title slides out and the new one in,
 // swatches are dealt left to right landing with a slight tilt, what follows a section that
 // changed height eases to its new place.
-import { cubicOut } from "svelte/easing";
+import { cubicInOut, cubicOut } from "svelte/easing";
 
 export const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -121,8 +121,8 @@ export const GLIDE = "cubic-bezier(0.3, 0.8, 0.25, 1)";
  * below glides with it (the room opens and closes in step). Use on an outer element whose only
  * child holds the content; that child is measured. Interrupted changes start from where the box
  * is seen. While it moves, the box clips (with a small margin so rings and shadows show), unless
- * `clip` is false: a card of its own that folds away over what rises under it (the hours ruler)
- * stays whole instead of being cut. Content that is already easing its own height (a card's own
+ * `clip` is false: a card of its own that folds away over what rises under it stays whole
+ * instead of being cut. Content that is already easing its own height (a card's own
  * transition) is left to it. */
 export function easeHeight(node: HTMLElement, { grow = 320, shrink = 260, clip = true }: { grow?: number; shrink?: number; clip?: boolean } = {}) {
   const inner = node.firstElementChild as HTMLElement | null;
@@ -304,6 +304,19 @@ export function imgFade(node: HTMLImageElement) {
   const on = () => node.classList.add("loaded");
   node.addEventListener("load", on, { once: true });
   return { destroy: () => node.removeEventListener("load", on) };
+}
+
+/** A mark drawn by hand (a path with pathLength="1": a note's "all done" check): it fades in
+ * while its stroke runs from its start to its end, and leaves the same way, backwards, faster. */
+export function drawMark(_node: Element, { delay = 0, duration = 620 }: { delay?: number; duration?: number } = {}, opts?: { direction?: "in" | "out" | "both" }) {
+  const out = opts?.direction === "out";
+  if (reduced()) return { duration: out ? 100 : 140, css: (t: number) => `opacity:${t}` };
+  return {
+    delay: out ? 0 : delay,
+    duration: out ? Math.round(duration * 0.65) : duration,
+    easing: cubicInOut,
+    css: (t: number) => `opacity:${Math.min(1, t * 2.5).toFixed(3)};stroke-dasharray:1 1;stroke-dashoffset:${(1 - t).toFixed(4)}`,
+  };
 }
 
 /** A quick fade (markers, hints): `fade` with the app's timing and reduced motion. */

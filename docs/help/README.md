@@ -3,7 +3,7 @@
 These guides explain what Dobo does, with the names you see in the window.
 
 - [Getting started](getting-started.md): the first launch, opening and hiding Dobo, and the quick tour.
-- [The board](the-board.md): notes in columns, moving, folding and widening them, colours, paper and spaces.
+- [The board](the-board.md): notes in columns, new notes and templates, moving, folding and widening them, colours, paper and spaces.
 - [Inbox and quick dump](inbox-and-dump.md): the Inbox strip, the quick dump bar from any app, and Tidy.
 - [Tasks and ideas](tasks-and-ideas.md): the entry line, + Add in a note, #note and its suggestions, pictures and files.
 - [Steps](steps.md): break a task into steps and watch its ring fill.
@@ -19,4 +19,5 @@ These guides explain what Dobo does, with the names you see in the window.
 - [Installing and updating](install-and-update.md): Dobo-Setup.exe or the portable Dobo.exe, the terms at first start, updates, silent installs, uninstalling, notification buttons.
 - [Privacy](privacy.md): what stays on your PC, and when Dobo goes online (never before you accept its terms).
 - [Report a problem](report-a-problem.md): tell Sookera when something goes wrong, and see first everything that goes with your words.
+- [What’s new](whats-new.md): what each version brings.
 - [Questions](faq.md): short answers to common questions.

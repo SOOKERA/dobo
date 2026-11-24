@@ -1,5 +1,22 @@
 # Nouveautés
 
+## 1.2.0
+
+Dobo 1.2.0 garde vos notes en place quand vous portez une tâche, crée une nouvelle note là où vous la voulez, montre d’un coup d’œil quand une note est terminée et vous présente ses nouveautés après chaque mise à jour.
+
+### L’essentiel
+
+- **Vos notes ne bougent plus quand vous prenez une tâche.** Avant, les heures s’ouvraient aussitôt et poussaient toutes les notes vers le bas. Désormais, une discrète bande, **Déposez ici pour lui donner une heure**, flotte juste sous « À trier » : portez-y la tâche et les heures du jour s’ouvrent là, par-dessus les notes ; descendez vers une note et elles se replient. Une tâche de « À trier » reçoit son heure d’un seul geste, avant d’être rangée, et **Choisir sur les heures du jour** ouvre les mêmes heures au même endroit. Voir [Les heures du jour](the-hours-ruler.md).
+- **Glissez une ligne pour lancer une nouvelle note.** Pendant que vous portez une ligne, depuis « À trier » ou n’importe quelle note, une carte en pointillés, **+ Nouvelle note**, attend au bout du tableau. Déposez-y la ligne, ou sur un coin vide pour la créer juste là : une nouvelle note apparaît, avec les mots de la ligne pour titre et la ligne dedans comme première ligne (son heure, ses étapes, son lien et ses images aussi). Le menu d’une ligne le propose aussi : **En faire une nouvelle note**. Un seul **Ctrl+Z** remet tout comme avant. Voir [Tâches et idées](tasks-and-ideas.md).
+- **Une nouvelle note là où vous la voulez.** Clic droit sur un endroit vide du tableau › **Nouvelle note** : elle apparaît là et se range sous la note du dessus, son titre prêt à écrire (**Échap** sans rien avoir tapé la retire). **Nouvelle note d’après un modèle…** y pose aussi sa note, et Dobo a désormais trois modèles à lui, **Aujourd’hui**, **Idées** et **Plan**, avec des lignes vierges qui montrent ce qui va où. Créez les vôtres avec **Enregistrer comme modèle**, dans le menu **⋯** de n’importe quelle note. Voir [Le tableau](the-board.md).
+- **Une note dont toutes les tâches sont faites le dit.** Cochez sa dernière tâche : une grande coche discrète se dessine sur la note, ses mots s’adoucissent un peu et la ligne sous son titre affiche **Tout est fait** (les idées toujours comptées : « Tout est fait · 1 idée »). Facile à repérer d’un bout à l’autre du tableau ; décochez une tâche et la note redevient comme avant. Voir [Le tableau](the-board.md).
+- **Les nouveautés, après chaque mise à jour.** La première fois que Dobo s’ouvre après une mise à jour, il montre ce qu’apporte la nouvelle version (et les versions intermédiaires, si vous en avez sauté), une seule fois, puis s’efface. Une nouvelle installation n’affiche rien. Relisez-les quand vous voulez : **Nouveautés** dans le menu **?** en bas à droite du tableau, ou dans **Paramètres › Mises à jour**. Voir [Mises à jour](install-and-update.md#mises-à-jour).
+
+### Et aussi
+
+- **Double-cliquer sur les boutons d’une note** (sa pastille de couleur, **⋯** ou la flèche pour la replier) ne lance plus son renommage : le bouton fait simplement deux fois ce qu’il fait.
+- **Les mises à jour arrivent en deuxième dans les Paramètres,** juste après **Apparence** : une ligne dit quel Dobo vous avez et où en est sa mise à jour, avec son bouton à côté, puis l’interrupteur de la recherche quotidienne et **Nouveautés**. Voir [Mises à jour](install-and-update.md#mises-à-jour).
+
 ## 1.1.1
 
 Dobo 1.1.1 vous permet de dire à Sookera quand quelque chose ne va pas, en quelques mots, en voyant d’abord tout ce qui les accompagne.
@@ -56,7 +73,7 @@ La première version de Dobo : vos tâches et vos idées sur un tableau de note
 
 ### Le tableau
 
-- **À trier** est un bandeau en haut du tableau : dépliez-le, épinglez-le ouvert, et glissez ses lignes sur vos notes, ou laissez **Trier** les ranger, une carte à la fois.
+- **À trier** est un bandeau en haut du tableau : dépliez-le, épinglez-le ouvert, et glissez ses lignes sur vos notes, ou laissez **Trier** les ranger, une carte à la fois.
 - Des **étapes** sous une tâche, avec un anneau autour de sa case qui se remplit à mesure que vous les cochez.
 - Des **Archives** pour les notes rangées, à restaurer ou supprimer plus tard.
 

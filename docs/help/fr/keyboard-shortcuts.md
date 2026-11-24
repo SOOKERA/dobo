@@ -7,7 +7,7 @@ Tout le tableau se manie au clavier, et presque tout a aussi son geste. Voici le
 | Touches | Effet |
 |---|---|
 | Ctrl+Maj+Espace | Ouvrir ou masquer Dobo (modifiable) |
-| Ctrl+Maj+D | Dépôt rapide dans « À trier » (modifiable) |
+| Ctrl+Maj+D | Dépôt rapide dans « À trier » (modifiable) |
 
 ## Dans Dobo
 
@@ -20,7 +20,7 @@ Tout le tableau se manie au clavier, et presque tout a aussi son geste. Voici le
 | Ctrl+F · / | Rechercher (Ctrl+F est modifiable ; dans les Paramètres, il cherche parmi les réglages ; / ne fait rien dans Trier, les Archives, la visionneuse et Nouvelle note, que Ctrl+F ferme d’abord) |
 | Ctrl+Maj+S | Style (une seconde fois : le fermer) |
 | Ctrl+Maj+P · Ctrl+, | Paramètres (une seconde fois : les fermer) |
-| F1 | Le menu ? : la visite, les touches, les Archives, l’aide (une seconde fois : Paramètres › Aide) |
+| F1 | Le menu ? : la visite, les touches, les Archives, les nouveautés, l’aide (une seconde fois : Paramètres › Aide) |
 | Ctrl+Z · Ctrl+Y (ou Ctrl+Maj+Z) | Annuler · rétablir |
 | Ctrl + · Ctrl − · Ctrl 0 | Taille des notes : plus grande, plus petite, retour à Normale |
 | Échap | Fermer ce qui est ouvert, retour direct au tableau ; si rien n’est ouvert, masquer le panneau ancré |
@@ -32,16 +32,16 @@ Tout le tableau se manie au clavier, et presque tout a aussi son geste. Voici le
 | Touches | Effet |
 |---|---|
 | Bas (dans la ligne de saisie vide) | Passer sur le tableau |
-| Haut / Bas | Passer d’une ligne à l’autre (le bandeau « À trier » est une étape aussi) ; après la dernière ligne d’une note, la note juste en dessous |
+| Haut / Bas | Passer d’une ligne à l’autre (le bandeau « À trier » est une étape aussi) ; après la dernière ligne d’une note, la note juste en dessous |
 | Gauche / Droite | Aller à la note de la colonne voisine, à hauteur de la ligne |
-| Entrée (sur le bandeau « À trier ») | L’ouvrir ou le replier |
+| Entrée (sur le bandeau « À trier ») | L’ouvrir ou le replier |
 | Espace | Cocher la tâche |
 | Entrée · F2 | Modifier la ligne (sur le titre d’une note : la renommer) |
 | Retour arrière | Tâche ↔ idée |
 | Suppr | Supprimer la ligne |
 | Ctrl+Haut / Ctrl+Bas | Déplacer la ligne |
-| F | Plier ou déplier la note (sur le bandeau « À trier » : le replier ou l’ouvrir) |
-| Maj+F10 · touche Menu | Le menu de la note ou de la ligne, comme son **⋯** (celui d’une idée : Copier le texte, En faire une tâche, Supprimer) |
+| F | Plier ou déplier la note (sur le bandeau « À trier » : le replier ou l’ouvrir) |
+| Maj+F10 · touche Menu | Le menu de la note ou de la ligne, comme son **⋯** (celui d’une idée : Copier le texte, En faire une tâche, En faire une nouvelle note, Supprimer) |
 | Pg préc / Pg suiv · Début / Fin | Faire défiler le tableau |
 | Échap | Quitter le tableau, puis masquer |
 
@@ -70,6 +70,8 @@ Ouvrir une vue ou un menu (Recherche, Paramètres, Style, le menu d’une note o
 | → ou Entrée, ←, Échap | Visite rapide : suivant, retour, fermer |
 | Maj (en déposant sur les heures) | La minute exacte au lieu du quart d’heure |
 | Échap (en portant une ligne) | La renvoyer à sa place |
+| Entrée, Échap (le titre d’une nouvelle note, depuis le clic droit sur le tableau) | La nommer et passer à sa première ligne ; sans rien avoir tapé, Échap retire la note |
+| Entrée, Retour arrière (une ligne vierge d’Aujourd’hui, Idées ou Plan) | En faire une ligne et passer à la suivante ; dans une ligne vide, Retour arrière la retire |
 | Flèches · Début / Fin, Entrée ou Espace | Passer d’une carte, d’une couleur ou d’un choix à l’autre (dans Style, les Paramètres, Trier, la fenêtre d’accueil, Nouvelle note, le menu d’une note et les types de rappel d’une tâche) ; Entrée ou Espace choisit. Dans une rangée d’options, comme Clair · Sombre, les flèches ne font que se déplacer, sans rien changer en chemin : Espace ou Entrée choisit, et Tab passe la rangée |
 | F2 · double-clic | Renommer votre style, thème ou mélange |
 
@@ -81,21 +83,22 @@ Ouvrir une vue ou un menu (Recherche, Paramètres, Style, le menu d’une note o
 | Clic droit sur l’icône | Ouvrir Dobo, + Déposer, Quitter Dobo |
 | Pousser le pointeur contre le bord de l’écran | Ouvrir le panneau ancré (si activé dans Paramètres › Fenêtre) |
 | Clic en dehors du panneau ancré | Le masquer (sauf s’il est gardé ouvert) |
-| Cliquer sur le bandeau « À trier » | L’ouvrir ou le replier ; son épingle le garde ouvert |
-| Glisser une ligne hors d’« À trier » | La ranger dans la note où vous la déposez |
+| Cliquer sur le bandeau « À trier » | L’ouvrir ou le replier ; son épingle le garde ouvert |
+| Glisser une ligne hors d’« À trier » | La ranger dans la note où vous la déposez |
 | Cliquer sur Ajouter, ou dans l’espace vide d’une note | Écrire une nouvelle ligne dans cette note |
 | Double-clic sur une ligne | La modifier |
 | Double-clic sur le titre d’une note | La renommer |
 | Glisser une ligne sur une note | L’y ranger |
+| Glisser une ligne sur + Nouvelle note, ou sur un coin vide du tableau | En faire une nouvelle note, titrée avec ses mots : au bout, ou juste là où vous la déposez (aussi **En faire une nouvelle note** dans le menu de la ligne) |
 | Glisser une ligne sur une tâche | En faire une de ses étapes (sur une idée : sa première étape) |
-| Glisser une tâche sur les heures sous la ligne de saisie | Lui donner cette heure ; rester sur Demain pour les heures de demain |
+| Glisser une tâche sur la bande juste sous « À trier » | Y ouvrir les heures du jour ; la déposer sur l’une d’elles pour lui donner cette heure, ou rester sur Demain pour les heures de demain |
 | Glisser la barre de titre d’une note | Déplacer la note dans sa colonne |
 | Glisser le bord droit d’une note | L’élargir, ou la remettre normale |
 | Glisser le bord intérieur du panneau ancré | Changer sa largeur |
 | Glisser le haut de n’importe quelle vue (flottante) | Déplacer la fenêtre |
 | Ctrl + molette | Taille des notes |
-| Clic droit sur une note ou une ligne (ou appui long, au doigt ou au stylet) | Son menu, là où vous cliquez : le même que son **⋯** (celui d’une idée : Copier le texte, En faire une tâche, Supprimer) |
-| Clic droit sur un endroit vide du tableau | Changer le fond…, Notes archivées…, Faire la visite |
+| Clic droit sur une note ou une ligne (ou appui long, au doigt ou au stylet) | Son menu, là où vous cliquez : le même que son **⋯** (celui d’une idée : Copier le texte, En faire une tâche, En faire une nouvelle note, Supprimer) |
+| Clic droit sur un endroit vide du tableau | Nouvelle note (à cet endroit), Nouvelle note d’après un modèle…, Changer le fond…, Notes archivées…, Faire la visite |
 | Clic droit sur une couleur dans le menu d’une note | Changer cette couleur |
 | Clic droit sur des mots sélectionnés ou un lien | Copier, ou Copier le lien (dans un champ : couper, copier, coller) |
 | Double-clic sur l’image d’une note | Ouvrir la visionneuse |

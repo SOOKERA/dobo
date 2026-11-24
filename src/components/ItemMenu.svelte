@@ -21,6 +21,8 @@
   import { keysText, t } from "../lib/i18n.svelte";
   import { atPointer, type Point } from "../lib/rightclick.svelte";
   import { lineText } from "../lib/astext";
+  import { itemDrag } from "../lib/itemdrag.svelte";
+  import { inMemory } from "../lib/sample";
 
   const PRESET_NAME = { gentle: "Gentle", normal: "Normal", insistent: "Insistent", custom: "Custom" } as const;
   // (`at`: opened by a right-click, at the pointer; else under its ⋯.)
@@ -191,6 +193,15 @@
       onClose();
     }}><span>{t("Make it an idea")}</span><span class="keys">{keysText("Backspace")}</span></button
   >
+  {#if !inMemory(item.id)}
+    <button
+      class="item"
+      onclick={() => {
+        onClose();
+        void itemDrag.toNewNote(item);
+      }}><span>{t("Make a new note of it")}</span></button
+    >
+  {/if}
   <button
     class="item danger"
     onclick={() => {

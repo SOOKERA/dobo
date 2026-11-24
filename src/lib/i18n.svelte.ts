@@ -19,10 +19,13 @@ export interface Plural {
 export type Entry = string | Plural;
 type Params = Record<string, string | number>;
 
-/** French typography: a non-breaking space before : and », after «; a thin one before ; ? !. */
+/** French typography: a non-breaking space before : and », after «; a thin one before ; ? !. And the names
+ * that must never break: « À trier » (the Inbox), « menu ⋯ ». */
 export function frType(s: string): string {
   // (« first: a key quoted on its own, « ! », keeps its quotes' spaces, never a thin one.)
   return s
+    .replace(/À trier/g, "À trier")
+    .replace(/menu ⋯/g, "menu ⋯")
     .replace(/« /g, "« ")
     .replace(/ :/g, " :")
     .replace(/ ([;?!])/g, " $1")

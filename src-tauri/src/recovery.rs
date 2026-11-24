@@ -281,6 +281,23 @@ pub fn salvaged_setting(file: &Path, key: &str) -> Option<serde_json::Value> {
     db::get_setting(&conn, key)
 }
 
+/// What `whats_new_seen` the notes put aside call for (read while they still can be): their own,
+/// else worked out from them as an update's first start would (`whatsnew::first_seen`), so a
+/// board put back or started empty at an update's first start still shows What's new after the
+/// recovery screen. None when nothing can be read from them.
+fn seen_from(aside: &Path, running: &str) -> Option<serde_json::Value> {
+    let all = salvaged_settings(aside);
+    if all.is_empty() {
+        return None;
+    }
+    let get = |k: &str| all.iter().find(|(key, _)| key == k).and_then(|(_, v)| serde_json::from_str::<serde_json::Value>(v).ok());
+    if let Some(seen) = get(crate::whatsnew::SEEN) {
+        return Some(seen);
+    }
+    let opened_by = get(backup::OPENED_BY).and_then(|v| v.as_str().map(String::from));
+    Some(serde_json::json!(crate::whatsnew::first_seen(opened_by.as_deref(), get("onboarded").is_some(), running)))
+}
+
 /// Every setting that can still be read from a damaged file (empty when none can).
 fn salvaged_settings(file: &Path) -> Vec<(String, String)> {
     let Ok(conn) = Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX) else { return vec![] };
@@ -573,8 +590,11 @@ fn look_with(data: &Path, running: &str, now: i64) -> Look {
     }
     match db::open(&file) {
         Ok(conn) => {
-            // This version has opened them (the next new one makes its backup first).
-            if db::get_setting(&conn, backup::OPENED_BY).and_then(|v| v.as_str().map(String::from)).as_deref() != Some(running) {
+            // This version has opened them (the next new one makes its backup first). Before it
+            // says so: the version they had, for What's new (whatsnew.rs).
+            let opened_by = db::get_setting(&conn, backup::OPENED_BY).and_then(|v| v.as_str().map(String::from));
+            crate::whatsnew::note_first(&conn, opened_by.as_deref(), running);
+            if opened_by.as_deref() != Some(running) {
                 let _ = db::set_setting(&conn, backup::OPENED_BY, &serde_json::json!(running));
             }
             // (Said in Settings › Backups on its own, until a backup works.)
@@ -667,8 +687,12 @@ pub fn choose(data: &Path, problem: &mut Problem, choice: Choice, now: i64) -> R
         (Choice::Restore, Some(b), _) => {
             let given = aside.as_deref().map(backup::sequences_of).unwrap_or_default();
             // (This computer's own choices, from the notes put aside when they can still be read.)
-            let here: Vec<(String, serde_json::Value)> =
+            let mut here: Vec<(String, serde_json::Value)> =
                 aside.as_deref().map(|a| backup::CHOSEN_HERE.iter().filter_map(|k| salvaged_setting(a, k).map(|v| (k.to_string(), v))).collect()).unwrap_or_default();
+            // (And what What's new still has to show, as the notes put aside had it.)
+            if let Some(seen) = aside.as_deref().and_then(|a| seen_from(a, env!("CARGO_PKG_VERSION"))) {
+                here.push((crate::whatsnew::SEEN.to_string(), seen));
+            }
             backup::put_back_into(b, data, &given, &here)
         }
         (Choice::Empty, _, _) => db::open(&file).map(|conn| {
@@ -678,6 +702,10 @@ pub fn choose(data: &Path, problem: &mut Problem, choice: Choice, now: i64) -> R
                         let _ = conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", [&key, &value]);
                     }
                 }
+            }
+            // (What What's new still has to show, as the notes put aside had it.)
+            if let Some(seen) = aside.as_deref().and_then(|a| seen_from(a, env!("CARGO_PKG_VERSION"))) {
+                let _ = db::set_setting(&conn, crate::whatsnew::SEEN, &seen);
             }
             // (Made by this version: no backup of an empty board before it opens it.)
             let _ = db::set_setting(&conn, backup::OPENED_BY, &serde_json::json!(env!("CARGO_PKG_VERSION")));
@@ -1292,6 +1320,91 @@ mod tests {
         let mut other = problem(Trouble::Locked, String::new(), &usual, None);
         assert!(choose(&usual, &mut other, Choice::Usual, db::now_ms()).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The first start after an update from 1.1.x notes the version the notes had, for What's
+    /// new, before it writes its own (whatsnew.rs); a new board has nothing to show.
+    #[test]
+    fn the_version_before_an_update_is_noted_for_whats_new() {
+        let data = temp("whats-new");
+        {
+            let conn = db::open(&notes_file(&data)).unwrap();
+            db::set_setting(&conn, "onboarded", &serde_json::json!(true)).unwrap();
+            db::set_setting(&conn, backup::OPENED_BY, &serde_json::json!("1.1.1")).unwrap();
+        }
+        for k in 0..2 {
+            // (Again at a later start, until the window notes it shown.)
+            let Look::Open(conn) = look_with(&data, "1.2.0", db::now_ms() + k * 2000) else { panic!() };
+            assert_eq!(db::get_setting(&conn, crate::whatsnew::SEEN), Some(serde_json::json!("1.1.1")));
+            assert_eq!(db::get_setting(&conn, backup::OPENED_BY), Some(serde_json::json!("1.2.0")));
+        }
+        let fresh = temp("whats-new-first");
+        let Look::Open(conn) = look_with(&fresh, "1.2.0", db::now_ms()) else { panic!() };
+        assert_eq!(db::get_setting(&conn, crate::whatsnew::SEEN), Some(serde_json::json!("1.2.0")), "a first install");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&data);
+        let _ = std::fs::remove_dir_all(&fresh);
+    }
+
+    /// An update's first start finding the notes damaged: putting a backup back, or starting
+    /// empty, still shows What's new after the recovery screen (the version the notes put aside
+    /// were last opened by, or their own `whats_new_seen`).
+    #[test]
+    fn whats_new_still_shows_after_the_recovery_screen() {
+        let running = env!("CARGO_PKG_VERSION");
+        for (choice, had_seen) in [(Choice::Restore, false), (Choice::Empty, false), (Choice::Restore, true), (Choice::Empty, true)] {
+            let data = temp("whats-new-recovery");
+            notes_with(&data, "Mine");
+            {
+                let conn = db::open(&notes_file(&data)).unwrap();
+                db::set_setting(&conn, "onboarded", &serde_json::json!(true)).unwrap();
+                db::set_setting(&conn, backup::OPENED_BY, &serde_json::json!("0.9.0")).unwrap();
+                if had_seen {
+                    db::set_setting(&conn, crate::whatsnew::SEEN, &serde_json::json!("0.9.5")).unwrap();
+                }
+            }
+            if choice == Choice::Restore {
+                backup_of(&data, "From Monday", "2026-11-16_090000");
+            }
+            damage_the_notes_only(&notes_file(&data));
+            let Look::Trouble(mut p) = look_with(&data, running, db::now_ms()) else { panic!("damaged") };
+            let Ok(Look::Open(conn)) = choose(&data, &mut p, choice, db::now_ms()) else { panic!("{choice:?}") };
+            let want = if had_seen { "0.9.5" } else { "0.9.0" };
+            assert_eq!(db::get_setting(&conn, crate::whatsnew::SEEN), Some(serde_json::json!(want)), "{choice:?}");
+            drop(conn);
+            let _ = std::fs::remove_dir_all(&data);
+        }
+        // Nothing readable put aside: nothing is carried over, so there is nothing to show
+        // (Start empty: a new board; Restore: the backup's notes, opened by this version).
+        // (Both files say an older version and were set up, so a readable put-aside file or the
+        // backup's own "seen" would show here instead of the running version.)
+        for choice in [Choice::Empty, Choice::Restore] {
+            let data = temp("whats-new-recovery-none");
+            notes_with(&data, "Mine");
+            {
+                let conn = db::open(&notes_file(&data)).unwrap();
+                db::set_setting(&conn, "onboarded", &serde_json::json!(true)).unwrap();
+                db::set_setting(&conn, backup::OPENED_BY, &serde_json::json!("0.9.0")).unwrap();
+            }
+            if choice == Choice::Restore {
+                let dir = backup_of(&data, "From Monday", "2026-11-16_090000");
+                let conn = db::open(&dir.join(paths::DB_FILE)).unwrap();
+                db::set_setting(&conn, "onboarded", &serde_json::json!(true)).unwrap();
+                db::set_setting(&conn, crate::whatsnew::SEEN, &serde_json::json!("0.9.5")).unwrap();
+                conn.execute_batch("PRAGMA journal_mode = DELETE").unwrap();
+            }
+            damage(&notes_file(&data));
+            let Look::Trouble(mut p) = look_with(&data, running, db::now_ms()) else { panic!("damaged") };
+            let Ok(Look::Open(conn)) = choose(&data, &mut p, choice, db::now_ms()) else { panic!("{choice:?}") };
+            assert_eq!(db::get_setting(&conn, crate::whatsnew::SEEN), Some(serde_json::json!(running)), "{choice:?}");
+            let on_board = titles(&conn);
+            assert!(!on_board.contains(&"Mine".to_string()), "{choice:?}: {on_board:?}");
+            if choice == Choice::Restore {
+                assert_eq!(on_board, ["From Monday"]);
+            }
+            drop(conn);
+            let _ = std::fs::remove_dir_all(&data);
+        }
     }
 
     fn backups_in(data: &Path) -> Vec<String> {

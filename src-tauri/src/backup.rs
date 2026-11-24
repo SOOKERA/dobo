@@ -645,8 +645,9 @@ fn replace_notes(with: &Path, to: &Path) -> Result<(), String> {
 /// from another day): the computers file cards may open files from (files.rs), which only the
 /// person here allows; where the backups go here (another computer's folder may not be there, or
 /// be someone else's); and how the backups stand here (a failure or a word from the backup's own
-/// time would be said again, out of date).
-const LOCAL_SETTINGS: [&str; 8] = ["file_hosts", "backup_dir", FAILED_ERROR, "backup_failed_at", "backup_last", NOTICE, NOTICE_AT, NOTICE_FILE];
+/// time would be said again, out of date); and the last What's new shown here (an older backup
+/// would show it again: whatsnew.rs).
+const LOCAL_SETTINGS: [&str; 9] = ["file_hosts", "backup_dir", FAILED_ERROR, "backup_failed_at", "backup_last", NOTICE, NOTICE_AT, NOTICE_FILE, crate::whatsnew::SEEN];
 
 /// Of those, the person's own choices, carried from notes that were put aside on the recovery
 /// screen when they can still be read (`put_back_into`): not how the backups stood for them.
@@ -860,7 +861,7 @@ pub fn sequences_of(file: &Path) -> Vec<(String, i64)> {
 /// pictures into `data`, its notes made ready (`prepared`) and written as the notes file in one
 /// step (made beside it under a name of its own, on the disk, then renamed). There must be no
 /// notes file in `data` (a damaged one was put aside first). `here`: this computer's own choices
-/// (`CHOSEN_HERE`) as the notes put aside had them.
+/// (`CHOSEN_HERE`) as the notes put aside had them, and what What's new still has to show (`whatsnew::SEEN`).
 pub fn put_back_into(backup: &Path, data: &Path, given: &[(String, i64)], here: &[(String, serde_json::Value)]) -> Result<(), String> {
     let couldnt = |e: &dyn std::fmt::Display| tr!("That backup couldn’t be put back ({}).", "Cette sauvegarde n’a pas pu être restaurée ({}).", e);
     let to = data.join(crate::paths::DB_FILE);
@@ -870,7 +871,7 @@ pub fn put_back_into(backup: &Path, data: &Path, given: &[(String, i64)], here: 
     let src = open_checked(&backup.join(crate::paths::DB_FILE))?;
     put_back_files(backup, data).map_err(|e| couldnt(&e))?;
     let ready = prepared(&src, given, data).map_err(|e| couldnt(&e))?;
-    keep_local(&ready, |k| here.iter().find(|(key, _)| key == k && CHOSEN_HERE.contains(&k)).map(|(_, v)| v.clone())).map_err(|e| couldnt(&e))?;
+    keep_local(&ready, |k| here.iter().find(|(key, _)| key == k && (CHOSEN_HERE.contains(&k) || k == crate::whatsnew::SEEN)).map(|(_, v)| v.clone())).map_err(|e| couldnt(&e))?;
     keep_today(&ready, None, db::now_ms()).map_err(|e| couldnt(&e))?;
     let part = data.join(format!(".{}.part", crate::paths::DB_FILE));
     let _ = std::fs::remove_file(&part);
@@ -1755,11 +1756,14 @@ mod tests {
             crate::db::set_setting(&c, "file_hosts", &serde_json::json!(["attacker.example"])).unwrap();
             crate::db::set_setting(&c, "backup_dir", &serde_json::json!(r"\\their-nas\backups")).unwrap();
             crate::db::set_setting(&c, "language", &serde_json::json!("fr")).unwrap();
+            crate::db::set_setting(&c, crate::whatsnew::SEEN, &serde_json::json!("1.1.0")).unwrap();
         }
         let mut conn = crate::db::open(&dir.join("now.sqlite")).unwrap();
         crate::db::set_setting(&conn, "file_hosts", &serde_json::json!(["nas"])).unwrap();
+        crate::db::set_setting(&conn, crate::whatsnew::SEEN, &serde_json::json!("1.2.0")).unwrap();
         put_back(&mut conn, &open_checked(&theirs).unwrap(), &dir.join("no-files"), &dir.join("data")).unwrap();
         assert_eq!(crate::db::get_setting(&conn, "file_hosts"), Some(serde_json::json!(["nas"])), "kept as they were here");
+        assert_eq!(crate::db::get_setting(&conn, crate::whatsnew::SEEN), Some(serde_json::json!("1.2.0")), "What's new already shown here stays shown");
         assert_eq!(crate::db::get_setting(&conn, "backup_dir"), None, "nor where their backups went");
         assert_eq!(crate::db::get_setting(&conn, "language"), Some(serde_json::json!("fr")), "the rest comes back");
         // None here: none after either.

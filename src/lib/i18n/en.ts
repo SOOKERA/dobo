@@ -18,6 +18,9 @@ export const en: Partial<Record<Key, Entry>> = {
   "Bring in your {n} Windows Sticky Notes?": { one: "Bring in your note from Windows Sticky Notes?", other: "Bring in your {n} Windows Sticky Notes?" },
   "Your {n} sticky notes are on the board now.": { one: "Your sticky note is on the board now.", other: "Your {n} sticky notes are on the board now." },
   "Start (button)": "Start",
+  "Installed (Dobo)": "Installed",
+  // (The ⋯ never alone at a line's start, away from its menu.)
+  "Make your own: {action}, in any note’s ⋯ menu.": "Make your own: {action}, in any note’s ⋯ menu.",
   "Copied (text)": "Copied",
   "Stopped (problem)": "Stopped",
   "Couldn’t start (problem)": "Couldn’t start",

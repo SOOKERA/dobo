@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   // The "Next" line under the entry line: the next three timed tasks. It stays as it is while a
-  // task is carried; the hours ruler opens under the top bar as a card of its own (HoursRuler).
+  // task is carried; the hours wait just under the Inbox strip, over the notes (HoursRuler).
   import { store } from "../lib/store.svelte";
   import { formatDue } from "../lib/time";
   import { t } from "../lib/i18n.svelte";

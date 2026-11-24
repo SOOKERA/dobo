@@ -3,7 +3,7 @@
 import { backendPromise, onSaveFailed, type Backend } from "./backend";
 import { findNoteForTag, parseCapture, titleFromTag, type Parsed } from "./capture";
 import { defaultCustom, rotation, type CustomColour } from "./palette";
-import { History, changedKeys, withFields } from "./history";
+import { History, changedKeys, withFields, type Step as HistoryStep } from "./history";
 import { dropFromSteps, dropNotesFromSteps, putBackInSteps, type SavedSteps, type Step } from "./arrange";
 import { dayKey, defaultDay, inWorkHours, lookbackDay, spanDay, type DaySettings } from "./plan";
 import { backWords } from "./undoWords";
@@ -14,6 +14,8 @@ import { APP_NAME } from "./app";
 import { arrivedSince, firstInboxes, inboxesLost, isInbox, savedInboxes } from "./inboxes";
 import { thumbs } from "./thumbs.svelte";
 import { copyText } from "./contextmenu";
+import { lineInNote, titleFromLine } from "./lineNote";
+import { blankIds, blanksOf, isBlank, spaceForSpot, withoutBlank, type BlankIds, type BoardPoint } from "./newNote";
 import type {
   Alarm,
   Item,
@@ -50,6 +52,17 @@ export interface Template {
   color: string;
   paper: Paper;
   lines: TemplateLine[];
+}
+
+/** What the board does for a new note at a spot of it (Board.svelte). */
+export interface BoardHands {
+  /** A point of the window on the board, in the board's own pixels (null: off the board). */
+  point(client: { x: number; y: number }): BoardPoint | null;
+  /** The notes around a spot, in its column: the one a new note would sit under, the next. */
+  around(at: BoardPoint): { above: number | null; below: number | null };
+  /** The new note goes there: the board's steps saved with it in (that saving), and it grows in
+   * from the spot. */
+  place(id: number, at: BoardPoint): Promise<void> | void;
 }
 
 export interface Toast {
@@ -117,6 +130,9 @@ function keepRows<T extends { id: number }>(was: T[], next: T[]): T[] {
   return same ? was : out;
 }
 
+/** How long a note takes to fade off the board (Board.svelte's noteLeaves). */
+const LEAVE_MS = 240;
+
 class Store {
   // The notes, lines and pictures are plain objects, never changed in place: a change is always
   // a new object in a new list (replaceItem, upsertItem…). The board reads them as they are,
@@ -173,6 +189,19 @@ class Store {
   }
   /** The board plays a note's way out (archived, deleted) before it goes; set by Board.svelte. */
   noteLeaves: ((ids: number[]) => Promise<void>) | null = null;
+  /** A line lifts off its note as a slip, waits `after` ms there (the note fading away), then
+   * glides back to wherever the line is by then (an undo of a note made from it); App.svelte. */
+  lineLifts: ((itemId: number, after: number) => void) | null = null;
+  /** The board's hands for a new note at a spot (Board.svelte): what is around a spot, and the
+   * new note put there (the board's steps saved with it in). */
+  board: BoardHands | null = null;
+  /** A note just made from the board's right-click menu: its title waits to be typed. */
+  fresh = $state<number | null>(null);
+  /** Blank lines waiting in notes made from a template (the built-ins'), by note: shown while
+   * Dobo runs, never saved (NoteCard). */
+  blanks = $state.raw<Record<number, BlankIds>>({});
+  /** "New note from a template…" from the board's right-click menu: where its note goes. */
+  templateAt: BoardPoint | null = null;
   history = new History();
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -885,11 +914,26 @@ class Store {
       sort,
     };
     if (next.kind === "idea") next.due_at = null;
-    // Everything under it follows into the note (the backend moves steps of steps too).
-    const follow = (noteId: number) => {
-      const under = this.subtreeIds(it.id);
-      this.items = this.items.map((x) => (x.id !== it.id && under.has(x.id) ? { ...x, note_id: noteId } : x));
-      this.pictures = this.pictures.map((p) => (p.item_id != null && under.has(p.item_id) ? { ...p, note_id: noteId } : p));
+    const follow = (noteId: number) => this.carryUnder(it.id, noteId);
+    // A picture dumped with the line becomes the note's own once it is put away (part of the same
+    // step: an undo gives the line its pictures back, a redo lets them go again).
+    const freed = this.inboxIds.has(to.noteId) ? [] : (structuredClone($state.snapshot(this.pictures.filter((p) => p.item_id === it.id))) as Picture[]);
+    const release = async () => {
+      for (const p of freed) {
+        if (!this.pictures.some((x) => x.id === p.id)) continue;
+        await this.api.releasePicture(p.id, to.noteId);
+        this.pictures = this.pictures.map((x) => (x.id === p.id ? { ...x, item_id: null, note_id: to.noteId } : x));
+      }
+    };
+    const takeBack = async () => {
+      const here = freed.filter((p) => this.pictures.some((x) => x.id === p.id));
+      if (!here.length) return;
+      await this.api.restore([], [], here);
+      const byId = new Map(here.map((p) => [p.id, p]));
+      this.pictures = this.pictures.map((x) => {
+        const p = byId.get(x.id);
+        return p ? { ...x, item_id: p.item_id, note_id: p.note_id } : x;
+      });
     };
     follow(to.noteId);
     const before = this.items.find((x) => x.id === it.id) ?? it;
@@ -899,21 +943,94 @@ class Store {
     this.history.record({
       label: "Moved",
       undo: async () => {
+        await takeBack();
         follow(back.note_id);
         await this.revertItem(back, keys);
       },
       redo: async () => {
         follow(next.note_id);
         await this.revertItem(next, keys);
+        await release();
       },
     });
-    // A picture dumped with the line becomes the note's own once it is put away.
-    if (!this.inboxIds.has(to.noteId)) {
-      for (const p of this.pictures.filter((p) => p.item_id === it.id)) {
-        await this.api.releasePicture(p.id, to.noteId);
-        this.pictures = this.pictures.map((x) => (x.id === p.id ? { ...x, item_id: null, note_id: to.noteId } : x));
+    await release();
+  }
+
+  /** Everything under a line (its steps, their steps, their pictures) follows it into a note,
+   * here as the backend does it when the line is saved there. */
+  private carryUnder(id: number, noteId: number) {
+    const under = this.subtreeIds(id);
+    this.items = this.items.map((x) => (x.id !== id && under.has(x.id) ? { ...x, note_id: noteId } : x));
+    this.pictures = this.pictures.map((p) => (p.item_id != null && under.has(p.item_id) ? { ...p, note_id: noteId } : p));
+  }
+
+  /** A carried line dropped on "+ New note" (or "Make a new note of it" in its menu): a new note
+   * in `space` at the end of the board; or dropped on the board's empty space (`at`): there, as
+   * right-click › New note. Titled with the line's words (lineNote.ts), and the line itself moved
+   * inside as its first line, whole: its time, steps, link and pictures go with it (the pictures
+   * stay its own, under it). Where it came from stays as it is, empty or not (the Inbox stays the
+   * Inbox). One step Undo takes back whole: the line lifts off the note as it fades and goes back
+   * to its place, the note goes (and its place in the board's saved columns); Redo brings the
+   * note back, with the same id, and the line into it. */
+  async noteFromLine(it: Item, space: Space, at: BoardPoint | null = null): Promise<Note | null> {
+    const found = this.items.find((x) => x.id === it.id);
+    if (!found || inMemory(found.id) || inMemory(found.note_id)) return null;
+    const prev = $state.snapshot(found) as Item;
+    const cut = titleFromLine(prev.text);
+    // (Called "Inbox", it would be taken for one.)
+    const title = cut && cut !== "Inbox" ? cut : tr("New note");
+    const c = this.startColour();
+    const n = await this.api.createNote(title, space, c.palette, c.color);
+    this.notes = [...this.notes, n];
+    // (In the same moment as it comes on the board: never seen at the end first.)
+    if (at) void this.board?.place(n.id, at);
+    const id = n.id;
+    const next = lineInNote(prev, id);
+    const keys = changedKeys(prev, next);
+    const into = async () => {
+      this.carryUnder(prev.id, id);
+      await this.revertItem(next, keys);
+    };
+    await into();
+    let kept: { notes: Note[]; items: Item[]; pictures: Picture[] } | null = null;
+    let steps: SavedSteps | null = null;
+    const back = async () => {
+      if (!this.over && this.visibleNotes.some((x) => x.id === id)) this.lineLifts?.(prev.id, LEAVE_MS);
+      await this.leaveBoard([id]);
+      this.carryUnder(prev.id, prev.note_id);
+      await this.revertItem(prev, keys);
+      // (Its places in the board's saved columns go with it, and come back with a redo.)
+      steps = structuredClone($state.snapshot(this.settings.board_steps ?? null)) as SavedSteps | null;
+      const pruned = dropFromSteps(this.settings.board_steps as SavedSteps | undefined, id);
+      if (pruned) await this.setSetting("board_steps", pruned);
+      // What the note holds besides (nothing, unless something reached it without a step of its
+      // own) goes with it, and comes back with a redo.
+      kept = structuredClone(
+        $state.snapshot({
+          notes: this.notes.filter((x) => x.id === id),
+          items: this.items.filter((x) => x.note_id === id),
+          pictures: this.pictures.filter((x) => x.note_id === id),
+        }),
+      ) as { notes: Note[]; items: Item[]; pictures: Picture[] };
+      this.notes = this.notes.filter((x) => x.id !== id);
+      this.items = this.items.filter((x) => x.note_id !== id);
+      this.pictures = this.pictures.filter((x) => x.note_id !== id);
+      if (this.target === id) this.target = null;
+      if (this.focus?.note === id) this.focus = null;
+      await this.api.deleteNote(id);
+    };
+    const again = async () => {
+      if (!kept) return;
+      if (steps) {
+        const put = putBackInSteps(this.settings.board_steps as SavedSteps | undefined, steps, id);
+        if (put) await this.setSetting("board_steps", put);
       }
-    }
+      await this.restoreAll(kept.notes, kept.items, kept.pictures);
+      await into();
+    };
+    this.history.record({ label: "Note made from a line", undo: back, redo: again });
+    this.showToast(() => tr("New note “{name}”", { name: noteTitle(n) }), { label: () => tr("Undo"), run: () => void this.undo() });
+    return n;
   }
 
   /** "Keep for later" in the tidy view: to the end of the Inbox. */
@@ -1075,6 +1192,11 @@ class Store {
     window.dispatchEvent(new CustomEvent("dobo-report", { detail: from }));
   }
 
+  /** Opens What's new: the running version's own part (App.svelte listens). */
+  openWhatsNew(from: "board" | "settings") {
+    window.dispatchEvent(new CustomEvent("dobo-whatsnew", { detail: from }));
+  }
+
   /** Opens the Archive page (App.svelte listens). */
   openArchive(from: "board" | "settings") {
     window.dispatchEvent(new CustomEvent("dobo-archive", { detail: from }));
@@ -1185,14 +1307,33 @@ class Store {
     this.history.record({ label, undo: () => this.setSetting("templates", prev), redo: () => this.setSetting("templates", next) });
   }
 
-  /** A new note, empty or from a template. */
-  async fromTemplate(t: Template | null, title: string): Promise<Note> {
+  /** A new note, empty or from a template. From the board's right-click menu (`at`): it lands
+   * where it was clicked, in the column clicked under the note above (Board.svelte), in the
+   * space of that spot; `fresh`, its title waits to be typed (NoteCard: Esc with nothing typed
+   * takes it away again). A template's blank lines (the built-ins') wait in it to be filled in,
+   * never saved as lines. */
+  async fromTemplate(t: Template | null, title: string, opts: { at?: BoardPoint | null; fresh?: boolean } = {}): Promise<Note> {
     const name = title.trim() || t?.name || tr("New note");
     const c = this.startColour();
-    let n = await this.api.createNote(name, this.space, t?.palette ?? c.palette, t?.color ?? c.color);
+    const at = opts.at ?? null;
+    const space = at ? this.spaceAt(at) : this.space;
+    // The board as it was (its saved columns, the notes' order): a new note taken away again at
+    // once (Esc) leaves it so, as if never made (dropNew).
+    const was = at ? { steps: structuredClone($state.snapshot(this.settings.board_steps ?? null)) as SavedSteps | null, order: [...this.notes].sort((a, b) => a.sort - b.sort).map((x) => x.id) } : null;
+    let n = await this.api.createNote(name, space, t?.palette ?? c.palette, t?.color ?? c.color);
     if (t && t.paper !== "plain") n = await this.api.updateNote({ ...n, paper: t.paper });
     this.notes = [...this.notes, n];
+    // (In the same moment as it comes on the board: it is never seen at the end first.)
+    // (Only a note whose title waits is remembered so: only it can be taken away as if never made.)
+    if (at && was) {
+      const saving = this.board?.place(n.id, at) ?? undefined;
+      if (opts.fresh) this.placed.set(n.id, { ...was, saving });
+    }
+    // (Its blank lines with it: never "Empty" for a moment.)
+    const blanks = blanksOf(t);
+    if (blanks.task || blanks.idea) this.blanks = { ...this.blanks, [n.id]: blankIds(blanks) };
     for (const line of t?.lines ?? []) {
+      if (isBlank(line)) continue;
       const it = await this.api.createItem({ noteId: n.id, kind: line.kind, text: line.text, alarm: line.deadline ? "deadline" : "reminder" });
       this.items = [...this.items, it];
       for (const s of line.steps ?? []) {
@@ -1204,17 +1345,25 @@ class Store {
     // ids (a new note made again would leave the next undo nothing to take back: ids are never
     // given twice).
     const id = n.id;
-    let kept: { notes: Note[]; items: Item[]; pictures: Picture[] } | null = null;
-    this.history.record({
-      label: "Note added",
+    let kept: { notes: Note[]; items: Item[]; pictures: Picture[]; steps: SavedSteps | null } | null = null;
+    const step = {
+      label: "Note added" as Key,
       undo: async () => {
+        if (this.fresh === id) this.fresh = null;
+        this.placed.delete(id);
+        this.added.delete(id);
+        await this.leaveBoard([id]);
         kept = structuredClone(
           $state.snapshot({
             notes: this.notes.filter((x) => x.id === id),
             items: this.items.filter((x) => x.note_id === id),
             pictures: this.pictures.filter((x) => x.note_id === id),
+            steps: (this.settings.board_steps ?? null) as SavedSteps | null,
           }),
-        ) as { notes: Note[]; items: Item[]; pictures: Picture[] };
+        ) as { notes: Note[]; items: Item[]; pictures: Picture[]; steps: SavedSteps | null };
+        // (Its places in the board's saved columns go with it, and come back with a redo.)
+        const pruned = dropFromSteps(this.settings.board_steps as SavedSteps | undefined, id);
+        if (pruned) await this.setSetting("board_steps", pruned);
         this.notes = this.notes.filter((x) => x.id !== id);
         this.items = this.items.filter((x) => x.note_id !== id);
         this.pictures = this.pictures.filter((x) => x.note_id !== id);
@@ -1224,12 +1373,92 @@ class Store {
       },
       redo: async () => {
         if (!kept) return;
+        if (kept.steps) {
+          const again = putBackInSteps(this.settings.board_steps as SavedSteps | undefined, kept.steps, id);
+          if (again) await this.setSetting("board_steps", again);
+        }
         await this.restoreAll(kept.notes, kept.items, kept.pictures);
         this.focusNote(id);
       },
-    });
-    this.focusNote(n.id);
+    };
+    this.history.record(step);
+    // (Only a note whose title waits can be taken away as if never made: only it is remembered.)
+    if (opts.fresh) {
+      this.added.set(id, step);
+      this.fresh = id;
+    }
+    // (Made where it was clicked, it is in sight already: no glow, no scrolling to it.)
+    if (!at) this.focusNote(n.id);
     return n;
+  }
+
+  /** The New note window (`at`: from the board's right-click menu, where its note goes). */
+  openTemplates(at: BoardPoint | null = null) {
+    this.templateAt = at;
+    this.templatesOpen = true;
+  }
+
+  /** A new note's own step in the undo list (to forget it when the note is taken away at once). */
+  private added = new Map<number, HistoryStep>();
+  /** A new note put at a spot of the board: the board as it was before (its saved columns, the
+   * notes' order), and the board's saving of its new place. */
+  private placed = new Map<number, { steps: SavedSteps | null; order: number[]; saving?: Promise<void> | void }>();
+
+  /** The space for a new note at a spot of the board: the board's; in "All", that of the notes
+   * around it, else Work. */
+  spaceAt(at: BoardPoint): Space {
+    if (this.view !== "all") return this.view;
+    const near = this.board?.around(at) ?? { above: null, below: null };
+    const of = (id: number | null) => (id == null ? undefined : this.notes.find((n) => n.id === id)?.space);
+    return spaceForSpot(this.view, of(near.above), of(near.below));
+  }
+
+  /** The new note's title, typed as it waits (part of making it: one Undo takes the note away,
+   * named; no step of its own). */
+  async nameNew(n: Note, title: string) {
+    if (this.fresh === n.id) this.fresh = null;
+    this.placed.delete(n.id);
+    this.added.delete(n.id);
+    const found = this.notes.find((x) => x.id === n.id);
+    const t = title.trim();
+    if (!found || !t || t === found.title || t === "Inbox") return;
+    await this.putNote({ ...($state.snapshot(found) as Note), title: t }, null);
+  }
+
+  /** The new note left as it came (no title typed, nothing in it): Esc, or a click away, takes
+   * it away again (it fades off), as if it never was: nothing to undo. */
+  async dropNew(id: number): Promise<boolean> {
+    if (this.fresh === id) this.fresh = null;
+    const step = this.added.get(id);
+    const n = this.notes.find((x) => x.id === id);
+    if (!step || !n || this.items.some((i) => i.note_id === id) || this.pictures.some((p) => p.note_id === id)) return false;
+    if (!this.history.forget(step)) return false;
+    this.added.delete(id);
+    // The board as it was: its saved columns (every column count), the notes' order. (Read
+    // before the undo, which forgets it.)
+    const was = this.placed.get(id);
+    this.placed.delete(id);
+    await step.undo();
+    if (was) {
+      await was.saving;
+      await this.setSetting("board_steps", was.steps ?? {});
+      const ids = was.order.filter((x) => this.notes.some((n) => n.id === x));
+      await this.reorder([...ids, ...this.notes.filter((n) => !ids.includes(n.id)).sort((a, b) => a.sort - b.sort).map((n) => n.id)]);
+    }
+    return true;
+  }
+
+  /** A blank line filled in: it becomes a real line of the note (at the end of its kind), and
+   * that blank goes. */
+  async fillBlank(noteId: number, kind: Kind, blank: number, raw: string): Promise<Item | null> {
+    const made = await this.addLine(noteId, raw, kind);
+    if (made) this.dropBlank(noteId, kind, blank);
+    return made;
+  }
+
+  /** One blank line taken from the note (filled in, or taken away with Backspace). */
+  dropBlank(noteId: number, kind: Kind, blank: number) {
+    this.blanks = withoutBlank(this.blanks, noteId, kind, blank);
   }
 
   // ---- The evening look back ----

@@ -27,6 +27,7 @@
   import { crossesMidnight } from "../lib/plan";
   import { shownHHMM } from "../lib/time";
   import { checkNow, restartNow, updates } from "../lib/updates.svelte";
+  import { notesIn, updateState, updateWords } from "../lib/updateWords";
   import { askedLanguage, dateAndTime, dateFmt, dayName, fileSize, i18n, isKey, keysText, readChoice, switchLanguage, t, type Key, type LangChoice, words, type Words } from "../lib/i18n.svelte";
 
   // `at`: a section to open on (the "?" at the board's corner and F1 open Help); `n` changes on
@@ -464,6 +465,8 @@
       .catch(() => {});
   });
   const KIND_NAME: Record<DataInfo["kind"], Key> = { installed: "Installed", portable: "Portable", dev: "Development build" };
+  /** The same in the Updates line, after "Dobo 1.2.0" (in French, of Dobo: « installé »). */
+  const LINE_KIND: Record<DataInfo["kind"], Key> = { installed: "Installed (Dobo)", portable: "Portable", dev: "Development build" };
   function kindNote(d: DataInfo): string {
     if (d.kind === "installed") return t("Installed on this computer. Updating or reinstalling keeps your notes.");
     if (d.kind === "dev") return t("A development build, with notes of its own in the project folder.");
@@ -481,26 +484,12 @@
     }
   }
 
-  // ---- Updates (src/lib/updates.svelte.ts) ----
+  // ---- Updates (src/lib/updates.svelte.ts; its words: src/lib/updateWords.ts) ----
   let upd = $derived(updates.v);
-  // The line says what is known; when that's only the version, the words under it don't say it
-  // again.
-  let updVersionOnly = $derived(!upd || !((upd.ready && upd.latest) || upd.busy || upd.latest || (upd.checked && !upd.error)));
-  let updLine = $derived.by(() => {
-    if (!upd) return t("Version {version}", { version: info?.version ?? "" });
-    if (upd.ready && upd.latest) return t("{app} {version} is ready", { app: APP_NAME, version: upd.latest });
-    if (upd.busy) return t("Checking for updates…");
-    if (upd.latest) return t("{app} {version} is out", { app: APP_NAME, version: upd.latest });
-    if (upd.checked && !upd.error) return t("{app} is up to date", { app: APP_NAME });
-    return t("Version {version}", { version: upd.current });
-  });
-  let updSub = $derived.by(() => {
-    if (upd?.ready) return t("It starts the next time {app} opens, or now with Restart now.", { app: APP_NAME });
-    const last = upd?.last_checked;
-    if (updVersionOnly) return last ? t("Last checked {when}", { when: when(last) }) : t("Not checked yet");
-    const version = upd?.current ?? info?.version ?? "";
-    return last ? t("Version {version} · last checked {when}", { version, when: when(last) }) : t("Version {version} · not checked yet", { version });
-  });
+  let updAuto = $derived(store.settings.update_auto !== false);
+  let updState = $derived(updateState(upd));
+  // (A development or test build never looks: nothing said about the daily check there.)
+  let updWords = $derived(updateWords(upd, updAuto && info?.kind !== "dev", when));
 
   // ---- Language (Follow Windows · English · Français): each name in its own language ----
   let langChoice = $derived(readChoice(store.settings.language));
@@ -555,6 +544,37 @@
           <button role="radio" aria-checked={langChoice === k} class:on={langChoice === k} lang={k === "system" ? undefined : k} onclick={() => setLanguage(k)}>{name ?? t("Follow Windows")}</button>
         {/each}
       </div>
+    </div>
+  </section>
+
+  <!-- Second, right after Appearance and its language (modelled on Pako's Settings › Updates):
+       this copy and where its update stands, with its one button; then the daily check. -->
+  <section data-key="Updates">
+    <h3>{t("Updates")}</h3>
+    <div class="line">
+      <span>
+        <span class="upd-name">{APP_NAME} {upd?.current || info?.version || ""}{#if info}<span class="upd-kind" transition:fadeQuick>{` · ${t(LINE_KIND[info.kind])}`}</span>{/if}</span>
+        <span class="small-swap">{#key updState}<small in:crumbIn out:crumbOut>{updWords}</small>{/key}</span>
+      </span>
+      <span class="aswap">
+        {#if updState === "ready"}
+          <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small strong" onclick={restartNow}>{t("Restart now")}</button></span>
+        {:else}
+          <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small" disabled={!!upd?.busy} onclick={checkNow}><span class="both"><span class:off={!!upd?.busy}>{t("Check for updates")}</span><span class:off={!upd?.busy}>{t("Checking…")}</span></span></button></span>
+        {/if}
+      </span>
+    </div>
+    {#if upd?.error}<p class="error" transition:fold>{upd.error}</p>{/if}
+    {#if upd?.ready && upd.notes}<p class="note upd-notes" transition:fold>{notesIn(upd.notes, i18n.lang)}</p>{/if}
+    <label class="line check">
+      <span>{t("Check for updates automatically")} <small>{t("A new version is downloaded and checked, then used the next time {app} starts. Your notes are never touched.", { app: APP_NAME })}</small></span>
+      <input type="checkbox" checked={updAuto} onchange={(e) => store.setSetting("update_auto", e.currentTarget.checked)} />
+      <span class="sw" aria-hidden="true"></span>
+    </label>
+    <!-- What's new: the running version's own part, again (Back comes here). -->
+    <div class="line">
+      <span>{t("What’s new")} <small>{t("What this version brings.")}</small></span>
+      <button class="small" onclick={() => store.openWhatsNew("settings")}>{t("Read")}</button>
     </div>
   </section>
 
@@ -880,27 +900,6 @@
     {/if}
   </section>
 
-  <section data-key="Updates">
-    <h3>{t("Updates")}</h3>
-    <label class="line check">
-      <span>{t("Check for updates automatically")} <small>{t("Once a day. A new version is downloaded and checked, then used the next time {app} starts. Your notes are never touched.", { app: APP_NAME })}</small></span>
-      <input type="checkbox" checked={store.settings.update_auto !== false} onchange={(e) => store.setSetting("update_auto", e.currentTarget.checked)} />
-      <span class="sw" aria-hidden="true"></span>
-    </label>
-    <div class="line">
-      <span>{updLine} <small>{updSub}</small></span>
-      <span class="aswap">
-        {#if upd?.ready}
-          <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small strong" onclick={restartNow}>{t("Restart now")}</button></span>
-        {:else}
-          <span class="keyset" in:arrive={{ delay: 80, duration: 220, y: 0 }} out:leave={{ duration: 110, y: 0 }}><button class="small" disabled={!!upd?.busy} onclick={checkNow}>{upd?.busy ? t("Checking…") : t("Check for updates")}</button></span>
-        {/if}
-      </span>
-    </div>
-    {#if upd?.error}<p class="error" transition:fold>{upd.error}</p>{/if}
-    {#if upd?.ready && upd.notes}<p class="note" transition:fold>{upd.notes}</p>{/if}
-  </section>
-
   <section data-key="Help">
     <h3>{t("Help")}</h3>
     <div class="line">
@@ -913,7 +912,7 @@
         <span class="keys">{k.split(" · ").map(keysText).join(" · ")}</span><span class="what">{what}</span>
       {/each}
       <h4 class="span">{t("Gestures")}</h4>
-      {#each [["Click the Inbox strip", "opens or folds it; its pin keeps it open"], ["Drag a line out of the Inbox", "files it in the note you drop it on"], ["Drag a task onto the hours", "gives it a time"], ["Drag a line onto a task", "makes it one of its steps"], ["Drag a line onto a note", "moves it there"], ["Drag a note", "rearranges the board"], ["Drag a note’s right edge", "makes it wide"], ["Drop a picture or a file on a note", "keeps it there"], ["Right-click the board", "changes the background"], ["Ctrl + wheel", "note size"]] as const as [g, what] (g)}
+      {#each [["Click the Inbox strip", "opens or folds it; its pin keeps it open"], ["Drag a line out of the Inbox", "files it in the note you drop it on"], ["Drag a task just under the Inbox", "opens today’s hours there, to give it a time"], ["Drag a line onto a task", "makes it one of its steps"], ["Drag a line onto a note", "moves it there"], ["Drag a line onto an empty spot", "starts a new note with it, right there"], ["Drag a note", "rearranges the board"], ["Drag a note’s right edge", "makes it wide"], ["Drop a picture or a file on a note", "keeps it there"], ["Right-click the board", "starts a new note there, or changes the background"], ["Ctrl + wheel", "note size"]] as const as [g, what] (g)}
         <span class="gesture">{t(g)}</span><span class="what">{t(what)}</span>
       {/each}
     </div>
@@ -1152,6 +1151,26 @@
   .line:has(> .aswap) > span:first-child,
   .line:has(> .keys) > span:first-child {
     flex: 1 1 200px;
+  }
+  /* Updates: "Dobo 1.2.0 · Installed", the kind said quietly after the version. */
+  .upd-kind {
+    color: var(--muted);
+  }
+  /* What the ready version brings: right under its line, as an error would be, with the same
+     room before the switch. */
+  .note.upd-notes {
+    margin: 0 0 var(--s2);
+  }
+  /* Check for updates · Checking…: the button keeps the width of its longer words, so starting a
+     check never moves it under the words (or back) in a narrow panel. */
+  .both {
+    display: grid;
+  }
+  .both > * {
+    grid-area: 1 / 1;
+  }
+  .both > .off {
+    visibility: hidden;
   }
   /* (Updates' Check for updates / Restart now: the button keeps its width, never over the words.) */
   .line > .aswap {

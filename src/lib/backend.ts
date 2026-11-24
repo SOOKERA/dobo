@@ -73,6 +73,8 @@ export interface UpdateView {
   checked: boolean;
   /** When the last check that worked was made (ms). */
   last_checked: number | null;
+  /** This copy updates itself (false: a development or test build, which never looks). */
+  enabled?: boolean;
 }
 
 export interface DropEvent {
@@ -570,6 +572,14 @@ function mockBackend(): Backend {
   const emit = (name: string, p: unknown) => listeners[name]?.forEach((cb) => cb(p));
   const ok = <T,>(v: T) => Promise.resolve(structuredClone(v));
   const recover = params.get("recover");
+  // What's new (whatsnew.ts): ?updated=1.1.0 (or =unknown) is the first start after an update
+  // from that version, as whatsnew.rs notes it; ?fresh, a first install (nothing noted yet);
+  // ?version=… the running version (else 1.1.0, or 1.2.0 with ?updated). ?terms=ask: the terms
+  // not accepted yet (an existing copy asked once, as at its first start after 1.1).
+  const previewVersion = params.get("version") || (params.has("updated") ? "1.2.0" : "1.1.0");
+  if (params.has("updated")) data.settings.whats_new_seen = params.get("updated") || "unknown";
+  if (params.has("fresh")) delete data.settings.whats_new_seen;
+  if (params.get("terms") === "ask") delete data.settings.terms_accepted;
   const previewKept = `broken-${new Date().toISOString().slice(0, 10)}.sqlite`;
   let previewChosen: RecoveryChoice | null = null;
   let previewContinueFailed = false;
@@ -590,7 +600,32 @@ function mockBackend(): Backend {
           portable_notes: recover === "portable" && params.has("notes"),
         }
       : null;
-  let previewUpdate: UpdateView = { current: "1.1.0", latest: null, notes: null, ready: false, busy: false, error: null, checked: false, last_checked: null };
+  // What a check finds in the preview (?update=ready | error | out | dev; default: up to date),
+  // as updates.rs says it. With …&daily, the daily check found it three hours ago, before
+  // Settings opened (…&daily alone: that check found nothing, as at a usual start).
+  const updateFound = (u: string | null, before: UpdateView): UpdateView => ({
+    ...before,
+    busy: false,
+    checked: true,
+    // (As updates.rs: only a check that worked is the last one.)
+    last_checked: u === "error" || u === "out" || u === "dev" ? before.last_checked : Date.now(),
+    latest: u === "ready" || u === "out" ? "1.2.0" : null,
+    notes: u === "ready" ? "Notes stay put when you pick up a task, and a few small fixes.\n\nEn français : Les notes restent en place quand vous prenez une tâche, et quelques petites corrections." : null,
+    ready: u === "ready",
+    error:
+      u === "error"
+        ? "Couldn’t reach Dobo’s update page. Check your connection, then try again."
+        : u === "out"
+          ? "Dobo can’t save the update in its folder (C:\\Program Files\\Dobo): Windows doesn’t allow changes there. Move the Dobo folder somewhere you can change files, such as Documents, then try again."
+          : u === "dev"
+            ? "This copy of Dobo is a development or test build: it never updates itself."
+            : null,
+  });
+  let previewUpdate: UpdateView = { current: previewVersion, latest: null, notes: null, ready: false, busy: false, error: null, checked: false, last_checked: null, enabled: params.get("update") !== "dev" };
+  if (params.has("daily")) {
+    const before = { ...previewUpdate, last_checked: Date.now() - 3 * 3600_000 };
+    previewUpdate = { ...updateFound(params.get("update"), before), last_checked: before.last_checked, checked: params.has("update") };
+  }
   const findItem = (id: number) => data.items.find((i) => i.id === id)!;
   const spawnNext = (it: Item) => {
     if (!it.repeat || it.due_at == null || it.kind !== "task") return;
@@ -1010,7 +1045,7 @@ function mockBackend(): Backend {
     dataInfo: () => {
       const c = params.get("copy");
       const kind = c === "installed" ? "installed" : c === "dev" ? "dev" : "portable";
-      return ok({ kind, dir: previewDataDir(), kept_existing: c === "kept", fallback: c === "fallback", version: "1.1.0" } satisfies DataInfo);
+      return ok({ kind, dir: previewDataDir(), kept_existing: c === "kept", fallback: c === "fallback", version: previewVersion } satisfies DataInfo);
     },
     acceptTerms: () => {
       data.settings.terms_accepted = "2026-11-21";
@@ -1018,24 +1053,14 @@ function mockBackend(): Backend {
       return Promise.resolve("2026-11-21");
     },
     quitApp: () => Promise.resolve(),
-    // ?update=ready | error shows those cases (default: up to date after a check).
+    // ?update=… (see updateFound) shows the other cases; the check takes a moment, as a real one.
     updateStatus: () => ok(previewUpdate),
     updateCheck: () =>
       new Promise((done) => {
         previewUpdate = { ...previewUpdate, busy: true, error: null };
         emit("update-status", structuredClone(previewUpdate));
         setTimeout(() => {
-          const u = params.get("update");
-          previewUpdate = {
-            ...previewUpdate,
-            busy: false,
-            checked: true,
-            // (As updates.rs: only a check that worked is the last one.)
-            last_checked: u === "error" ? previewUpdate.last_checked : Date.now(),
-            latest: u === "ready" ? "1.0.1" : null,
-            ready: u === "ready",
-            error: u === "error" ? "Couldn't reach Dobo's update page. Check your connection, then try again." : null,
-          };
+          previewUpdate = updateFound(params.get("update"), previewUpdate);
           emit("update-status", structuredClone(previewUpdate));
           done(structuredClone(previewUpdate));
         }, 900);

@@ -7,16 +7,21 @@
   import ItemRow from "./ItemRow.svelte";
   import IdeaRow from "./IdeaRow.svelte";
   import AddLine from "./AddLine.svelte";
+  import BlankLine from "./BlankLine.svelte";
   import NotePictures from "./NotePictures.svelte";
   import { store, NO_PICTURES } from "../lib/store.svelte";
+  import { NO_BLANK_IDS, freshEnd, pressedIn } from "../lib/newNote";
+  import { tick, untrack } from "svelte";
   import { itemDrag } from "../lib/itemdrag.svelte";
   import { fileDrop } from "../lib/filedrop.svelte";
   import { snap } from "../lib/snap";
-  import { fold, fadeQuick } from "../lib/motion";
+  import { fold, fadeQuick, drawMark, crumbIn, crumbOut, veil } from "../lib/motion";
+  import { allDone } from "../lib/allDone";
   import type { Tone } from "../lib/palette";
-  import type { Item, Note } from "../lib/types";
+  import type { Item, Kind, Note } from "../lib/types";
   import { around, t } from "../lib/i18n.svelte";
   import { noteTitle } from "../lib/names";
+  import { fromControl } from "../lib/dblclick";
   import type { Point } from "../lib/contextmenu";
 
   let {
@@ -60,9 +65,42 @@
   // (The quick tour's lines live in the Inbox strip, never in a note.)
   let open = $derived(tasks.filter((t) => t.done_at == null).length);
   let pictures = $derived(store.picturesByNote.get(note.id) ?? NO_PICTURES);
+  // Blank lines waiting to be filled in (a note made from a template): never counted.
+  let blankIds = $derived(store.blanks[note.id] ?? NO_BLANK_IDS);
+  let blanks = $derived({ task: blankIds.task.length, idea: blankIds.idea.length });
+  // Every task done: a big faint check, the card softened, "All done" (ideas still counted).
+  // (Not while blank tasks still wait to be written.)
+  let done = $derived(tasks.length > 0 && !blanks.task && allDone(tasks, store.inboxIds.has(note.id)));
   let meta = $derived(
-    [tasks.length ? t("{n} to do", { n: open }) : "", ideas.length ? t("{n} ideas", { n: ideas.length }) : ""].filter(Boolean).join(" · "),
+    [done ? t("All done") : tasks.length ? t("{n} to do", { n: open }) : "", ideas.length ? t("{n} ideas", { n: ideas.length }) : ""].filter(Boolean).join(" · "),
   );
+  // All done: "All done" always whole; what follows it (the ideas, "folded") goes first when the
+  // line is short of room (a long title), never "All do…".
+  let after = $derived([ideas.length ? t("{n} ideas", { n: ideas.length }) : "", note.folded ? t("folded") : ""].filter(Boolean).join(" · "));
+
+  // The big check's size and place come from the card as it is open, so folding it fades the
+  // check where it is (never shrinking and sliding with the card).
+  let cardH = $state(0);
+  let openH = $state<number | null>(null);
+  let folding = false;
+  let foldTimer: ReturnType<typeof setTimeout> | null = null;
+  let wasFolded = untrack(() => note.folded);
+  $effect(() => {
+    const f = note.folded;
+    if (f === wasFolded) return;
+    wasFolded = f;
+    folding = true;
+    if (foldTimer) clearTimeout(foldTimer);
+    foldTimer = setTimeout(() => {
+      folding = false;
+      if (!note.folded && cardEl) openH = cardEl.offsetHeight;
+    }, 420);
+    return () => foldTimer && clearTimeout(foldTimer);
+  });
+  $effect(() => {
+    const h = cardH;
+    if (h > 0 && !note.folded && !folding) untrack(() => (openH = h));
+  });
   let dropHere = $derived(
     (itemDrag.target?.kind === "note" && itemDrag.target.id === note.id) || fileDrop.note === note.id,
   );
@@ -88,7 +126,8 @@
   let titleDraft = $state("");
 
   function focusSelect(el: HTMLInputElement) {
-    el.focus();
+    // (A new note's title, where it was just clicked: in sight already.)
+    el.focus({ preventScroll: fresh });
     el.select();
   }
 
@@ -107,9 +146,60 @@
     if (save) await store.rename(note, titleDraft);
   }
 
+  // ---- A new note from the board's right-click menu: its title waits to be typed ----
+  /** Its title field is the new note's (empty, "Title of the note" in it). */
+  let fresh = $state(false);
+  /** Taken away again: fading off the board. */
+  let leaving = $state(false);
+  /** When the note was last pressed (anywhere in it). */
+  let pressedAt: number | null = null;
+  $effect(() => {
+    if (store.fresh !== note.id) return;
+    untrack(() => {
+      if (editingTitle && fresh) return;
+      titleDraft = "";
+      fresh = true;
+      editingTitle = true;
+    });
+  });
+  /** Enter: named (or left "New note" with nothing typed), and the keyboard goes on into it.
+   * Esc, or a click away, with nothing typed: the note goes again. */
+  async function endFresh(how: "enter" | "esc" | "blur", e?: FocusEvent) {
+    if (!editingTitle || !fresh) return;
+    // (In the note: the keyboard went to something in it, or it was pressed anywhere in it.)
+    const inside = (e?.relatedTarget instanceof Node && !!cardEl?.contains(e.relatedTarget)) || (how === "blur" && pressedIn(pressedAt, performance.now()));
+    const end = freshEnd(how, titleDraft, { inside, windowFocused: document.hasFocus() });
+    if (end === "wait") return;
+    fresh = false;
+    if (end === "drop") {
+      // (Its empty field stays as the card fades away: no "New note" showing for a moment.)
+      leaving = true;
+      if (document.activeElement instanceof HTMLElement && cardEl?.contains(document.activeElement)) document.activeElement.blur();
+      if (await store.dropNew(note.id)) return;
+      leaving = false;
+      editingTitle = false;
+      return;
+    }
+    editingTitle = false;
+    if (end === "name") await store.nameNew(note, titleDraft);
+    else store.fresh = null;
+    if (how === "enter") void goOn("title");
+  }
+  /** The keyboard goes on down the note: to its first blank line (of a kind after `from`), else
+   * its "+ Add" field. */
+  async function goOn(from: "title" | Kind) {
+    await tick();
+    const order = from === "title" ? [".tasks .blank input", ".idea-blank input"] : from === "task" ? [".idea-blank input"] : [];
+    for (const q of order) {
+      const el = cardEl?.querySelector<HTMLInputElement>(q);
+      if (el) return el.focus({ preventScroll: true });
+    }
+    adding = true;
+  }
+
   // "+ Add" at the end of the note; a click in the note's empty space opens it too.
   let adding = $state(false);
-  let last = $derived<"tasks" | "ideas" | "pictures" | "empty">(ideas.length ? "ideas" : pictures.length ? "pictures" : tasks.length ? "tasks" : "empty");
+  let last = $derived<"tasks" | "ideas" | "pictures" | "empty">(ideas.length || blanks.idea ? "ideas" : pictures.length ? "pictures" : tasks.length || blanks.task ? "tasks" : "empty");
   const NOT_EMPTY = "button, input, textarea, a, [data-line], .add-row, .pics, .attach, .idea-attach, [role='dialog'], [role='menu'], [role='group']";
   /** Where a press in the note's empty space began (a click that ends a line's carry, its press
    * on the line and its release over the empty space, isn't one). */
@@ -140,10 +230,14 @@
   class:folded={note.folded}
   class:focused
   class:drop={dropHere}
+  class:done
   aria-label={noteTitle(note)}
   data-drop-note={note.id}
   bind:this={cardEl}
+  bind:clientHeight={cardH}
+  onpointerdowncapture={() => (pressedAt = performance.now())}
   style:--rule={tone.corner}
+  style:--open-h={openH ? `${openH}px` : null}
   style:--lift-tilt={lifted ? `${tilt.toFixed(2)}deg` : null}
 >
   <div class="lift-shadow" aria-hidden="true"></div>
@@ -154,7 +248,7 @@
   {/if}
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="head" class:editing={editingTitle} onpointerdown={grab} ondblclick={startTitle}>
+  <div class="head" class:editing={editingTitle} onpointerdown={grab} ondblclick={(e) => !fromControl(e, e.currentTarget) && startTitle()}>
     <button class="dot" aria-label={t("Colour and options for “{name}”", { name: noteTitle(note) })} data-tip={t("Note colour and options")} onclick={() => onMenu(!menuOpen)}><span style:background={tone.dot}></span></button>
     {#if editingTitle}
       <input
@@ -162,20 +256,31 @@
         bind:value={titleDraft}
         use:focusSelect
         aria-label={t("Note title")}
+        placeholder={fresh || leaving ? t("Title of the note") : null}
         onkeydown={(e) => {
           if (composing(e)) return;
-          if (e.key === "Enter") endTitle(true);
+          if (e.key === "Enter") {
+            if (fresh) endFresh("enter");
+            else endTitle(true);
+          }
           if (e.key === "Escape") {
             e.stopPropagation();
-            endTitle(true);
+            if (fresh) endFresh("esc");
+            else endTitle(true);
           }
         }}
-        onblur={() => endTitle(true)}
+        onblur={(e) => (leaving ? undefined : fresh ? endFresh("blur", e) : endTitle(true))}
       />
     {:else}
       <h3 class="title">{noteTitle(note)}</h3>
     {/if}
-    <span class="meta">{meta}{note.folded ? ` · ${t("folded")}` : ""}</span>
+    <span class="meta" class:whole={done}
+      >{#key done}<span class="words" class:parts={done} in:crumbIn out:crumbOut
+          >{#if done}<span class="part"
+              >{#if note.folded}<span class="tick" transition:fadeQuick={{ duration: 180 }}><Icon name="check" size={10} stroke={3} /></span>{/if}{t("All done")}</span
+            >{#if after}<span class="part rest">&nbsp;· {after}</span>{/if}{:else}{meta}{note.folded ? ` · ${t("folded")}` : ""}{/if}</span
+        >{/key}</span
+    >
     <span class="end">
     <button class="more" class:shown={menuOpen} aria-haspopup="dialog" aria-label={t("Menu for “{name}”", { name: noteTitle(note) })} data-tip={t("Note menu")} aria-expanded={menuOpen} onclick={() => onMenu(!menuOpen)}><Icon name="more" size={16} /></button>
     <button class="chev" class:shown={note.folded} aria-label={note.folded ? t("Unfold “{name}”", { name: noteTitle(note) }) : t("Fold “{name}” to its title", { name: noteTitle(note) })} aria-expanded={!note.folded} data-tip={note.folded ? t("Unfold") : t("Fold to its title")} data-tip-keys="F" onclick={toggleFold}
@@ -187,31 +292,48 @@
   {#if !note.folded}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (its "+ Add" button is the way in by keyboard) -->
   <div class="body" transition:fold={{ y: -6, duration: 340, room: 1, show: 0.15 }} onpointerdown={emptyPress} onclick={emptyClick}>
-  {#if tasks.length}
+  {#if tasks.length || blanks.task}
     <ul class="tasks" transition:fold>
       {#each tasks as it (it.id)}
         <ItemRow item={it} />
+      {/each}
+      {#each blankIds.task as id, i (id)}
+        <BlankLine noteId={note.id} {id} kind="task" first={i === 0} {lined} name={noteTitle(note)} onEnd={goOn} />
       {/each}
     </ul>
   {/if}
 
   <div use:snap={lined}><NotePictures {pictures} {width} /></div>
 
-  {#if ideas.length}
-    <div class="ideas" transition:fold class:alone={!tasks.length && !pictures.length} style:--tint={tone.bg} style:--idea-ink={tone.ink} style:--corner={tone.corner}>
+  {#if ideas.length || blanks.idea}
+    <div class="ideas" transition:fold class:alone={!tasks.length && !blanks.task && !pictures.length} style:--tint={tone.bg} style:--idea-ink={tone.ink} style:--corner={tone.corner}>
       <span class="fold" aria-hidden="true"></span>
       {#each ideas as it (it.id)}
         <IdeaRow item={it} {lined} gap={lined ? 0 : 7} />
       {/each}
+      {#each blankIds.idea as id, i (id)}
+        <BlankLine noteId={note.id} {id} kind="idea" first={i === 0} {lined} name={noteTitle(note)} onEnd={goOn} />
+      {/each}
     </div>
   {/if}
 
-  {#if !tasks.length && !ideas.length && !pictures.length}
+  {#if !tasks.length && !ideas.length && !pictures.length && !blanks.task && !blanks.idea}
     {@const [before, after] = around(t("Empty. Add a line here, or type {tag} above."), "{tag}")}
-    <p class="empty" transition:fold>{before}<b>#{tagFor(note)}</b>{after}</p>
+    <p class="empty" transition:fold>{before}<b>#{tagFor(fresh && titleDraft.trim() ? { title: titleDraft } : note)}</b>{after}</p>
   {/if}
-  <AddLine noteId={note.id} name={noteTitle(note)} {lined} tint={ideas.length ? tone.bg : null} after={last} bind:active={adding} />
+  <AddLine noteId={note.id} name={noteTitle(note)} {lined} tint={ideas.length || blanks.idea ? tone.bg : null} after={last} bind:active={adding} />
   </div>
+  {/if}
+
+  <!-- All done: a big faint check across the lower right, over the words but blended into the
+       paper (so it reads as behind them), never in the way of a click. It goes with the body
+       when the note folds. -->
+  {#if !note.folded}
+    <div class="done-layer" aria-hidden="true" transition:veil={{ duration: 220 }}>
+      <svg class="done-mark" viewBox="0 0 120 96" fill="none">
+        {#if done}<path d="M15 53 C24 61 34 71 44 80 C61 56 81 34 105 15" pathLength="1" transition:drawMark={{ delay: 120 }} />{/if}
+      </svg>
+    </div>
   {/if}
 
   {#if menuOpen}
@@ -278,7 +400,8 @@
      then does the title wrap, at its words. */
   .head {
     display: grid;
-    grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
+    /* (All done: the count's column keeps "All done" whole, the title wraps first.) */
+    grid-template-columns: auto minmax(0, max-content) minmax(var(--meta-min, 0px), 1fr) auto;
     align-items: center;
     column-gap: var(--s2);
     padding: 11px var(--s2) var(--s1) 10px;
@@ -344,6 +467,10 @@
       grid-column: 2 / -1;
       justify-self: start;
       margin-top: -2px;
+      text-align: left;
+    }
+    .head .meta .words.parts {
+      justify-content: flex-start;
     }
   }
   .end {
@@ -366,15 +493,47 @@
     color: var(--ink);
     outline: 0;
   }
+  /* (Its words in one cell: "1 to do" and "All done" cross there, never side by side.) */
   .meta {
+    display: grid;
     justify-self: end;
     min-width: 0;
     max-width: 100%;
     font-size: var(--t-sm);
     color: var(--muted);
+    text-align: right;
+  }
+  .meta .words {
+    grid-area: 1 / 1;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* All done: "All done" never cut (the title gives way first), and what follows it wraps onto a
+     line that never shows when it doesn't fit. */
+  .meta.whole {
+    min-width: min-content;
+  }
+  .card.done {
+    --meta-min: min-content;
+  }
+  .meta .words.parts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: min-content;
+    height: 1lh;
+  }
+  .meta .part {
+    flex-shrink: 0;
+  }
+  /* Folded and all done: a small check before the words (the big one folds away with the body). */
+  .meta .tick {
+    display: inline-flex;
+    margin-right: 4px;
+    color: var(--done-mark);
+    vertical-align: -1px;
   }
   .more {
     flex-shrink: 0;
@@ -437,6 +596,69 @@
   .empty b {
     font-weight: 600;
     color: var(--soft);
+  }
+
+  /* ---- All done ---- */
+  /* The check sits over the words but is blended into what is under it (multiplied on light
+     paper, screened on dark), so dark words stay dark, light ones light: it reads as drawn on
+     the paper behind them. It stays whole over a picture too (a check cut by one would read as
+     a fault). It never takes a pointer. */
+  .done-layer {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+    mix-blend-mode: var(--done-mark-blend);
+  }
+  .done-mark {
+    position: absolute;
+    right: 7%;
+    /* Big but kept clear of the title: at most the card's height under its head (the card as it
+       is open: folding, it stays where it is and fades). */
+    --mark-h: min(42cqw, 170px, calc(var(--open-h, 100%) - 52px));
+    top: calc(var(--open-h, 100%) - 12px - var(--mark-h));
+    height: var(--mark-h);
+    aspect-ratio: 120 / 96;
+    overflow: visible;
+    opacity: var(--done-mark-strength);
+  }
+  .done-mark path {
+    stroke: var(--done-mark);
+    stroke-width: 9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  /* The words dim a little (still readable), and back the same way. A filter, so it adds to
+     the opacity a carried line already takes. */
+  .title,
+  .card :global(.tasks .text),
+  .card :global(.ideas .idea-text),
+  .card :global(.ideas .row .text) {
+    /* (Its own: the colour of a tick, the opacity of a carry.) */
+    transition:
+      filter 0.42s var(--ease-out),
+      opacity 0.18s var(--ease-out),
+      color 0.2s;
+  }
+  .card.done .title {
+    filter: opacity(0.62);
+  }
+  .card.done :global(.tasks .text),
+  .card.done :global(.ideas .idea-text),
+  .card.done :global(.ideas .row .text) {
+    filter: opacity(0.78);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .title,
+    .card :global(.tasks .text),
+    .card :global(.ideas .idea-text),
+    .card :global(.ideas .row .text) {
+      transition:
+        filter 0.14s,
+        opacity 0.18s var(--ease-out),
+        color 0.2s;
+    }
   }
 
   /* ---- Fold, tidy, widen, keyboard focus ---- */

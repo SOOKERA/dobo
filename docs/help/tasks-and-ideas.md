@@ -38,12 +38,14 @@ Every note ends with **+ Add**. Click it, or click the empty space of a note, an
 
 ## Work with a line
 
-- **Tick a task**: click its checkbox, or select it and press **Space**.
+- **Tick a task**: click its checkbox, or select it and press **Space**. Tick a note's last open task and the note says **All done** (see [The board](the-board.md)).
 - **Edit a line**: double-click it (or select it and press **Enter** or **F2**). **Enter** saves, **Esc** leaves.
 - **Delete a line**: its menu › **Delete**, or select it and press **Delete**.
 - **Move a line**: press on its words and drag it onto another note, onto a task (it becomes a step) or onto the Inbox strip. **Esc** while carrying sends it back.
-- **A task's menu** (**⋯** on the line, or right-click it): its time, **Pick on today's hours**, **Repeat**, **Kind of reminder**, **Add a step**, **Copy text**, **Make it an idea**.
-- **An idea's menu** (right-click it): **Copy text**, **Make it a task**, **Delete**.
+- **Make a line into a new note**: drag it onto **+ New note**, the dashed card that waits at the end of the board while you carry a line (the note grows in there), or onto any empty spot of the board (the note appears where you drop it, then settles under the note above). Or choose **Make a new note of it** in the line's menu: the same as the dashed card. The note takes the line's words as its title (cut at about 60 characters) and the line goes inside, whole: its time, steps, link and pictures. It works for any line, from the Inbox or a note, a task, an idea or a step. One **Ctrl+Z** puts the line back where it was and takes the note away.
+- **Give a task a time**: while you carry it, a dashed strip, **Drop here for a time**, shows just under the Inbox. Drag the task onto it and today's hours open there, over the notes: drop it on one (see [The hours ruler](the-hours-ruler.md)).
+- **A task's menu** (**⋯** on the line, or right-click it): its time, **Pick on today's hours**, **Repeat**, **Kind of reminder**, **Add a step**, **Copy text**, **Make it an idea**, **Make a new note of it**.
+- **An idea's menu** (right-click it): **Copy text**, **Make it a task**, **Make a new note of it**, **Delete**.
 - **Copy text** copies the line's words, with its link's address and its file's path each on a line of their own; a short "Copied" says it's done.
 
 ## Task or idea

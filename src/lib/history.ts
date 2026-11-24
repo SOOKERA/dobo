@@ -14,6 +14,9 @@ export interface Step {
 export class History {
   private past: Step[] = [];
   private future: Step[] = [];
+  /** What recording the last step let go of (the steps that could be redone, the oldest step
+   * over the limit): forgetting that step at once gives them back. */
+  private dropped: { step: Step; future: Step[]; shifted: Step | null } | null = null;
   private busy = false;
   /** Undo and redo run one after another: a second Ctrl+Z pressed while the first one's card is
    * still leaving waits for it (two at once would each read the board halfway through the other). */
@@ -25,7 +28,8 @@ export class History {
   record(step: Step) {
     if (this.busy) return;
     this.past.push(step);
-    if (this.past.length > this.limit) this.past.shift();
+    const shifted = this.past.length > this.limit ? (this.past.shift() ?? null) : null;
+    this.dropped = { step, future: this.future, shifted };
     this.future = [];
   }
 
@@ -34,6 +38,23 @@ export class History {
   clear() {
     this.past = [];
     this.future = [];
+    this.dropped = null;
+  }
+
+  /** Forgets one change as if it never was (a new note left empty and taken away again with
+   * Esc: nothing to undo or redo). When it is still the last change, what recording it let go of
+   * comes back (what could be redone, the oldest step). True when it was there to forget. */
+  forget(step: Step): boolean {
+    const i = this.past.lastIndexOf(step);
+    if (i < 0) return false;
+    this.past.splice(i, 1);
+    const d = this.dropped;
+    if (d?.step === step && i === this.past.length && !this.future.length) {
+      this.future = d.future;
+      if (d.shifted) this.past.unshift(d.shifted);
+    }
+    if (d?.step === step) this.dropped = null;
+    return true;
   }
 
   get canUndo() {

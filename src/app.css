@@ -77,6 +77,10 @@
   --box: #9a968d;
   --done-box: #bdb9b0;
   --done-ink: #7a766e;
+  /* A note whose tasks are all done: its big faint check (blended into the paper). */
+  --done-mark: #3f8f55;
+  --done-mark-strength: 0.2;
+  --done-mark-blend: multiply;
   --hover: rgba(31, 29, 26, 0.05);
   --card-shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 4px 14px rgba(60, 50, 30, 0.04);
   --lift-shadow: 0 18px 36px rgba(60, 50, 30, 0.22), 0 4px 10px rgba(60, 50, 30, 0.1);
@@ -115,6 +119,10 @@
   --box: #7c7871;
   --done-box: #5c5953;
   --done-ink: #8e8a83;
+  --done-mark: #74c287;
+  /* (Drawn as it is, not screened: a screened check vanishes over a light picture.) */
+  --done-mark-strength: 0.17;
+  --done-mark-blend: normal;
   --hover: rgba(255, 255, 255, 0.05);
   --card-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
   --lift-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);

@@ -222,6 +222,7 @@ export const settings = {
   // About: this copy and where its notes are.
   About: "À propos",
   Installed: "Installée",
+  "Installed (Dobo)": "Installé",
   Portable: "Portable",
   "Development build": "Version de développement",
   "Installed on this computer. Updating or reinstalling keeps your notes.": "Installée sur cet ordinateur. Mettre à jour ou réinstaller garde vos notes.",
@@ -237,24 +238,21 @@ export const settings = {
   "{app} goes online only to fetch the title and picture of a web page you dump, once a day to check for updates (unless you turn that off), and to send a problem report when you ask. Your notes stay on this computer.":
     "{app} ne va en ligne que pour chercher le titre et l’image d’une page web que vous déposez, une fois par jour pour chercher les mises à jour (sauf si vous le désactivez), et pour envoyer un rapport de problème quand vous le demandez. Vos notes restent sur cet ordinateur.",
 
-  // ---- Updates ----
+  // ---- Updates (second, after Appearance; src/lib/updateWords.ts) ----
   Updates: "Mises à jour",
   "Check for updates automatically": "Chercher les mises à jour automatiquement",
-  "Once a day. A new version is downloaded and checked, then used the next time {app} starts. Your notes are never touched.":
-    "Une fois par jour. Une nouvelle version est téléchargée et vérifiée, puis utilisée au prochain démarrage de {app}. Vos notes ne sont jamais touchées.",
+  "A new version is downloaded and checked, then used the next time {app} starts. Your notes are never touched.":
+    "Une nouvelle version est téléchargée et vérifiée, puis utilisée au prochain démarrage de {app}. Vos notes ne sont jamais touchées.",
   "Check for updates": "Rechercher les mises à jour",
   "Checking…": "Recherche…",
   "Checking for updates…": "Recherche des mises à jour…",
   "Restart now": "Redémarrer maintenant",
-  "Version {version}": "Version {version}",
-  "{app} {version} is ready": "{app} {version} est prêt",
-  "{app} {version} is out": "{app} {version} est disponible",
-  "{app} is up to date": "{app} est à jour",
-  "It starts the next time {app} opens, or now with Restart now.": "Elle s’ouvrira au prochain démarrage de {app}, ou tout de suite avec Redémarrer maintenant.",
-  "Version {version} · last checked {when}": "Version {version} · dernière recherche : {when}",
-  "Version {version} · not checked yet": "Version {version} · pas encore de recherche",
-  "Last checked {when}": "Dernière recherche : {when}",
-  "Not checked yet": "Pas encore de recherche",
+  "{app} {version} is out.": "{app} {version} est disponible.",
+  "{app} {version} is out. Check for updates to get it.": "{app} {version} est disponible. Pour l’avoir, cliquez sur Rechercher les mises à jour.",
+  "You’re up to date.": "Vous avez la dernière version.",
+  "Last checked {when}.": "Dernière recherche : {when}.",
+  "Not checked yet.": "Pas encore de recherche.",
+  "{app} looks once a day.": "{app} vérifie une fois par jour.",
   "{app} by Sookera. Free software under the GNU General Public License version 3, with the additional terms in its NOTICE.md file.":
     "{app} par Sookera. Logiciel libre sous licence publique générale GNU version 3, avec les conditions supplémentaires de son fichier NOTICE.md.",
 } satisfies Record<string, Entry>;

@@ -6,9 +6,9 @@
   // the bubble glide from one place to the next (and back the same way); each step's words slide
   // the way you go. Small live demos instead of long text: the quick dump bar types a thought;
   // the entry line writes a time, then a "!" that makes it a deadline; a slip flies from the
-  // sample line up onto the real hours ruler, then onto a bigger task, where it becomes one of
-  // its steps. Nothing is saved: the sample lines live in memory and the entry line gets back
-  // what you had typed.
+  // sample line down onto the real hours under the Inbox, then onto a bigger task, where it
+  // becomes one of its steps. Nothing is saved: the sample lines live in memory and the entry
+  // line gets back what you had typed.
   // Keys: → or Enter next, ← back, Esc closes; the mouse's back button goes back a step. No other
   // key reaches the board or the app while it shows (with Alt or Ctrl neither).
   import { untrack } from "svelte";
@@ -26,9 +26,9 @@
   const WORDS: Record<StepId, { title: Key; text: Key }> = {
     dump: { title: "Dump it, from anywhere", text: "Press {keys} in any app, type, Enter: it’s kept, and you’re back to work." },
     inbox: { title: "It waits in the Inbox", text: "What you dump lands in this strip, like anything you type at the top." },
-    tidy: { title: "Sort it into notes", text: "Drag a line onto the note it belongs to, or let Tidy sort them one card at a time." },
+    tidy: { title: "Sort it into notes", text: "Drag a line onto the note it belongs to, or onto an empty spot for a new note. Or let Tidy sort them, one card at a time." },
     time: { title: "Give it a time", text: "Write a time as you type; end with\u00a0! for a deadline that rings early, then more often." },
-    ruler: { title: "Or drag it onto the hours", text: "Already on the board? Drag a task up onto today’s hours." },
+    ruler: { title: "Or drag it onto the hours", text: "Carry a task just under the Inbox: today’s hours open there." },
     step: { title: "Or make it a step", text: "Drop it onto a bigger task: it becomes one of its steps." },
     style: { title: "Make it yours", text: "Click Style or press {keys} to change the board’s look: background, colours, notes." },
     more: { title: "Help is always here", text: "The tour again, keyboard shortcuts, the Archive, Help & settings: one click away." },
@@ -608,7 +608,8 @@
     if (reduced()) mark(AT);
     else
       void (async () => {
-        // The ruler opening pushes the board down: the line is brought back into view first.
+        // The hours open just under the Inbox (over the notes, nothing moves): the line is brought
+        // into view first if it sits lower down.
         if (!(await w.wait(420))) return;
         reveal();
         if (!(await w.wait(380))) return;

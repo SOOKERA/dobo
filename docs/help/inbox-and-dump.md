@@ -9,7 +9,8 @@ The Inbox is a strip across the full width of the board, at the top. Folded, it 
 - **Open it**: click the strip, or select it and press **Enter**. It unfolds downwards and your notes glide down to make room. Its lines show in two columns when there's room.
 - **Fold it**: click it again, or press **Esc**.
 - **Keep it open**: click its pin (**Keep the Inbox open**). The pin fills when it's on, and Dobo remembers it. Clicking a pinned strip folds it and lets go of the pin.
-- **Put a line away**: drag it out of the strip and drop it on the note it belongs to. The notes you can drop on light up. You can also drop it on a task (it becomes a step) or on the hours (it gets a time).
+- **Put a line away**: drag it out of the strip and drop it on the note it belongs to. The notes you can drop on light up. You can also drop it on a task (it becomes a step) or on the strip just under the Inbox, which opens today's hours (it gets a time).
+- **Start a new note with it**: while you carry a line, a dashed **+ New note** card waits at the end of the board. Drop the line on it (the note grows in there, at the end), or on any empty spot of the board (it appears where you dropped it, then settles under the note above, as **New note** from the board's right-click menu does). The note is named after the line's words (cut short when they're long), with the line inside as its first line, its time, steps, link and pictures with it. You can also choose **Make a new note of it** in the line's menu. **Ctrl+Z** puts it all back.
 - **Bring a line back**: drag any line from a note onto the strip.
 
 The Inbox can't be moved, renamed, archived or deleted. Each space has its own: with **All**, both show, Work first, each under its name.

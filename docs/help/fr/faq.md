@@ -15,7 +15,7 @@ Oui : copiez une sauvegarde sur le nouveau PC, choisissez son dossier dans **Pa
 Les rappels ne sonnent que si Dobo tourne. Fermer la fenêtre le laisse dans la zone de notification ; **Quitter Dobo** l’arrête. Laissez **Paramètres › Démarrage › Démarrer Dobo avec Windows** activé, et vérifiez que Windows autorise les notifications de Dobo (et que Ne pas déranger est coupé). Une note dans les Archives reste en sourdine jusqu’à ce que vous la restauriez.
 
 **Où est passée ma ligne ?**
-Une ligne sans **#note** va dans « À trier », le bandeau en haut du tableau. Cliquez dessus pour l’ouvrir.
+Une ligne sans **#note** va dans « À trier », le bandeau en haut du tableau. Cliquez dessus pour l’ouvrir.
 
 **Comment ajouter quelque chose à une note existante ?**
 Cliquez sur **Ajouter** au bas de la note (ou dans son espace vide), ou écrivez la ligne avec **#** et le nom de la note dans la ligne de saisie.

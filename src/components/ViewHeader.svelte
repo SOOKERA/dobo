@@ -146,13 +146,16 @@
     display: grid;
     grid-template-columns: minmax(0, auto);
     min-width: 0;
-    /* The earlier levels give up their room long before the current page does. */
-    flex: 0 100 auto;
+    /* The earlier levels give up their room long before the current page does (their weight, not
+       the current page's: shrink weights that add up to less than 1 take only that share of a
+       shortfall, and the rest would spill out under the buttons). */
+    flex: 0 100000 auto;
   }
   .cell > :global(*) {
     grid-area: 1 / 1;
   }
-  /* The current page keeps its whole name; only when even that can't fit does it shorten. */
+  /* The current page keeps its whole name; only when even that can't fit does it shorten (with
+     "…", never past the row's end). */
   .cell.last {
     flex: 0 1 auto;
   }

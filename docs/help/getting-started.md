@@ -27,7 +27,7 @@ Eight short steps, under a minute:
 
 1. **Dump it, from anywhere**: the quick dump bar.
 2. **It waits in the Inbox**: the strip at the top of the board.
-3. **Sort it into notes**: drag a line onto its note, or let **Tidy** do it.
+3. **Sort it into notes**: drag a line onto its note, or onto an empty spot for a new note, or let **Tidy** do it.
 4. **Give it a time**: write it as you type, and **!** for a deadline.
 5. **Or drag it onto the hours**: the hours ruler.
 6. **Or make it a step**: drop a line onto a bigger task.
@@ -51,6 +51,6 @@ Click the entry line at the top (it's ready as soon as Dobo opens), type, and pr
 
 ## Help inside Dobo
 
-- The **?** at the board's bottom-right corner opens a small menu: **Take the tour**, **Keyboard shortcuts**, **Archive**, **Report a problem** and **Help & settings**. **F1** opens it; **F1** again opens **Settings › Help**.
+- The **?** at the board's bottom-right corner opens a small menu: **Take the tour**, **Keyboard shortcuts**, **Archive**, **What’s new**, **Report a problem** and **Help & settings**. **F1** opens it; **F1** again opens **Settings › Help**.
 - **Settings › Help** has the tour, **Keys to know** and **Gestures**.
 - Point at any button: its tooltip names it and shows its keys.

@@ -89,6 +89,11 @@ describe("t()", () => {
     expect(frType("tapez « ? » ici ?")).toBe("tapez « ? » ici ?");
   });
 
+  it("frType never breaks « À trier » or « menu ⋯ »", () => {
+    expect(frType("depuis « À trier » !")).toBe("depuis « À trier » !");
+    expect(frType("dans le menu ⋯ de la note")).toBe("dans le menu ⋯ de la note");
+  });
+
   it("frType puts the right spaces", () => {
     expect(frType("Note : « x » ; ok ? oui !")).toBe("Note : « x » ; ok ? oui !");
   });

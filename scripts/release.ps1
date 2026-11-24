@@ -123,11 +123,17 @@ $section = [regex]::Match($whatsNew, $sectionAt)
 if (-not $section.Success) {
     throw "docs/help/whats-new.md has no '## $version' section."
 }
-# The notes in latest.json (shown in Settings › Updates): given, or the section's first paragraph.
+# The notes in latest.json (shown in Settings › Updates): given, or the section's first paragraph,
+# in English, then in French after a line "En français : " (scripts/update-notes.mjs: Dobo shows
+# the reader's language; Dobo 1.1 shows the whole, which still reads well).
 if (-not $Notes) {
-    $Notes = (($section.Groups[2].Value -split '\r?\n\s*\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith("#") -and -not $_.StartsWith("-") } | Select-Object -First 1)
-    if (-not $Notes) { $Notes = "" }
-    $Notes = ($Notes -replace '\*\*', '' -replace '\s+', ' ').Trim()
+    $notesFile = Join-Path ([System.IO.Path]::GetTempPath()) "dobo-update-notes-$version.txt"
+    # (Any file left by an earlier run that stopped half-way goes first: only this run's notes count.)
+    Remove-Item $notesFile -Force -ErrorAction SilentlyContinue
+    Invoke-Native { node (Join-Path $PSScriptRoot "update-notes.mjs") $version $notesFile }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $notesFile)) { throw "The update's notes couldn't be made from What's new (scripts/update-notes.mjs exit code $LASTEXITCODE; Node 24.2 or newer is needed)." }
+    $Notes = (Get-Content $notesFile -Raw -Encoding UTF8).Trim()
+    Remove-Item $notesFile -Force
 }
 # The signing key must be there before anything is built.
 $keyDir = if ($env:DOBO_SIGNING_DIR) { $env:DOBO_SIGNING_DIR } else { Join-Path $env:USERPROFILE ".dobo-signing" }

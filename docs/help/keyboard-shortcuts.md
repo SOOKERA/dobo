@@ -20,7 +20,7 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Ctrl+F · / | Search (Ctrl+F is changeable; in Settings, it searches the settings; / does nothing in Tidy, the Archive, the picture viewer and New note, where Ctrl+F closes them first) |
 | Ctrl+Shift+S | Style (again: close it) |
 | Ctrl+Shift+P · Ctrl+, | Settings (again: close them) |
-| F1 | The ? menu: the tour, keys, Archive, Help (again: Settings › Help) |
+| F1 | The ? menu: the tour, keys, Archive, What’s new, Help (again: Settings › Help) |
 | Ctrl+Z · Ctrl+Y (or Ctrl+Shift+Z) | Undo · redo |
 | Ctrl + · Ctrl − · Ctrl 0 | Note size: bigger, smaller, back to Normal |
 | Esc | Close what's open, straight back to the board; with nothing open, hide the docked panel |
@@ -41,7 +41,7 @@ The whole board works from the keyboard, and most things have a gesture too. The
 | Delete | Delete the line |
 | Ctrl+Up / Ctrl+Down | Move the line |
 | F | Fold or unfold the note (on the Inbox strip: fold or open it) |
-| Shift+F10 · Menu key | The note's or the line's menu, as its **⋯** (an idea's: Copy text, Make it a task, Delete) |
+| Shift+F10 · Menu key | The note's or the line's menu, as its **⋯** (an idea's: Copy text, Make it a task, Make a new note of it, Delete) |
 | Page Up / Page Down · Home / End | Scroll the board |
 | Esc | Leave the board, then hide |
 
@@ -70,6 +70,8 @@ Opening a view or a menu (Search, Settings, Style, a note's or a line's menu, fr
 | → or Enter, ←, Esc | Quick tour: next, back, close |
 | Shift (while dropping on the hours) | The exact minute instead of the quarter hour |
 | Esc (while carrying a line) | Send it back |
+| Enter, Esc (a new note's title, from the board's right-click menu) | Name it and go on to its first line; with nothing typed, Esc takes the note away again |
+| Enter, Backspace (a blank line of Today, Ideas or Plan) | Make it a line and go on to the next blank; in an empty one, Backspace takes it away |
 | Arrows · Home / End, Enter or Space | Move between cards, colours and choices (in Style, Settings, Tidy, the welcome window, New note, a note's menu and a task's reminder kinds); Enter or Space picks. In a row of options, such as Light · Dark, the arrows only move, so nothing changes on the way: Space or Enter picks, and Tab goes on past the row |
 | F2 · double-click | Rename your own style, theme or mix |
 
@@ -87,15 +89,16 @@ Opening a view or a menu (Search, Settings, Style, a note's or a line's menu, fr
 | Double-click a line | Edit it |
 | Double-click a note's title | Rename it |
 | Drag a line onto a note | Move it there |
+| Drag a line onto + New note, or an empty spot of the board | Start a new note with it, titled with its words: at the end, or right where you drop it (also **Make a new note of it** in the line's menu) |
 | Drag a line onto a task | Make it one of its steps (onto an idea: its first step) |
-| Drag a task onto the hours under the entry line | Give it that time; hold over Tomorrow for tomorrow's hours |
+| Drag a task onto the strip just under the Inbox | Open today's hours there; drop it on one to give it that time, or hold over Tomorrow for tomorrow's hours |
 | Drag a note's title bar | Move the note in its column |
 | Drag a note's right edge | Make it wide, or normal |
 | Drag the docked panel's inner edge | Change its width |
 | Drag the top of any view (floating) | Move the window |
 | Ctrl + wheel | Note size |
-| Right-click a note or a line (or press and hold it, with a finger or a pen) | Its menu, where you click: the same as its **⋯** (an idea's: Copy text, Make it a task, Delete) |
-| Right-click an empty spot of the board | Change background…, Archived notes…, Take the tour |
+| Right-click a note or a line (or press and hold it, with a finger or a pen) | Its menu, where you click: the same as its **⋯** (an idea's: Copy text, Make it a task, Make a new note of it, Delete) |
+| Right-click an empty spot of the board | New note (right there), New note from a template…, Change background…, Archived notes…, Take the tour |
 | Right-click a colour in a note's menu | Change that colour |
 | Right-click selected words or a link | Copy, or Copy link (in a field: cut, copy, paste) |
 | Double-click a note's picture | Open the picture viewer |

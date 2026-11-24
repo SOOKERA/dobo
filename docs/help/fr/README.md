@@ -3,8 +3,8 @@
 Ces guides expliquent ce que fait Dobo, avec les noms que vous voyez dans la fenêtre.
 
 - [Pour commencer](getting-started.md) : le premier lancement, ouvrir et masquer Dobo, et la visite rapide.
-- [Le tableau](the-board.md) : les notes en colonnes, les déplacer, les plier, les élargir, couleurs, papier et espaces.
-- [À trier et dépôt rapide](inbox-and-dump.md) : le bandeau À trier, la barre de dépôt rapide depuis n’importe quelle appli, et Trier.
+- [Le tableau](the-board.md) : les notes en colonnes, nouvelles notes et modèles, les déplacer, les plier, les élargir, couleurs, papier et espaces.
+- [À trier et dépôt rapide](inbox-and-dump.md) : le bandeau À trier, la barre de dépôt rapide depuis n’importe quelle appli, et Trier.
 - [Tâches et idées](tasks-and-ideas.md) : la ligne de saisie, Ajouter dans une note, #note et ses suggestions, images et fichiers.
 - [Étapes](steps.md) : découper une tâche en étapes et voir son anneau se remplir.
 - [Heures et rappels](times-and-reminders.md) : l’heure en toutes lettres, les échéances avec !, les répétitions, et répondre à un rappel.
@@ -19,4 +19,5 @@ Ces guides expliquent ce que fait Dobo, avec les noms que vous voyez dans la fen
 - [Installer et mettre à jour](install-and-update.md) : Dobo-Setup.exe ou Dobo.exe portable, les conditions au premier lancement, les mises à jour, l’installation silencieuse, la désinstallation, les boutons des notifications.
 - [Confidentialité](privacy.md) : ce qui reste sur votre PC, et quand Dobo va en ligne (jamais avant que vous n’acceptiez ses conditions).
 - [Signaler un problème](report-a-problem.md) : dire à Sookera quand quelque chose ne va pas, en voyant d’abord tout ce qui accompagne vos mots.
+- [Nouveautés](whats-new.md) : ce qu’apporte chaque version.
 - [Questions fréquentes](faq.md) : des réponses courtes.

@@ -58,11 +58,14 @@ describe("Settings search", () => {
   it("finds Updates, English and French, with or without accents", () => {
     const U: Group[] = [
       ...G,
-      { section: "Updates", text: "Check for updates automatically Once a day. A new version is downloaded and checked" },
-      { section: "Updates", text: "Dobo is up to date Version 1.0.0 · last checked 10:24 Check for updates" },
+      // (As Settings shows it: the version line with its state and button, then the switch.)
+      { section: "Updates", text: "Dobo 1.2.0 · Installed You’re up to date. Last checked Tue 24 Nov, 10:24. Dobo looks once a day. Check for updates" },
+      { section: "Updates", text: "Check for updates automatically A new version is downloaded and checked, then used the next time Dobo starts." },
+      { section: "Updates", text: "What’s new What this version brings. Read" },
     ];
     const found = (q: string) => [...new Set(U.filter((_, i) => matchSettings(q, U).show[i]).map((g) => g.section))];
-    for (const q of ["update", "updates", "upgrade", "new version", "check for updates", "mise à jour", "mises a jour", "mettre à jour", "nouvelle version", "redémarrer"]) expect(found(q), q).toEqual(["Updates"]);
+    for (const q of ["update", "updates", "upgrade", "new version", "check for updates", "mise à jour", "mises a jour", "mettre à jour", "nouvelle version", "redémarrer", "up to date", "latest version", "dernière version", "once a day", "une fois par jour"]) expect(found(q), q).toEqual(["Updates"]);
+    for (const q of ["what's new", "what’s new", "whats new", "changelog", "release notes", "nouveautés", "nouveautes", "quoi de neuf", "notes de version"]) expect(found(q), q).toEqual(["Updates"]);
     // "version" is in both: the version installed (About) and the new one (Updates).
     expect(found("version")).toEqual(["About", "Updates"]);
   });

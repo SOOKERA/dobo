@@ -10,11 +10,15 @@
   // room, press (tiny squash) — Motion demo. Only transform and opacity are animated.
   import NoteCard from "./NoteCard.svelte";
   import Holder from "./style/Holder.svelte";
+  import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
   import { swatchOf } from "../lib/palette";
   import { look } from "../lib/look.svelte";
   import type { Item, Note } from "../lib/types";
   import { arrange, moveTo, sameSeq, type Step } from "../lib/arrange";
+  import { nextNoteSlot } from "../lib/lineNote";
+  import { spotPlace } from "../lib/newNote";
+  import { itemDrag } from "../lib/itemdrag.svelte";
   import { untrack } from "svelte";
   import { t } from "../lib/i18n.svelte";
   import { crumbIn, crumbOut, fadeQuick } from "../lib/motion";
@@ -72,30 +76,94 @@
   // Without saved columns the board is packed from the notes' order (masonry). Once a note
   // changes height (folds, gets a line), the columns as shown are held for the session, so only
   // that note's column moves: re-packing would send notes all over the board for one fold. A
-  // new column count, a note made wide or a new order packs again.
-  let wideSig = $derived(notes.map((n) => (n.wide ? n.id : "")).join(","));
-  let holdSig = $derived(`${savedKey}|${order.join(",")}|${wideSig}`);
-  let hold = $state<{ sig: string; seq: Step[] } | null>(null);
-  let held = $derived(hold && hold.sig === holdSig ? hold.seq : null);
+  // new column count, a note made wide or a new order packs again; a new note added at the end
+  // (made from a carried line, say) just goes where a new note goes, the others staying put.
+  const sigOf = (ids: number[]) => `${savedKey}|${ids.join(",")}|${ids.map((id) => (byId.get(id)?.wide ? id : "")).join(",")}`;
+  let holdSig = $derived(sigOf(order));
+  let hold = $state<{ sig: string; n: number; seq: Step[] } | null>(null);
+  let held = $derived.by(() => {
+    if (!hold) return null;
+    if (hold.sig === holdSig) return hold.seq;
+    const n = hold.n;
+    if (order.length > n && order.slice(n).every((id) => byId.has(id) && !byId.get(id)?.wide) && sigOf(order.slice(0, n)) === hold.sig) return hold.seq;
+    return null;
+  });
 
+  let placing = $derived({
+    ids: order.filter((id) => byId.has(id)),
+    wide: (id: number) => !!byId.get(id)?.wide,
+    height: (id: number) => heights[id] ?? 140,
+    cols,
+    colW,
+    gap: GAP,
+    saved: working ?? saved ?? held,
+  });
   let layout = $derived.by(() => {
-    const a = arrange({
-      ids: order.filter((id) => byId.has(id)),
-      wide: (id) => !!byId.get(id)?.wide,
-      height: (id) => heights[id] ?? 140,
-      cols,
-      colW,
-      gap: GAP,
-      saved: working ?? saved ?? held,
-    });
+    const a = arrange(placing);
     return { pos: a.pos, seq: a.seq, height: a.height, cols, width };
   });
 
+  // ---- "+ New note", while a line is carried ----
+  // A dashed card waits where a new note would go (lib/lineNote.ts): a line dropped on it (or on
+  // the board's empty space) becomes a new note there, which grows in as the card fades.
+  const NEW_H = 92;
+  /** Room kept under it, so the board can scroll it clear of the note sizes at the bottom. */
+  const NEW_ROOM = 64;
+  let newSpot = $derived(itemDrag.item && width > 0 && !drag ? nextNoteSlot(placing, NEW_H) : null);
+  // (Lit only for a drop on it: on the board's empty space, the note goes where it is dropped.)
+  let newHere = $derived(itemDrag.target?.kind === "new" && !itemDrag.target.spot);
+  // Where the card was as the line was dropped on it (or on empty space): the new note grows in
+  // from there to its place, which can be a little higher (the line left a note above it).
+  let lastSpot: { x: number; y: number } | null = null;
+  let bornAt: { x: number; y: number; at: number } | null = null;
+  $effect(() => {
+    if (newSpot) lastSpot = newHere ? { x: newSpot.x, y: newSpot.y } : null;
+    else if (lastSpot) {
+      bornAt = { ...lastSpot, at: performance.now() };
+      lastSpot = null;
+    }
+  });
+
+  // ---- "New note" from the board's right-click menu ----
+  // The new note goes in the column clicked, under the note above the spot (lib/newNote.ts):
+  // it grows in where it was clicked, then glides up its column to its place as the notes below
+  // make room.
+  /** How far above the pointer the new card's top grows in (the pointer on its title). */
+  const BORN_LIFT = 18;
+  let spotBorn: { id: number; x: number; y: number; at: number } | null = null;
+  $effect(() => {
+    store.board = {
+      point: (p) => {
+        if (!boardEl || width <= 0) return null;
+        const b = boardEl.getBoundingClientRect();
+        return { x: Math.max(0, (p.x - b.left) / z), y: Math.max(0, (p.y - b.top) / z) };
+      },
+      around: (at) => {
+        const s = spotPlace(layout.seq, layout.pos, -1, at, cols, colW, GAP);
+        return { above: s.above, below: s.below };
+      },
+      place: (id, at) => {
+        if (width <= 0) return;
+        const s = spotPlace(layout.seq, layout.pos, id, at, cols, colW, GAP);
+        spotBorn = { id, x: s.clicked * (colW + GAP), y: Math.max(0, at.y - BORN_LIFT), at: performance.now() };
+        return store.saveBoardSteps(store.view, cols, s.seq);
+      },
+    };
+    return () => (store.board = null);
+  });
+  /** A new note growing in: left to finish while its place stays the same (its own first
+   * measuring, or the notes below making room, would otherwise cut it short with a plain glide). */
+  let birth: { id: number; x: number; y: number; anim: Animation } | null = null;
+
   // A note made wide or normal: the others move with the graceful reflow, not a plain glide.
-  let prevWideSig = "";
+  // (Only a note that was there and changed: one coming or going has its own way in and out, and
+  // the others make room for it with the plain glide.)
+  let wideOf = $derived(new Map(notes.map((n) => [n.id, n.wide])));
+  let prevWide: Map<number, boolean> | null = null;
   $effect.pre(() => {
-    if (prevWideSig && wideSig !== prevWideSig) reflowUntil = performance.now() + 500;
-    prevWideSig = wideSig;
+    const was = prevWide;
+    if (was && [...wideOf].some(([id, on]) => was.has(id) && was.get(id) !== on)) reflowUntil = performance.now() + 500;
+    prevWide = wideOf;
   });
 
   // ---- Widening a note by its edge grip ----
@@ -218,7 +286,7 @@
     // (Not while the fonts are still coming in: those first heights aren't the notes' own, and
     // the packing they'd give would be held for the whole session.)
     if (saved || working || held || document.fonts?.status === "loading" || !order.every((i) => heights[i] != null)) return;
-    hold = { sig: holdSig, seq: layout.seq };
+    hold = { sig: holdSig, n: order.length, seq: layout.seq };
   }
   // One observer for all the notes: the notes that change size in the same frame (a new width,
   // the note size, the language, the fonts coming in) are taken together, in one round.
@@ -266,10 +334,43 @@
   }
   $effect(() => () => sizes.disconnect());
 
+  /** A new note gliding up its column to its place (`y`, on the board) over `ms`: when that place
+   * is above the board's part in sight (a short column, the board scrolled down), the board
+   * scrolls with it, so its title, which has the keyboard, stays in sight. */
+  function keepInSight(id: number, y: number, ms: number) {
+    if (!scroller || !boardEl) return;
+    const s = scroller.getBoundingClientRect();
+    const top = boardEl.getBoundingClientRect().top + y * z;
+    const bottom = top + (heights[id] ?? NEW_H) * z;
+    const room = 12;
+    let dy = 0;
+    if (top < s.top + room) dy = top - (s.top + room);
+    else if (bottom > s.bottom - room && top > s.top + room) dy = Math.min(bottom - (s.bottom - room), top - (s.top + room));
+    if (Math.abs(dy) < 1) return;
+    const from = scroller.scrollTop;
+    const el = scroller;
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / ms);
+      el.scrollTop = from + dy * (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   // ---- FLIP: animate from where each note is seen now to its new place ----
   const slots = new Map<number, HTMLElement>();
   function slot(node: HTMLElement, id: number) {
     slots.set(id, node);
+    // A note just added waits unseen until it settles in (the next placing round, at once).
+    if (comingIn.has(id) && !reduce.matches) {
+      node.style.opacity = "0";
+      // (Shown anyway after a while, should no placing round come; never one put back from the
+      // archive, waiting unseen under the Archive page until the board shows again.)
+      setTimeout(() => {
+        if (node.style.opacity === "0" && !(store.over && store.arriving.includes(id))) node.style.opacity = "";
+      }, 600);
+    }
     return { destroy: () => (slots.delete(id), slotAnims.delete(id)) };
   }
   // The animations this board started on each note's slot (the only ones a slot ever has), kept
@@ -302,6 +403,10 @@
   let prevWidth = 0;
   let prevHeight = 0;
   let first = true;
+  /** The notes on the board at the last placing round (a note new since then is one just added). */
+  let prevIds = new Set<number>();
+  /** Notes just added, to settle in once their card is on the page. */
+  const comingIn = new Set<number>();
   let justDropped: number | null = null;
   // After the columns change, the notes are measured again at their new width (same frame):
   // that second pass must keep the reflow style instead of replacing it with a plain glide.
@@ -337,13 +442,21 @@
     } else if (t - widthAt >= LIVE_GAP) live = false;
     const colsChanged = !live && prevCols !== 0 && l.cols !== prevCols;
     const onlyWidth = !colsChanged && widthChanged;
-    // Until every note has been measured once, notes just take their place (no gliding).
-    const measured = order.every((id) => heights[id] != null);
+    // Until every note has been measured once, notes just take their place (no gliding). One
+    // note just added to a board measured whole (made, put back) isn't that: it settles in, and
+    // the others make room for it, before it is measured too.
+    const unmeasured = order.filter((id) => heights[id] == null);
+    const measured = !unmeasured.length;
     if (measured) store.markBoardSettled();
-    const wasFirst = first || !measured;
+    const added = !first && unmeasured.length === 1 && !prevIds.has(unmeasured[0]);
+    // (Its card may only be on the page by the next round: it settles in then.)
+    for (const id of comingIn) if (!order.includes(id)) comingIn.delete(id);
+    if (added && !reduce.matches) comingIn.add(unmeasured[0]);
+    const wasFirst = (first || !measured) && !added;
     prevCols = l.cols;
     prevWidth = l.width;
-    first = !measured;
+    prevIds = new Set(order);
+    first = !measured && !added;
     if (colsChanged) reflowUntil = t + 160;
     const reflow = !live && (colsChanged || t < reflowUntil);
     // In step with a note easing its height (its own ease-out, for the time it has left).
@@ -373,7 +486,8 @@
       if (id === carried) continue;
       const to = l.pos.get(id);
       if (!to) continue;
-      const from = seen.get(id);
+      const coming = comingIn.delete(id);
+      const from = coming ? undefined : seen.get(id);
       if (!from) {
         // A note put back from the archive while the Archive page covers the board: it waits,
         // unseen, and settles in once the board shows again (below).
@@ -381,20 +495,57 @@
           el.style.opacity = "0";
           continue;
         }
-        // A new note: it settles in.
+        // A new note: it settles in (made from a carried line: from where the card was; from the
+        // right-click menu: it grows in where it was clicked, then glides up to its place).
+        el.style.opacity = "";
         if (!wasFirst) {
-          play(
-            id,
-            el,
-            [
-              { opacity: 0, transform: `translate(${to.x}px, ${to.y + 10}px) scale(0.97)` },
-              { opacity: 1, transform: `translate(${to.x}px, ${to.y}px)` },
-            ],
-            { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" },
-          );
+          const born = bornAt && t - bornAt.at < 1500 ? bornAt : null;
+          bornAt = null;
+          const spot = spotBorn?.id === id && t - spotBorn.at < 1500 ? spotBorn : null;
+          if (spotBorn?.id === id) spotBorn = null;
+          // Its fading in is an animation of its own, which a new place for it (the notes above
+          // making room, its own first measuring) never cuts short: only the move is retargeted.
+          let a: Animation;
+          let fade: number;
+          if (spot) {
+            // (It only ever glides up: under the note above, never left lower than the spot; and
+            // across to the first empty column, when the one clicked was empty with one on its left.)
+            const by = Math.max(spot.y, to.y);
+            const rise = Math.hypot(by - to.y, spot.x - to.x);
+            const grow = 210;
+            const glide = rise < 4 ? 0 : Math.round(Math.min(480, 260 + rise * 0.45));
+            const total = grow + glide;
+            const at = `translate(${spot.x}px, ${by}px)`;
+            fade = glide ? grow : 260;
+            a = play(
+              id,
+              el,
+              glide
+                ? [
+                    { transform: `${at} scale(0.94)`, easing: "cubic-bezier(.2,.8,.2,1)" },
+                    { transform: `${at} scale(1)`, offset: grow / total, easing: "cubic-bezier(.45,0,.2,1)" },
+                    { transform: `translate(${to.x}px, ${to.y}px) scale(1)` },
+                  ]
+                : [{ transform: `${at} scale(0.94)` }, { transform: `translate(${to.x}px, ${to.y}px) scale(1)` }],
+              { duration: glide ? total : 260, easing: glide ? "linear" : "cubic-bezier(.2,.8,.2,1)" },
+            );
+            if (glide) keepInSight(id, to.y, total);
+          } else {
+            fade = 320;
+            a = play(
+              id,
+              el,
+              [{ transform: born ? `translate(${born.x}px, ${born.y}px) scale(0.97)` : `translate(${to.x}px, ${to.y + 10}px) scale(0.97)` }, { transform: `translate(${to.x}px, ${to.y}px)` }],
+              { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" },
+            );
+          }
+          el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: fade, easing: "cubic-bezier(.2,.8,.2,1)" });
+          birth = { id, x: to.x, y: to.y, anim: a };
         }
         continue;
       }
+      // (Still growing in, and its place the same: it carries on.)
+      if (birth?.id === id && birth.anim.playState === "running" && Math.abs(birth.x - to.x) < 0.5 && Math.abs(birth.y - to.y) < 0.5) continue;
       const dx = to.x - from.x;
       const dy = to.y - from.y;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
@@ -666,7 +817,16 @@
   }
 </script>
 
-<div class="board" bind:this={boardEl} bind:clientWidth={width} style:height="{Math.max(layout.height, 0)}px">
+<div class="board" bind:this={boardEl} bind:clientWidth={width} style:height="{Math.max(layout.height, 0)}px" data-drop-empty>
+  {#if newSpot}
+    {@const s = newSpot}
+    <div class="new-slot" style:width="{s.w}px" style:height="{s.h + NEW_ROOM}px" style:transform="translate({s.x}px, {s.y}px)" out:fadeQuick={{ duration: 200 }} aria-hidden="true">
+      <div class="new-card" class:on={newHere} style:height="{s.h}px" data-drop-new>
+        <Icon name="plus" size={15} stroke={1.9} />
+        <span class="new-words">{t("New note")}</span>
+      </div>
+    </div>
+  {/if}
   {#if drag}
     {@const ph = layout.pos.get(drag.id)}
     {#if ph}
@@ -741,6 +901,78 @@
   .slot.menu-open,
   .slot:has(:global([role="dialog"])) {
     z-index: 25;
+  }
+  /* "+ New note": dashed like the hours' strip, on paper (a textured board never shows through
+     its words); in the accent while a drop there would make the note. */
+  .new-slot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    /* (Its room underneath is the board's empty space.) */
+    pointer-events: none;
+  }
+  .new-card {
+    position: relative;
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s2);
+    padding: 0 var(--s4);
+    border-radius: var(--r-lg);
+    background: color-mix(in srgb, var(--card) 78%, transparent);
+    color: var(--icon);
+    user-select: none;
+    animation: new-in 0.26s var(--ease-glide) 0.04s backwards;
+    transition:
+      background-color 0.18s var(--ease-glide),
+      color 0.15s;
+  }
+  .new-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1.5px dashed var(--box);
+    border-radius: inherit;
+    pointer-events: none;
+    transition: border-color 0.15s;
+  }
+  .new-words {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 15px;
+    color: var(--muted);
+    transition: color 0.15s;
+  }
+  .new-card.on {
+    background: color-mix(in srgb, var(--accent) 7%, var(--card));
+    color: var(--accent);
+  }
+  .new-card.on::before {
+    border-color: var(--accent);
+  }
+  .new-card.on .new-words {
+    color: var(--soft);
+  }
+  @keyframes new-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.97);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .new-card {
+      animation: new-fade 0.12s ease backwards;
+    }
+  }
+  @keyframes new-fade {
+    from {
+      opacity: 0;
+    }
   }
   .placeholder {
     position: absolute;

@@ -1,8 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
-  // New note, empty or from a template (Review board). Any note can be saved as a template from
-  // its menu.
+  // New note, empty or from a template (Review board): Dobo's own first (Today, Ideas, Plan:
+  // never hidden nor deleted, with blank lines to fill in), then the person's. Any note can be
+  // saved as a template from its menu. Opened from the board's right-click menu, its note goes
+  // where the board was clicked (store.templateAt).
   import { composing } from "../lib/compose";
   import { roving } from "../lib/gridkeys";
   import { tick } from "svelte";
@@ -13,8 +15,9 @@
   import { pushLayer } from "../lib/layers";
   import { modal } from "../lib/modal";
   import { isWindowDrag } from "../lib/windrag";
-  import { arrive, easeHeight, fadeQuick, fold, leave, rise, veil } from "../lib/motion";
-  import { t } from "../lib/i18n.svelte";
+  import { arrive, easeHeight, fold, leave, rise, veil } from "../lib/motion";
+  import { around, t } from "../lib/i18n.svelte";
+  import { builtInTemplates, isBlank } from "../lib/newNote";
   import { toastAbove } from "../lib/toastroom.svelte";
 
   let { onClose }: { onClose: () => void } = $props();
@@ -23,8 +26,12 @@
   let chosen = $state<number | null>(null);
   let title = $state("");
   let busy = $state(false);
-  let tpl = $derived<Template | null>(store.templates.find((x) => x.id === chosen) ?? null);
+  // (In the language of the moment: a note made from one is named in it.)
+  let builtIns = $derived(builtInTemplates());
+  let tpl = $derived<Template | null>([...builtIns, ...store.templates].find((x) => x.id === chosen) ?? null);
   let dark = $derived(look.dark);
+  /** "Make your own: Save as a template, in any note’s ⋯ menu.", the menu's words in bold. */
+  let hint = $derived(around(t("Make your own: {action}, in any note’s ⋯ menu."), "{action}"));
 
   function dotOf(tp: Template | null): string {
     if (!tp) return "#b5b0a5";
@@ -45,15 +52,15 @@
     if (chosen === id) chosen = null;
     await tick();
     const opts = [...(list?.querySelectorAll<HTMLElement>(".opt") ?? [])].filter((o) => !o.closest("[inert]"));
-    // (Blank note is the first.)
-    opts[Math.min(i + 1, opts.length - 1)]?.focus({ preventScroll: true });
+    // (Blank note is the first, then Dobo's own.)
+    opts[Math.min(i + 1 + builtIns.length, opts.length - 1)]?.focus({ preventScroll: true });
   }
 
   async function create() {
     if (busy) return;
     busy = true;
     try {
-      await store.fromTemplate(tpl, title);
+      await store.fromTemplate(tpl, title, { at: store.templateAt });
       onClose();
     } finally {
       busy = false;
@@ -86,8 +93,14 @@
   <div class="list" role="radiogroup" use:roving aria-label={t("Start from")}>
     <button role="radio" aria-checked={chosen == null} class="opt" class:on={chosen == null} onclick={() => (chosen = null)}>
       <span class="dot" style:background={dotOf(null)}></span>
-      <span class="what"><b>{t("Blank note")}</b><small>{t("nothing inside")}</small></span>
+      <span class="what"><b>{t("Blank note")}</b><small>{t("Nothing inside")}</small></span>
     </button>
+    {#each builtIns as tp (tp.id)}
+      <button role="radio" aria-checked={chosen === tp.id} class="opt" class:on={chosen === tp.id} onclick={() => (chosen = tp.id)}>
+        <span class="dot" style:background={dotOf(tp)}></span>
+        <span class="what"><b>{tp.name}</b><small>{tp.about}</small></span>
+      </button>
+    {/each}
     {#each store.templates as tp (tp.id)}
       <div class="opt-row" transition:fold={{ gap: 2 }}>
         <button role="radio" aria-checked={chosen === tp.id} class="opt" class:on={chosen === tp.id} onclick={() => (chosen = tp.id)}>
@@ -103,9 +116,7 @@
         >
       </div>
     {/each}
-    {#if !store.templates.length}
-      <p class="hint" in:fadeQuick={{ delay: 120, duration: 200 }}>{t("To make a template, open a note’s menu and choose “Save as a template”.")}</p>
-    {/if}
+    <p class="hint">{hint[0]}<b>{t("Save as a template")}</b>{hint[1]}</p>
   </div>
 
   {#if tpl}
@@ -118,12 +129,13 @@
       <div class="pv-face" in:arrive={{ delay: 90, duration: 240, y: 0 }} out:leave={{ duration: 120, y: 0 }}>
       <div class="p-head"><span class="dot" style:background={dotOf(tpl)}></span><span class="p-title">{title.trim() || tpl.name}</span></div>
       {#each tpl.lines.filter((l) => l.kind === "task") as l, i (i)}
-        <div class="p-task"><span class="box"></span>{l.text}{l.deadline ? " !" : ""}</div>
+        <!-- (A blank line: its box and a faint rule, to write on.) -->
+        <div class="p-task" class:blank={isBlank(l)}><span class="box"></span>{#if isBlank(l)}<span class="rule"></span>{:else}{l.text}{l.deadline ? " !" : ""}{/if}</div>
         {#each l.steps ?? [] as s, k (k)}<div class="p-task step"><span class="box"></span>{s}</div>{/each}
       {/each}
       {#if tpl.lines.some((l) => l.kind === "idea")}
         <div class="p-ideas" style:background={tintOf(tpl)}>
-          {#each tpl.lines.filter((l) => l.kind === "idea") as l, i (i)}<span>{l.text}</span>{/each}
+          {#each tpl.lines.filter((l) => l.kind === "idea") as l, i (i)}{#if isBlank(l)}<span class="rule idea"></span>{:else}<span>{l.text}</span>{/if}{/each}
         </div>
       {/if}
       </div>
@@ -290,6 +302,10 @@
     font-size: var(--t-sm);
     color: var(--muted);
   }
+  .hint b {
+    font-weight: 600;
+    color: var(--soft);
+  }
   .label {
     font-size: var(--t-sm);
     font-weight: 600;
@@ -341,6 +357,26 @@
     margin-top: 2px;
     border: 1.5px solid var(--box);
     border-radius: 4px;
+  }
+  /* A blank line: a faint dotted rule where its words would be. */
+  .rule {
+    flex: 1;
+    max-width: 62%;
+    height: 1px;
+    margin-top: 13px;
+    background: repeating-linear-gradient(to right, color-mix(in srgb, var(--box) 70%, transparent) 0 2px, transparent 2px 5px);
+  }
+  .p-task.blank .box {
+    border-style: dashed;
+  }
+  .p-task.blank {
+    min-height: 26px;
+  }
+  .rule.idea {
+    flex: none;
+    width: 55%;
+    margin: 10px 0 8px;
+    background: repeating-linear-gradient(to right, color-mix(in srgb, currentColor 35%, transparent) 0 2px, transparent 2px 5px);
   }
   .p-ideas {
     margin-top: 6px;
