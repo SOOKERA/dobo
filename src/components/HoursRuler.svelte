@@ -17,8 +17,8 @@
   import { store } from "../lib/store.svelte";
   import { HOURS_LIFT, itemDrag } from "../lib/itemdrag.svelte";
   import { formatDueLong, hhmm } from "../lib/time";
-  import { hourLabelStep, rulerRange, spanName, timeAt, type Span } from "../lib/plan";
-  import { hourMark, i18n, t } from "../lib/i18n.svelte";
+  import { daylight, endName, rulerHours, rulerRange, spanName, timeAt, type Span } from "../lib/plan";
+  import { clockTime, hourMark, i18n, t } from "../lib/i18n.svelte";
   import { pushLayer } from "../lib/layers";
   import { DOCK, NEAR, SLIP_EDGE, STAY, dockAt, dockLift, dockPlace, dockWake, hourLanding, within, type Box, type Dock } from "../lib/hoursDock";
   import { arrive, blip, crumbIn, crumbOut, easeHeight, fadeQuick, glide, leave, reduced } from "../lib/motion";
@@ -128,31 +128,39 @@
   });
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Hour labels: as many as fit without crowding (every 1, 2, 3… hours on the clock), none
-  // spilling past the track's end toward the Tomorrow spot.
+  // Hour names: as many as fit without crowding (every 1, 2, 3… hours on the clock, and the half
+  // hours of a short span when there's room), never over the names of the two ends: where the
+  // hours start (today: the time now, under its line) and where they end, always named so even a
+  // short evening reads.
   let trackW = $state(0);
-  const END_ROOM = 14;
+  let startW = $state(0);
+  let endW = $state(0);
+  let nowX = $derived.by(() => {
+    const span = view?.span;
+    return span && span.label === "Today" ? Math.max(0, (store.now.getTime() - span.start) / (span.end - span.start)) : null;
+  });
+  // A late hour in a very narrow window: the time now would touch the end's name. It gives way
+  // ("now" is marked above its line); the end's name, when the hours stop, stays.
+  let endsMeet = $derived(!!trackW && (nowX ?? 0) * trackW + startW + 8 > trackW - endW);
+  // (Each name as wide as it is drawn: the hour names' own font, measured once.)
+  let measure: CanvasRenderingContext2D | null = null;
+  const nameW = (name: string): number => {
+    if (!measure && trackEl) {
+      measure = document.createElement("canvas").getContext("2d");
+      const cs = getComputedStyle(trackEl);
+      if (measure) measure.font = `11px ${cs.fontFamily}`;
+    }
+    return measure ? measure.measureText(name).width : name.length * 6;
+  };
   let hours = $derived.by(() => {
     const span = view?.span;
     if (!span) return [];
-    const step = hourLabelStep((span.end - span.start) / 3_600_000, trackW || 400, i18n.hour12 ? 44 : 32);
-    const out: { x: number; label: string; major: boolean; named: boolean }[] = [];
-    const len = span.end - span.start;
-    const first = new Date(span.start);
-    first.setMinutes(first.getMinutes() > 0 ? 60 : 0, 0, 0);
-    const halves = len / 3_600_000 <= 9;
-    for (let t = first.getTime() - (halves ? 1_800_000 : 0); t <= span.end; t += halves ? 1_800_000 : 3_600_000) {
-      if (t < span.start) continue;
-      const d = new Date(t);
-      const x = (t - span.start) / len;
-      const major = d.getMinutes() === 0;
-      // (Never cut at either end of the track: a 12-hour "4 PM" is wider than "16h".)
-      const room = i18n.hour12 ? 18 : END_ROOM;
-      const named = major && d.getHours() % step === 0 && (!trackW || (x * trackW >= room && x * trackW <= trackW - Math.max(END_ROOM, room)));
-      out.push({ x, label: hourMark(d.getHours()), major, named });
-    }
-    return out;
+    const from = (nowX ?? 0) * (trackW || 400);
+    return rulerHours(span.start, span.end, trackW, { minGap: i18n.hour12 ? 44 : 32, startRoom: from + startW, endRoom: endW, hourName: hourMark, clock: clockTime, nameW });
   });
+  /** The two ends' names: the time now (with its minutes), else as the hours are named on the
+   * hour ("8 AM", « 8h »). */
+  const ends = { hourName: hourMark, clock: clockTime };
   // The carried task has no dot while carried; once dropped on an hour its dot arrives where
   // the slip lands.
   let dots = $derived.by(() => {
@@ -162,17 +170,22 @@
       .filter((i) => i.id !== live?.id && (i.due_at ?? 0) >= span.start && (i.due_at ?? 0) <= span.end)
       .map((i) => ({ id: i.id, text: i.text, x: ((i.due_at ?? 0) - span.start) / (span.end - span.start) }));
   });
-  let nowX = $derived.by(() => {
-    const span = view?.span;
-    return span && span.label === "Today" ? Math.max(0, (store.now.getTime() - span.start) / (span.end - span.start)) : null;
-  });
   /** The time being picked has its label over the word for now: the word steps aside meanwhile
    * (« maintenant » is long enough to show half of itself from under it). */
   let nowCovered = $derived.by(() => {
     const span = view?.span;
     if (marked == null || nowX == null || !span || !trackW) return false;
     const d = ((marked - span.start) / (span.end - span.start) - nowX) * trackW;
-    return d > -32 && d < (i18n.lang === "fr" ? 62 : 26) + 32;
+    return d > -32 && d < (i18n.lang === "fr" ? 78 : 42) + 32;
+  });
+  /** Meanwhile its sun or moon stays in sight: it steps aside, just past the time's chip, level
+   * with its middle (how far from its line, in px). */
+  let nowAside = $derived.by(() => {
+    const span = view?.span;
+    if (!nowCovered || marked == null || nowX == null || !span || !trackW || !markLabelW) return 0;
+    const chipRight = ((marked - span.start) / (span.end - span.start)) * trackW - 1 + markShift + markLabelW / 2;
+    // (Its label starts 3 px left of the line: the line's own margin and the label's.)
+    return Math.max(0, chipRight + 6 - (nowX * trackW - 3));
   });
 
   function fractionAt(clientX: number): number | null {
@@ -487,7 +500,9 @@
                 <span class="lead">{v.clickMode ? t("When for “{text}”?", { text: v.text }) : t("Drop on an hour")}</span>
                 <span class="hint">
                   {#key v.span.label}
-                    <span in:crumbIn out:crumbOut>{v.span.label === "Today" ? "" : `${spanName(v.span.label)} · `}{t("snaps to 15 min · Shift for exact")}</span>
+                    <span in:crumbIn out:crumbOut
+                      >{#if v.span.label !== "Today"}<b class="day">{spanName(v.span.label)}</b><span class="snap"> · </span>{/if}<span class="snap">{t("snaps to 15 min · Shift for exact")}</span></span
+                    >
                   {/key}
                 </span>
                 {#if v.clickMode}
@@ -517,12 +532,23 @@
                   {#key v.onNext}
                     <div class="hours" in:arrive={{ delay: 110, duration: 260, y: 0 }} out:leave={{ duration: 130, y: 0 }}>
                       {#if nowX != null}
-                        <span class="now" style:left="{nowX * 100}%"><span class="now-label" class:wordy={i18n.lang === "fr"} class:covered={nowCovered}>{t("now")}</span></span>
+                        <!-- (Now: a sun by day, a moon in the evening and the night.) -->
+                        <span class="now" style:left="{nowX * 100}%"><span class="now-label" class:wordy={i18n.lang === "fr"} class:covered={nowCovered} style:translate={nowAside ? `${nowAside.toFixed(1)}px 2.5px` : null}
+                            ><Icon name={daylight(store.now.getTime()) ? "sun" : "moon"} size={12} stroke={2.1} /><span class="word">{t("now")}</span></span
+                          ></span>
                       {/if}
-                      {#each hours as h (h.x)}
+                      {#each hours as h (h.at)}
                         <span class="tick" class:major={h.major} style:left="{h.x * 100}%"></span>
-                        {#if h.named}<span class="hour" style:left="{h.x * 100}%">{h.label}</span>{/if}
+                        {#if h.label}<span class="hour" style:left="{h.x * 100}%">{h.label}</span>{/if}
                       {/each}
+                      <!-- The two ends, named at the track's edges: where the hours start (in the amber of
+                           now, today) and when they end, with its sun or moon. -->
+                      <span class="end first" class:today={nowX != null} class:gone={endsMeet} style:left={nowX != null ? `${nowX * 100}%` : null} bind:offsetWidth={startW}
+                        >{nowX != null ? hhmm(store.now) : endName(v.span.start, ends)}</span
+                      >
+                      <span class="end last" bind:offsetWidth={endW}
+                        ><Icon name={daylight(v.span.end - 1) ? "sun" : "moon"} size={11} stroke={2} />{endName(v.span.end, ends)}</span
+                      >
                       {#each dots as d (d.id)}
                         <span class="dot" style:left="{d.x * 100}%" data-tip={d.text} data-tip-drag in:blip={{ delay: 170 }} out:blip></span>
                       {/each}
@@ -722,10 +748,22 @@
     min-width: 0;
     flex-shrink: 1;
   }
-  /* A narrow panel: the ruler keeps its question and its hours; the snapping hint goes. */
+  /* (Another day's hours: its name leads the hint, in the ink of the words it goes with.) */
+  .hint .day {
+    font-weight: 600;
+    color: var(--soft);
+  }
+  /* A narrow panel: the ruler keeps its question and its hours; the snapping hint goes, but not
+     the name of another day's hours ("Tomorrow", "Thursday"): what they are stays clear. */
   @container shell (max-width: 480px) {
-    .top .hint {
+    .top .hint .snap {
       display: none;
+    }
+    .top .hint:not(:has(.day)) {
+      display: none;
+    }
+    .top .hint {
+      flex-shrink: 0;
     }
   }
   .x {
@@ -785,30 +823,41 @@
     position: absolute;
     left: -2px;
     top: -30px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: var(--t-xs);
     font-weight: 600;
     color: #9a6100;
+    white-space: nowrap;
+    transition:
+      opacity 0.12s ease,
+      translate 0.24s var(--ease-glide);
+  }
+  /* (The time being picked over it: the word goes, the sun or moon steps aside, past its chip.) */
+  .now-label.covered .word {
+    opacity: 0;
+  }
+  .now-label .word {
     transition: opacity 0.12s ease;
   }
-  .now-label.covered {
-    opacity: 0;
+  @media (prefers-reduced-motion: reduce) {
+    .now-label {
+      transition: opacity 0.12s ease;
+    }
   }
   /* (The same amber as the line, readable on the dark card.) */
   :global(:root[data-mode="dark"]) .now-label {
     color: #e9a93a;
   }
-  /* A narrow ruler (a window under 480 px): a long word for now (« maintenant ») gives way to an amber dot where the word sits, over the line
-     (still read out: the word is there, at no size). */
+  /* A narrow ruler (a window under 480 px): a long word for now (« maintenant ») gives way to its
+     sun or moon alone (still read out: the word is there, at no size). */
   @container shell (max-width: 455px) {
     .now-label.wordy {
-      top: -24px;
-      left: -2px;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #e9a93a;
+      gap: 0;
+    }
+    .now-label.wordy .word {
       font-size: 0;
-      overflow: hidden;
     }
   }
   .tick {
@@ -823,13 +872,41 @@
     height: 14px;
     background: var(--box);
   }
-  .hour {
+  .hour,
+  .end {
     position: absolute;
     top: 32px;
-    transform: translateX(-50%);
     font-size: var(--t-xs);
     color: var(--muted);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .hour {
+    transform: translateX(-50%);
+  }
+  /* The ends: flush with the track's edges, never cut. */
+  .end {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--soft);
+  }
+  .end.first {
+    left: 0;
+    margin-left: -2px;
+  }
+  .end.last {
+    right: 0;
+  }
+  .end.gone {
+    opacity: 0;
+  }
+  .end.today {
+    font-weight: 600;
+    color: #9a6100;
+  }
+  :global(:root[data-mode="dark"]) .end.today {
+    color: #e9a93a;
   }
   .dot {
     position: absolute;

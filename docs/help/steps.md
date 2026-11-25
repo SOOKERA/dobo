@@ -25,3 +25,7 @@ Steps are lines like any other: tick them, edit them with a double-click, delete
 ## Steps with a time
 
 A step can have its own time, and rings like any task. Once you tick the task, its steps stop ringing (their times are kept, and their notifications go). Untick the task, and they ring again, except a step whose time came while the task was done: it stays quiet until you give it a new time.
+
+## Steps of a repeating task
+
+When a repeating task comes back on its next day, its steps start fresh with it: unticked, ready to do again, and their times move on with the task's (a step at 09:00 is at 09:00 again on the new day). The steps you ticked still count in the [look back](look-back.md) of the day you did them. A step that repeats on its own keeps its own rhythm.

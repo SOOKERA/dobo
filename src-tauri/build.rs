@@ -18,6 +18,8 @@ const COMMANDS: &[&str] = &[
     "reorder_notes",
     "create_item",
     "update_item",
+    "forget_done",
+    "undo_tick",
     "delete_item",
     "set_setting",
     "language_now",

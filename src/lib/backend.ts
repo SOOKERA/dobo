@@ -11,10 +11,11 @@
 // command before the next call that reads or writes the same rows (undo awaits restore; the dump
 // bar awaits dumpItem before setting the link): a "send, then edit" without awaiting may land on
 // a row that isn't written yet.
-import { nextAfterDone } from "./repeat";
+import { daysApart, reopensAt, shiftDays, tickRepeat, untickedRule, waitsUntil, type MyDay } from "./doneLog";
 import { dockWidth, widthForScreen } from "./dock";
 import type { ReportInfo, ReportProblem } from "./report";
 import type {
+  Done,
   Everything,
   Item,
   LinkPreview,
@@ -57,7 +58,9 @@ export type EventName =
   | "clock-format"
   | "update-status"
   /** The automatic backup didn't work (its error; said once until one works again). */
-  | "backup-failed";
+  | "backup-failed"
+  /** A repeating task's history changed: { item_id, rows } (all of it). */
+  | "done-log";
 
 /** Dobo's own update, as Settings › Updates shows it (src-tauri/src/updates.rs, View). */
 export interface UpdateView {
@@ -175,6 +178,13 @@ export interface RecoveryCounts {
   lines: number;
 }
 
+/** What an Undo of an opening gives back (`undoTick`). */
+export interface UndoneTick {
+  item: Item;
+  steps: Item[];
+  log: Done[];
+}
+
 export interface Backend {
   /** "main" or "dump". */
   label: string;
@@ -185,6 +195,18 @@ export interface Backend {
   reorderNotes(ids: number[]): Promise<void>;
   createItem(n: NewItem): Promise<Item>;
   updateItem(item: Item): Promise<Item>;
+  /** Undo of a repeating task's "Done" once it is open again: that time leaves its history.
+   * Returns the line's history. */
+  forgetDone(itemId: number, doneAt: number): Promise<Done[]>;
+  /** The Undo of what opened a repeating task again (its "Done" once its next day came, or a
+   * change that opened it at once), in one go (db.rs `undo_tick`): the line as it was (`item`:
+   * its "done", its time and its rule, ticked or open), the steps its opening made fresh back
+   * exactly as they were (`steps`, as they were then, their reminders too, the task they were
+   * under; one ticked or moved under another task since is left as it is), each one's time done
+   * out of the history again, and (`forget`) that tick's time out of the line's history. Open
+   * again with its time (or a step's) past, it waits a minute. Only while the line is open: ticked
+   * since, it stays as it is. Returns the line, the steps given back and the line's history. */
+  undoTick(item: Item, forget: number | null, steps: Item[]): Promise<UndoneTick>;
   deleteItem(id: number): Promise<void>;
   setSetting(key: string, value: unknown): Promise<void>;
   inboxFor(space: Space): Promise<number>;
@@ -319,6 +341,8 @@ async function tauriBackend(): Promise<Backend> {
         file: n.file ?? null,
       }),
     updateItem: (item) => invoke("update_item", { item }),
+    forgetDone: (itemId, doneAt) => invoke("forget_done", { itemId, doneAt }),
+    undoTick: (item, forget, steps) => invoke("undo_tick", { item, forget, steps }),
     deleteItem: (id) => invoke("delete_item", { id }),
     setSetting: (key, value) => invoke("set_setting", { key, value }),
     inboxFor: (space) => invoke("inbox_for", { space }),
@@ -459,6 +483,20 @@ function seed(): Everything {
     d.setHours(h, m, 0, 0);
     return d.getTime();
   };
+  /** The next time on one of these weekdays at h:m, after now. */
+  const nextOn = (days: number[], h: number, m: number) => {
+    for (let k = 0; ; k++) if (at(h, m, k) > now && days.includes(new Date(at(h, m, k)).getDay())) return at(h, m, k);
+  };
+  const point = nextOn([1, 4], 9, 30);
+  const timesheet = nextOn([5], 16, 0);
+  const thisGift = new Date(new Date().getFullYear(), new Date().getMonth(), 5, 10).getTime();
+  const gift = thisGift > now ? thisGift : new Date(new Date().getFullYear(), new Date().getMonth() + 1, 5, 10).getTime();
+  /** `t` moved by `days` (calendar days, the same time of day). */
+  const plus = (t: number, days: number) => {
+    const d = new Date(t);
+    d.setDate(d.getDate() + days);
+    return d.getTime();
+  };
   let nid = 0;
   let iid = 0;
   const notes: Note[] = [];
@@ -484,15 +522,28 @@ function seed(): Everything {
     ["task", "Reply to Logitech about the assets", { due_at: now - 12 * MIN, ring_state: "ringing", rings: 3, last_ring_at: now - 2 * MIN }],
     ["task", "Migrate the Logitech stuff to GitHub"],
     ["task", "EDR et MX Master 4 repo", { due_at: at(9, 0, 1) }],
+    ["task", "Timesheet to Logitech", { due_at: timesheet, created_at: now - 200 * 86400_000, repeat: { freq: "week", interval: 2, days: [5], monthday: null, ends: { kind: "never" }, done: 11, at: "16:00" } }],
     ["idea", "Fake un making-of de Logi"],
     ["idea", "Walkthrough Hangars Y"],
   ]);
   const migrate = items.find((i) => i.note_id === logi && i.text.startsWith("Migrate"))!;
   items.push(blankItem({ id: ++iid, note_id: logi, kind: "task", text: "List the repos to move", parent_id: migrate.id, sort: 10 }));
   items.push(blankItem({ id: ++iid, note_id: logi, kind: "task", text: "Ask IT for the org access", parent_id: migrate.id, sort: 11, done_at: now }));
-  note("Hub", "work", "Sage", [
+  // Repeating tasks with their history: "Weekly" (Mondays, over a year, some missed), a daily one
+  // ticked this morning, waiting for tomorrow; a team point on Mondays and Thursdays (some weeks
+  // only one of the two), a timesheet every 2 weeks, a gift each month (their years of weeks and
+  // of months in History).
+  const weekly = nextMonday(10);
+  const morning = Math.min(now - MIN, at(7, 35));
+  const hub = note("Hub", "work", "Sage", [
     ["task", "Call général, début et fin de projet", { due_at: at(15, 0) }],
-    ["task", "Weekly", { due_at: nextMonday(10), repeat: { freq: "week", interval: 1, days: [1], monthday: null, ends: { kind: "never" }, done: 0 } }],
+    ["task", "Weekly", { due_at: weekly, created_at: now - 430 * 86400_000, repeat: { freq: "week", interval: 1, days: [1], monthday: null, ends: { kind: "never" }, done: 52, at: "10:00" } }],
+    ["task", "Point équipe", { due_at: point, created_at: now - 120 * 86400_000, repeat: { freq: "week", interval: 1, days: [1, 4], monthday: null, ends: { kind: "never" }, done: 24, at: "09:30" } }],
+    [
+      "task",
+      "Stretch, 10 min",
+      { due_at: at(7, 30, 1), done_at: morning, created_at: now - 45 * 86400_000, repeat: { freq: "day", interval: 1, days: [], monthday: null, ends: { kind: "never" }, done: 40, at: "07:30", ticked: { due: at(7, 30), done: 39 } } },
+    ],
     ["idea", "Mini projet pour le hub"],
     ["idea", "Quick share pour le hub"],
   ]);
@@ -522,9 +573,29 @@ function seed(): Everything {
     ["task", "Blend / VT"],
     ["task", "Landscape"],
   ]);
-  note("Philanthropie", "personal", "Peach", [["task", "Agrandir la height du perso"], ["idea", "Chirurgien charpentier"]]);
+  note("Philanthropie", "personal", "Peach", [
+    ["task", "Agrandir la height du perso"],
+    ["task", "Don mensuel", { due_at: gift, created_at: now - 500 * 86400_000, repeat: { freq: "month", interval: 1, days: [], monthday: 5, ends: { kind: "never" }, done: 12, at: "10:00" } }],
+    ["idea", "Chirurgien charpentier"],
+  ]);
   const pictures: Picture[] = [0, 1, 2].map((k) => ({ id: k + 1, note_id: chanel, item_id: null, path: samplePicture([350, 20, 300][k]), sort: k, created_at: now }));
-  return { notes, items, pictures, settings: {} };
+  const done_log: Done[] = [];
+  const weeklyId = items.find((i) => i.note_id === hub && i.text === "Weekly")!.id;
+  const stretchId = items.find((i) => i.note_id === hub && i.text.startsWith("Stretch"))!.id;
+  const idOf = (text: string) => items.find((i) => i.text === text)!.id;
+  const log = (item_id: number, due_at: number, late = 0) => done_log.push({ id: done_log.length + 1, item_id, due_at, done_at: due_at + late * MIN });
+  for (let k = 60; k >= 1; k--) if (![3, 7, 15, 16, 24, 31, 44].includes(k)) log(weeklyId, plus(weekly, -7 * k), (k % 3) * 40);
+  // (Mondays and Thursdays, newest first: a few missed, so some weeks are only half done.)
+  const points = Array.from({ length: 16 * 7 }, (_, k) => plus(point, -(k + 1))).filter((t) => [1, 4].includes(new Date(t).getDay()));
+  points.forEach((due, n) => ![1, 6, 12, 13, 21].includes(n) && log(idOf("Point équipe"), due, 5));
+  for (let k = 14; k >= 1; k--) if (![4, 9].includes(k)) log(idOf("Timesheet to Logitech"), plus(timesheet, -14 * k), 20);
+  for (let k = 14; k >= 1; k--) {
+    const d = new Date(gift);
+    if (![3, 8].includes(k)) log(idOf("Don mensuel"), new Date(d.getFullYear(), d.getMonth() - k, 5, 10).getTime(), 90);
+  }
+  for (let k = 44; k >= 1; k--) if (![7, 12, 13, 21, 30, 38].includes(k)) done_log.push({ id: done_log.length + 1, item_id: stretchId, due_at: at(7, 30, -k), done_at: at(7, 30 + (k % 4) * 9, -k) });
+  done_log.push({ id: done_log.length + 1, item_id: stretchId, due_at: at(7, 30), done_at: morning });
+  return { notes, items, pictures, settings: {}, done_log };
 }
 
 const PRESETS: Record<"gentle" | "normal" | "insistent", Rhythm> = {
@@ -541,6 +612,17 @@ function mockBackend(): Backend {
     data = seed();
   }
   data.pictures ??= [];
+  data.done_log ??= [];
+  // (As at the app's start: the history of lines gone for good goes, and an open line keeps
+  // nothing of a tick, db.rs `migrate`.)
+  const ids = new Set(data.items.map((i) => i.id));
+  data.done_log = data.done_log.filter((r) => ids.has(r.item_id));
+  data.items = data.items.map((i) => {
+    if (i.done_at != null || !i.repeat?.ticked) return i;
+    const repeat = { ...i.repeat };
+    delete repeat.ticked;
+    return { ...i, repeat };
+  });
   const save = () => {
     try {
       localStorage.setItem(KEY, JSON.stringify(data));
@@ -551,14 +633,14 @@ function mockBackend(): Backend {
   // A new id is never one given before, as in the app (AUTOINCREMENT): an undo that puts a
   // deleted note back never lands on one made meanwhile.
   const SEQ = "ztodo-mock-seq";
-  const nextId = (table: "notes" | "items" | "pictures") => {
+  const nextId = (table: "notes" | "items" | "pictures" | "done_log") => {
     let seq: Record<string, number> = {};
     try {
       seq = JSON.parse(localStorage.getItem(SEQ) || "{}") ?? {};
     } catch {
       /* preview only */
     }
-    const id = Math.max(seq[table] ?? 0, ...data[table].map((x) => x.id), 0) + 1;
+    const id = Math.max(seq[table] ?? 0, ...(data[table] ?? []).map((x) => x.id), 0) + 1;
     seq[table] = id;
     try {
       localStorage.setItem(SEQ, JSON.stringify(seq));
@@ -627,19 +709,168 @@ function mockBackend(): Backend {
     previewUpdate = { ...updateFound(params.get("update"), before), last_checked: before.last_checked, checked: params.has("update") };
   }
   const findItem = (id: number) => data.items.find((i) => i.id === id)!;
-  const spawnNext = (it: Item) => {
-    if (!it.repeat || it.due_at == null || it.kind !== "task") return;
-    const found = nextAfterDone(it.repeat, it.due_at);
-    if (found == null) return;
-    const n = blankItem({ ...it, id: nextId("items"), due_at: found.at, done_at: null, created_at: Date.now(), sort: it.sort + 0.001, repeat: { ...it.repeat, done: found.done }, ring_state: "", rings: 0, last_ring_at: null, snooze_until: null, on_it_at: null, check_at: null });
-    data.items = data.items.map((x) => (x.id === it.id ? { ...x, repeat: null } : x));
-    data.items.push(n);
-    save();
-    setTimeout(() => {
-      emit("item-updated", structuredClone({ ...it, repeat: null }));
-      emit("item-updated", structuredClone(n));
-    });
+  const myDay = (): MyDay => {
+    const d = data.settings.day as Partial<MyDay> | undefined;
+    const time = (v: unknown, or: string) => (typeof v === "string" && /^\d{1,2}:\d{2}$/.test(v) ? v : or);
+    return { start: time(d?.start, "08:00"), end: time(d?.end, "22:00") };
   };
+  /** Local "HH:MM" (db.rs `local_hhmm`). */
+  const hhmm24 = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const validAt = (v: unknown): v is string => typeof v === "string" && /^\d{1,2}:\d{2}$/.test(v);
+  /** A repeat's own time of day, kept while its time stays the same, else its time's (db.rs
+   * `repeat_with_time`). */
+  const repeatWithTime = (it: Item, old: Item): Item["repeat"] => {
+    if (!it.repeat || it.due_at == null) return it.repeat;
+    const kept = old.due_at === it.due_at ? [it.repeat.at, old.repeat?.at].find(validAt) : undefined;
+    return { ...it.repeat, at: kept ?? hhmm24(it.due_at) };
+  };
+  /** A copy of a repeating task from another moment never ticks it twice, nor unticks a tick it
+   * never saw: a ticked copy saved on the line open again, an open (or just ticked, not moved on
+   * yet) copy at the occurrence ticked saved while it waits for its next day. Its other changes
+   * are kept; its "done", time and rule stay as the line has them. Whether it was stale (db.rs
+   * `not_stale`). */
+  const notStale = (it: Item, old: Item): [Item, boolean] => {
+    const kept: Item = { ...it, done_at: old.done_at, due_at: old.due_at, repeat: old.repeat };
+    if (old.done_at == null) {
+      if (!it.repeat?.ticked) return [it, false];
+      if (!old.repeat?.ticked) return [kept, true];
+      const repeat = { ...it.repeat };
+      delete repeat.ticked;
+      return [{ ...it, repeat }, false];
+    }
+    const back = old.kind === "task" ? old.repeat?.ticked : undefined;
+    const beforeTick = !!back && it.kind === "task" && !!it.repeat && !it.repeat.ticked && it.due_at === back.due && old.due_at !== back.due;
+    return beforeTick ? [kept, true] : [it, false];
+  };
+  /** A line and everything under it (its steps, their steps…), as db.rs `SUBTREE`. */
+  const subtreeOf = (id: number): Set<number> => {
+    const under = new Set([id]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const i of data.items)
+        if (i.parent_id != null && under.has(i.parent_id) && !under.has(i.id)) {
+          under.add(i.id);
+          grew = true;
+        }
+    }
+    return under;
+  };
+  /** Lines changed beside the one saved, told to the board (the app's `item-updated`). */
+  const tellItems = (items: Item[]) => {
+    if (items.length) setTimeout(() => items.forEach((i) => emit("item-updated", structuredClone(i))));
+  };
+  /** Opened late, a line whose time is past already waits a minute, never ringing at once (db.rs
+   * `wait_a_minute`; the preview looks at its time alone, not a deadline's early rings). */
+  const waitAMinute = (i: Item, now: number): Item => (i.due_at != null && i.alarm !== "off" && i.due_at <= now ? { ...i, snooze_until: now + MIN } : i);
+  /** A repeating task open again (`task`, as it waited): its steps start fresh too, unticked,
+   * their times moved on by as many calendar days as the task's, at their own time of day
+   * (`shiftDays`), each time one was done kept in the history;
+   * opened `late`, one whose time is past waits a minute. A step with a repeat of its own goes on
+   * as after "Not done" (db.rs `fresh_steps`). Returns the steps changed. */
+  const freshSteps = (task: Item, days: number, late: boolean, now: number): Item[] => {
+    const taskId = task.id;
+    const under = subtreeOf(taskId);
+    const changed: Item[] = [];
+    data.items = data.items.map((i) => {
+      if (i.id === taskId || !under.has(i.id) || i.kind !== "task") return i;
+      if (i.repeat) {
+        // (db.rs `unpause_step`: its time come while the task waited, it stays quiet.)
+        if (task.done_at == null || i.due_at == null || i.done_at != null || i.alarm === "off") return i;
+        const f: Item = i.due_at > task.done_at && i.due_at <= now ? { ...i, ring_state: "passed" } : { ...i, last_ring_at: Math.max(i.last_ring_at ?? now, now) };
+        changed.push(f);
+        return f;
+      }
+      if (i.done_at == null && i.due_at == null && !i.ring_state && i.snooze_until == null && i.check_at == null && i.on_it_at == null) return i;
+      if (i.done_at != null && !data.done_log!.some((r) => r.item_id === i.id && r.done_at === i.done_at)) {
+        data.done_log!.push({ id: nextId("done_log"), item_id: i.id, due_at: i.due_at, done_at: i.done_at });
+        tellLog(i.id);
+      }
+      const fresh: Item = { ...i, done_at: null, due_at: i.due_at == null ? null : shiftDays(i.due_at, days), ...quiet };
+      const f = late ? waitAMinute(fresh, now) : fresh;
+      changed.push(f);
+      return f;
+    });
+    return changed;
+  };
+  /** A ticked repeating task a to-do again, at the occurrence it waited for (`at`: when it was to
+   * open), its steps fresh; opened late, one whose time is past waits a minute (db.rs `open_row`). */
+  const openRow = (it: Item, at: number, now: number): Item => {
+    const late = now > at + MIN;
+    const ready: Item = { ...it, done_at: null, repeat: { ...it.repeat! }, ...quiet };
+    delete ready.repeat!.ticked;
+    const t = it.repeat?.ticked;
+    tellItems(freshSteps(it, t && it.due_at != null ? daysApart(t.due, it.due_at) : 0, late, now));
+    return late ? waitAMinute(ready, now) : ready;
+  };
+  const logOf = (id: number) => data.done_log!.filter((r) => r.item_id === id);
+  const tellLog = (id: number) => setTimeout(() => emit("done-log", structuredClone({ item_id: id, rows: logOf(id) })));
+  const quiet = { ring_state: "" as const, rings: 0, last_ring_at: null, snooze_until: null, on_it_at: null, check_at: null };
+  /** Ticked (as the Rust side, db.rs `finish_tick`): a repeating task's time goes into its
+   * history and the line moves to its next occurrence, still ticked until that day (open again
+   * at once when that day has come). */
+  const finishTick = (it: Item, now: number): Item => {
+    if (it.kind !== "task" || !it.repeat || it.done_at == null) return it;
+    data.done_log!.push({ id: nextId("done_log"), item_id: it.id, due_at: it.due_at, done_at: it.done_at });
+    tellLog(it.id);
+    if (it.due_at == null) return it;
+    // (A repeat made before it kept its own time: the time of this one.)
+    const rule = validAt(it.repeat.at) ? it.repeat : { ...it.repeat, at: hhmm24(it.due_at) };
+    const t = tickRepeat(rule, it.due_at, now);
+    if (!t) return { ...it, repeat: rule };
+    const moved: Item = { ...it, due_at: t.at, repeat: t.rule };
+    const opens = reopensAt(t.at, myDay());
+    return now < opens ? moved : openRow(moved, opens, now);
+  };
+  /** Unticked (`old`: ticked): its time leaves its history, and a line waiting for its next day
+   * goes back to the occurrence ticked. */
+  const afterUnticked = (old: Item, it: Item): Item => {
+    if (old.done_at == null) return it;
+    data.done_log = data.done_log!.filter((r) => !(r.item_id === it.id && r.done_at === old.done_at));
+    if (old.repeat) tellLog(it.id);
+    const back = old.repeat?.ticked;
+    if (!back) return it;
+    return { ...it, due_at: back.due, repeat: it.repeat ? { ...untickedRule(it.repeat), done: back.done } : it.repeat };
+  };
+  /** Changed while ticked and waiting: it keeps what unticking gives back (db.rs `still_ticked`). */
+  const stillTicked = (it: Item, old: Item, now: number): Item => {
+    const back = old.repeat?.ticked;
+    if (old.done_at == null || it.done_at !== old.done_at || !back) return it;
+    const same = it.due_at === old.due_at;
+    if (!it.repeat || it.kind !== "task") return same && it.kind === "task" ? { ...it, due_at: back.due } : it;
+    const shape = (r: Item["repeat"]) => JSON.stringify([r?.freq, r?.interval, r?.days ?? [], r?.monthday ?? null, r?.ends]);
+    if (shape(it.repeat) === shape(old.repeat) || !same) return { ...it, repeat: { ...it.repeat, ticked: back } };
+    const base = { ...untickedRule(it.repeat), done: back.done };
+    const t = tickRepeat(base, back.due, now);
+    return t ? { ...it, due_at: t.at, repeat: t.rule } : { ...it, due_at: back.due, repeat: base };
+  };
+  /** Ticked repeating tasks whose next day has come are to-dos again (db.rs `reopen_due`). */
+  const reopenDue = (now: number): Item[] => {
+    const opened: Item[] = [];
+    for (const i of data.items.filter((x) => {
+      const at = waitsUntil(x, myDay());
+      return at != null && now >= at;
+    })) {
+      // (Each one on its own: one that can't open never holds back the others.)
+      try {
+        const open = openRow(i, waitsUntil(i, myDay())!, now);
+        data.items = data.items.map((x) => (x.id === i.id ? open : x));
+        opened.push(open);
+      } catch (e) {
+        console.error(`A repeating task couldn’t open again (${i.id}):`, e);
+      }
+    }
+    if (opened.length) save();
+    return opened;
+  };
+  reopenDue(Date.now());
+  // (The app's clock looks every 5 seconds; the preview too, never in the tests.)
+  if (typeof window !== "undefined" && !(globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.VITEST)
+    setInterval(() => {
+      for (const it of reopenDue(Date.now())) emit("item-updated", structuredClone(it));
+    }, 5000);
   /** A space's Inbox, made when missing (the first one, as the app's: a second note called
    * "Inbox" is a plain note). */
   const inboxOf = (space: Space): number => {
@@ -684,7 +915,10 @@ function mockBackend(): Backend {
   };
   return {
     label: params.get("w") === "dump" ? "dump" : "main",
-    loadAll: () => ok(data),
+    loadAll: () => {
+      reopenDue(Date.now());
+      return ok(data);
+    },
     createNote: (title, space, palette, color) => {
       const sort = data.notes.reduce((m, n) => Math.max(m, n.sort), 0) + 1;
       const n: Note = { id: nextId("notes"), title, space, palette: palette as Note["palette"], color, sort, archived: false, created_at: Date.now(), wide: false, folded: false, paper: "plain" };
@@ -740,14 +974,59 @@ function mockBackend(): Backend {
     },
     updateItem: (item) => {
       const old = findItem(item.id);
-      let next: Item = { ...old, ...item, ring_state: old.ring_state, rings: old.rings, last_ring_at: old.last_ring_at, snooze_until: old.snooze_until, on_it_at: old.on_it_at, check_at: old.check_at };
-      if (old.due_at !== item.due_at || old.done_at !== item.done_at || old.alarm !== item.alarm || JSON.stringify(old.rhythm) !== JSON.stringify(item.rhythm))
-        next = { ...next, ring_state: "", rings: 0, last_ring_at: null, snooze_until: null, on_it_at: null, check_at: null };
+      const now = Date.now();
+      const [given, stale] = notStale({ ...old, ...item, ring_state: old.ring_state, rings: old.rings, last_ring_at: old.last_ring_at, snooze_until: old.snooze_until, on_it_at: old.on_it_at, check_at: old.check_at }, old);
+      let next: Item = stillTicked({ ...given, repeat: repeatWithTime(given, old) }, old, now);
+      if (stale) tellLog(item.id);
+      if (old.due_at !== next.due_at || old.done_at !== next.done_at || old.alarm !== next.alarm || JSON.stringify(old.rhythm) !== JSON.stringify(next.rhythm)) next = { ...next, ...quiet };
+      // A repeating task ticked or unticked: its history and its time (the Rust side does the same).
+      if (old.done_at == null && next.done_at != null) next = finishTick(next, now);
+      else if (old.done_at != null && next.done_at == null) next = afterUnticked(old, next);
       data.items = data.items.map((i) => (i.id === item.id ? next : i.parent_id === item.id ? { ...i, note_id: next.note_id } : i));
       save();
-      // A repeating task ticked: its next occurrence (the Rust side does the same).
-      if (old.done_at == null && next.done_at != null) spawnNext(next);
       return ok(next);
+    },
+    forgetDone: (itemId, doneAt) => {
+      data.done_log = data.done_log!.filter((r) => !(r.item_id === itemId && r.done_at === doneAt));
+      save();
+      return ok(logOf(itemId));
+    },
+    undoTick: (item, forget, steps) => {
+      const old = findItem(item.id);
+      // (Ticked again since: left as it is.)
+      if (old.done_at != null) return ok({ item: old, steps: [], log: logOf(item.id) });
+      const now = Date.now();
+      const { kind, text, due_at, done_at, alarm, rhythm, link, file, repeat } = item;
+      let line: Item = { ...old, kind, text, due_at, done_at, alarm, rhythm, link, file, repeat, ...quiet };
+      if (line.done_at == null) line = waitAMinute(line, now);
+      data.items = data.items.map((x) => (x.id === item.id ? line : x));
+      if (forget != null) data.done_log = data.done_log!.filter((r) => !(r.item_id === item.id && r.done_at === forget));
+      const back: Item[] = [];
+      for (const was of steps) {
+        const i = data.items.find((x) => x.id === was.id);
+        // (Ticked or moved under another task since: left as it is.)
+        if (!i || i.kind !== "task" || i.repeat || i.done_at != null || i.parent_id !== was.parent_id) continue;
+        const { done_at, due_at, ring_state, rings, last_ring_at, snooze_until, on_it_at, check_at } = was;
+        const as: Item = { ...i, done_at, due_at, ring_state, rings, last_ring_at, snooze_until, on_it_at, check_at };
+        // (Its time or snooze past: it waits a minute, never ringing at once.)
+        const first = as.snooze_until ?? as.due_at;
+        const step: Item = as.done_at == null && as.alarm !== "off" && first != null && first <= now ? { ...as, snooze_until: now + MIN } : as;
+        data.items = data.items.map((x) => (x.id === was.id ? step : x));
+        if (done_at != null) data.done_log = data.done_log!.filter((r) => !(r.item_id === was.id && r.done_at === done_at));
+        back.push(step);
+      }
+      // (Ticked again: its steps' rings stop showing, as at a tick, db.rs `after_done`.)
+      const changed = new Set(back.map((x) => x.id));
+      if (line.done_at != null) {
+        const under = subtreeOf(line.id);
+        data.items = data.items.map((x) => {
+          if (x.id === line.id || !under.has(x.id) || x.done_at != null || !["early", "ringing", "check"].includes(x.ring_state)) return x;
+          changed.add(x.id);
+          return { ...x, ring_state: "" };
+        });
+      }
+      save();
+      return ok({ item: line, steps: [...changed].map(findItem), log: logOf(item.id) });
     },
     deleteItem: (id) => {
       // The line and everything under it (steps, steps of steps), as the Rust side does.
@@ -842,9 +1121,7 @@ function mockBackend(): Backend {
       const now = Date.now();
       const r = it.alarm === "deadline" ? PRESETS[(it.rhythm?.preset as "normal") ?? "normal"] ?? PRESETS.normal : PRESETS.normal;
       if (action === "done") {
-        const wasOpen = it.done_at == null;
-        Object.assign(it, { done_at: now, ring_state: "", check_at: null });
-        if (wasOpen) spawnNext(it);
+        if (it.done_at == null) Object.assign(it, finishTick({ ...it, done_at: now, ring_state: "", check_at: null }, now));
       } else if (action.startsWith("until:")) Object.assign(it, { snooze_until: Math.max(now + MIN, Number(action.slice(6))), ring_state: "snoozed", rings: 0 });
       else if (action === "onit") Object.assign(it, { on_it_at: now, check_at: now + r.checkin * MIN, ring_state: "on_it", rings: 0 });
       else if (action === "notyet") Object.assign(it, { check_at: now + r.notyet * MIN, ring_state: "on_it" });
@@ -1170,6 +1447,8 @@ const WRITES = [
   "reorderNotes",
   "createItem",
   "updateItem",
+  "forgetDone",
+  "undoTick",
   "deleteItem",
   "setSetting",
   "restore",

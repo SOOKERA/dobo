@@ -11,6 +11,7 @@
   import { parseCapture } from "../lib/capture";
   import { formatDueLong } from "../lib/time";
   import { dayBounds, lookbackAt, lookbackSpan, lookbackTomorrow, spanDay } from "../lib/plan";
+  import { doneBetween } from "../lib/doneLog";
   import { pushLayer } from "../lib/layers";
   import { modal, takeFocus } from "../lib/modal";
   import type { Item } from "../lib/types";
@@ -29,7 +30,9 @@
   let start = $derived(lookbackSpan(day, store.workHours).start);
   let end = $derived(lookbackSpan(day, store.workHours).end);
   let dayBefore = $derived(dayBounds(new Date(dayStart - 1)).start);
-  let done = $derived(real.filter((i) => i.done_at != null && i.done_at >= start && i.done_at < end && i.kind === "task").sort((a, b) => (a.done_at ?? 0) - (b.done_at ?? 0)));
+  // (A repeating task done that day is in its history once it is open again: each day it was
+  // done has it, never twice.)
+  let done = $derived(doneBetween(real, store.doneLog, start, end));
   let open = $derived(real.filter((i) => i.kind === "task" && i.done_at == null && i.due_at != null && i.due_at < end && i.due_at >= dayBefore));
   let ideas = $derived(real.filter((i) => i.kind === "idea" && i.created_at >= start && i.created_at < end));
   /** The day whose span holds now: in the night part of work hours that cross midnight, still
@@ -90,7 +93,7 @@
     <div class="col">
       <span class="label">{isToday ? t("Done today · {n}", { n: done.length }) : t("Done · {n}", { n: done.length })}</span>
       {#if done.length}
-        {#each done.slice(0, 5) as d (d.id)}
+        {#each done.slice(0, 5) as d (d.key)}
           <div class="done" transition:fold={{ gap: 6 }}><span class="box"><Icon name="check" size={10} stroke={3.4} /></span><span class="t">{d.text}</span></div>
         {/each}
         {#if done.length > 5}<span class="more" transition:fold={{ gap: 6 }}>{t("and {n} more", { n: done.length - 5 })}</span>{/if}

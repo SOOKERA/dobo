@@ -4,7 +4,7 @@
 // repeats, the drag ruler's hours, the "Later…" times, the look back window, undo, smart dates.
 import { describe, expect, it } from "vitest";
 import { findRepeat, firstOccurrence, nextAfterDone, nextOccurrence, repeatLabel } from "./repeat";
-import { crossesMidnight, hourLabelStep, inWorkHours, laterChoices, lookbackDay, lookbackSpan, rulerRange, spanDay, timeAt } from "./plan";
+import { crossesMidnight, daylight, endName, hourLabelStep, inWorkHours, laterChoices, lookbackDay, lookbackSpan, rulerHours, rulerRange, spanDay, timeAt } from "./plan";
 import { History, changedKeys, withFields } from "./history";
 import { findDate, parseCapture } from "./capture";
 
@@ -76,6 +76,9 @@ describe("the drag ruler's hours", () => {
     const late = rulerRange(wed(21, 50), "personal", day, work);
     expect(late.main.label).toBe("Tomorrow");
     expect(new Date(late.main.start).getHours()).toBe(8);
+    // Its next-day spot is then the day after tomorrow: by its name, never "Tomorrow" again.
+    expect(new Date(late.next.start).getDate()).toBe(new Date(wed(12)).getDate() + 2);
+    expect(late.next.label).toBe("Friday");
   });
 
   it("Friday evening in Work leads to Monday", () => {
@@ -278,5 +281,61 @@ describe("hour labels on the ruler", () => {
   });
   it("keeps to clock-friendly steps", () => {
     for (let w = 40; w < 1200; w += 7) expect([1, 2, 3, 4, 6, 12, 24]).toContain(hourLabelStep(24, w));
+  });
+  const names = { hourName: (h: number) => String(h), clock: (h: number, m: number) => `${h}:${String(m).padStart(2, "0")}` };
+  const at = (h: number, m = 0) => new Date(2026, 10, 24, h, m).getTime();
+  it("a short evening on a wide track names its half hours, never over the two ends' names", () => {
+    // 20:00 to 22:00 on 680 px, the ends' names 40 px wide.
+    const marks = rulerHours(at(20), at(22), 680, { minGap: 32, startRoom: 40, endRoom: 40, ...names });
+    expect(marks.filter((m) => m.label).map((m) => m.label)).toEqual(["20:30", "21:00", "21:30"]);
+    // Every half hour has its tick, the ends included.
+    expect(marks.map((m) => m.at)).toEqual([at(20), at(20, 30), at(21), at(21, 30), at(22)]);
+  });
+  it("a long day names whole hours, as many as fit", () => {
+    const marks = rulerHours(at(9), at(22), 400, { minGap: 32, startRoom: 30, endRoom: 30, ...names });
+    const named = marks.filter((m) => m.label);
+    expect(named.every((m) => m.major && !m.label!.includes(":"))).toBe(true);
+    for (let i = 1; i < named.length; i++) expect((named[i].x - named[i - 1].x) * 400).toBeGreaterThanOrEqual(32);
+    expect(named.every((m) => m.x * 400 >= 40 && m.x * 400 <= 360)).toBe(true);
+  });
+  it("a narrow ruler still names the hours that fit, not only the clock's own steps", () => {
+    // 08:30 to 22:00 on 174 px, the ends' names 45 and 65 px wide, names 44 px apart: no
+    // even hour fits between them, 14:00 does.
+    const marks = rulerHours(at(8, 30), at(22), 174, { minGap: 44, startRoom: 45, endRoom: 65, ...names, nameW: () => 28 });
+    expect(marks.filter((m) => m.label).map((m) => m.label)).toEqual(["14"]);
+    // Where the clock's own steps name as many, they are kept: 10, 12, 14… on a wider ruler.
+    const wide = rulerHours(at(8, 30), at(22), 330, { minGap: 32, startRoom: 30, endRoom: 30, ...names, nameW: () => 14 });
+    expect(wide.filter((m) => m.label).every((m) => new Date(m.at).getHours() % 2 === 0)).toBe(true);
+    // Every name clear of the one before it, and of the ends, by 6 px.
+    for (const [w, gap, s, e] of [[174, 44, 45, 65], [230, 32, 40, 40], [260, 44, 60, 50], [400, 32, 30, 30]]) {
+      const named = rulerHours(at(8, 30), at(22), w, { minGap: gap, startRoom: s, endRoom: e, ...names, nameW: () => 20 }).filter((m) => m.label);
+      for (let i = 1; i < named.length; i++) expect((named[i].x - named[i - 1].x) * w).toBeGreaterThanOrEqual(gap);
+      expect(named.every((m) => m.x * w - 10 >= s + 6 && m.x * w + 10 <= w - e - 6)).toBe(true);
+    }
+  });
+  it("the hours named stay evenly apart, on the smallest of the clock's steps that fits them all", () => {
+    const h12 = { hourName: (h: number) => `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`, clock: (h: number, m: number) => `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}` };
+    const hoursOf = (marks: ReturnType<typeof rulerHours>) => marks.filter((m) => m.label).map((m) => new Date(m.at).getHours());
+    const even = (hs: number[]) => hs.length > 1 && hs.every((h, i) => i === 0 || h - hs[i - 1] === hs[1] - hs[0]) && hs.every((h) => h % (hs[1] - hs[0]) === 0);
+    // A 12-hour clock, 08:00 to 23:00 on 660 px: 44 px an hour, every hour just too close.
+    const twelve = hoursOf(rulerHours(at(8), at(23), 660, { minGap: 44, startRoom: 30, endRoom: 34, ...h12, nameW: (n) => n.length * 6 }));
+    expect(twelve).toEqual([10, 12, 14, 16, 18, 20]);
+    // A 24-hour clock, 09:15 to 23:00 on 440 px: 32 px an hour.
+    const day = hoursOf(rulerHours(at(9, 15), at(23), 440, { minGap: 32, startRoom: 32, endRoom: 14, ...names, nameW: (n) => n.length * 6 }));
+    expect(day).toEqual([12, 14, 16, 18, 20, 22]);
+    expect(even(twelve) && even(day)).toBe(true);
+  });
+  it("an end on the hour is named as the hours are; one between, with its minutes", () => {
+    expect(endName(at(22), names)).toBe("22");
+    expect(endName(at(21, 40), names)).toBe("21:40");
+  });
+  it("now's place keeps its own name clear", () => {
+    // Now at 20:25 on a strip from 20:00: its name (40 px) starts at its line, about 142 px in,
+    // and 20:30 (170 px) would touch it.
+    const marks = rulerHours(at(20), at(22), 680, { minGap: 32, startRoom: (25 / 120) * 680 + 40, endRoom: 40, ...names });
+    expect(marks.filter((m) => m.label).map((m) => m.label)).toEqual(["21:00", "21:30"]);
+  });
+  it("the sun by day, the moon in the evening and the night", () => {
+    expect([5, 6, 12, 17, 18, 22].map((h) => daylight(at(h)))).toEqual([false, true, true, true, false, false]);
   });
 });

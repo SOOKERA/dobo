@@ -164,7 +164,24 @@ fn load_all(window: tauri::WebviewWindow, state: State<AppState>) -> R<Everythin
     if window.label() == "main" {
         updates::app_ready();
     }
-    let mut all = db::load_all(&state.db.lock().unwrap())?;
+    let mut all = {
+        let conn = state.db.lock().unwrap();
+        // Ticked repeating tasks whose next day has come (at a start, after a restore) are
+        // to-dos again before the board reads them.
+        let reopened = db::reopen_due(&conn, db::now_ms()).unwrap_or_default();
+        // (Read by another window: the board hears of them, and of the times their steps were
+        // done, while the notes are held: a change saved after this never reaches the board
+        // before it.)
+        if window.label() != "main" {
+            for (id, rows) in db::steps_logs(&conn, &reopened).unwrap_or_default() {
+                emit_done_log(window.app_handle(), id, rows);
+            }
+            for it in reopened {
+                let _ = window.app_handle().emit_to("main", "item-updated", it);
+            }
+        }
+        db::load_all(&conn)?
+    };
     // (Their thumbs found after the notes are let go: a slow drive never holds them.)
     if let Ok(pictures) = paths::sub("pictures") {
         thumbs::attach(&mut all.pictures, &pictures);
@@ -252,23 +269,23 @@ fn create_item(
 
 #[tauri::command]
 fn update_item(app: AppHandle, window: tauri::Window, state: State<AppState>, item: Item) -> R<Item> {
-    let (it, next, steps) = {
-        let conn = state.db.lock().unwrap();
-        let (it, next, steps) = db::update_item_full(&conn, &item)?;
-        // (While the notes are held: a ring the clock makes right after, at the new time, is
-        // never cleared by this.)
-        if it.ring_state.is_empty() || it.done_at.is_some() {
-            reminders::clear_ring(&app, it.id);
+    let conn = state.db.lock().unwrap();
+    let (it, log, steps) = db::update_item_full(&conn, &item)?;
+    // (While the notes are held: a ring the clock makes right after, at the new time, is never
+    // cleared by this.)
+    if it.ring_state.is_empty() || it.done_at.is_some() {
+        reminders::clear_ring(&app, it.id);
+    }
+    // A task ticked: its steps' reminders are paused, their notifications go.
+    if it.done_at.is_some() {
+        for s in &steps {
+            reminders::clear_ring(&app, s.id);
         }
-        // A task ticked: its steps' reminders are paused, their notifications go.
-        if it.done_at.is_some() {
-            for s in &steps {
-                reminders::clear_ring(&app, s.id);
-            }
-        }
-        (it, next, steps)
-    };
-    // Steps paused or brought back with their task show it on the board.
+    }
+    // (Open again at once: the times its steps were done stay in the look back.)
+    let steps_logs = db::steps_logs(&conn, &steps).unwrap_or_default();
+    // Steps paused or brought back with their task show it on the board. (All told while the
+    // notes are held: a change saved after this never reaches the board before it.)
     for s in steps {
         let _ = app.emit_to("main", "item-updated", s);
     }
@@ -276,11 +293,52 @@ fn update_item(app: AppHandle, window: tauri::Window, state: State<AppState>, it
     if window.label() != "main" {
         let _ = app.emit_to("main", "item-updated", it.clone());
     }
-    // A repeating task was ticked: its next occurrence appears on the board.
-    if let Some(n) = next {
-        let _ = app.emit_to("main", "item-updated", n);
+    // A repeating task ticked or unticked: its history, for the board (History, the look back).
+    if let Some(rows) = log {
+        emit_done_log(&app, it.id, rows);
+    }
+    for (id, rows) in steps_logs {
+        emit_done_log(&app, id, rows);
     }
     Ok(it)
+}
+
+/// Undo of a repeating task's "Done" once it is open again (its next day came meanwhile): that
+/// time leaves its history. Returns the line's history.
+#[tauri::command]
+fn forget_done(state: State<AppState>, item_id: i64, done_at: i64) -> R<Vec<db::Done>> {
+    let conn = state.db.lock().unwrap();
+    db::forget_done(&conn, item_id, done_at)?;
+    db::done_log_of(&conn, item_id)
+}
+
+/// What an Undo of an opening gives back (`undo_tick`).
+#[derive(serde::Serialize)]
+struct UndoneTick {
+    item: Item,
+    steps: Vec<Item>,
+    log: Vec<db::Done>,
+}
+
+/// The Undo of what opened a repeating task again (its "Done" once its next day came, or a change
+/// that opened it at once), in one go (`db::undo_tick`): the line as it was, its steps as they
+/// were, and (`forget`) that tick's time out of its history.
+#[tauri::command]
+fn undo_tick(app: AppHandle, state: State<AppState>, item: Item, forget: Option<i64>, steps: Vec<Item>) -> R<UndoneTick> {
+    let conn = state.db.lock().unwrap();
+    let (item, log, steps) = db::undo_tick(&conn, &item, forget, &steps, db::now_ms())?;
+    // (While the notes are held: a fresh step's notification goes; its own ring comes again from
+    // its reminder as it was.)
+    reminders::clear_ring(&app, item.id);
+    for s in &steps {
+        reminders::clear_ring(&app, s.id);
+    }
+    Ok(UndoneTick { item, steps, log: log.unwrap_or_default() })
+}
+
+/// A line's history changed: all of it, to the board.
+pub(crate) fn emit_done_log(app: &AppHandle, item_id: i64, rows: Vec<db::Done>) {
+    let _ = app.emit_to("main", "done-log", serde_json::json!({ "item_id": item_id, "rows": rows }));
 }
 
 #[tauri::command]
@@ -566,7 +624,7 @@ fn list_monitors(app: AppHandle) -> Vec<window::MonitorInfo> {
 
 #[tauri::command]
 fn answer_ring(app: AppHandle, item_id: i64, action: String) -> R<Item> {
-    reminders::answer(&app, item_id, &action)
+    reminders::answer(&app, item_id, &action, None)
 }
 
 #[tauri::command]
@@ -1269,7 +1327,7 @@ pub fn handle_url(app: &AppHandle, url: &str) {
     match path {
         "ring" => {
             if let (Some(id), Some(a)) = (query(q, "item").and_then(|v| v.parse::<i64>().ok()), query(q, "a")) {
-                let _ = reminders::answer(app, id, &a);
+                let _ = reminders::answer(app, id, &a, query(q, "due").and_then(|v| v.parse::<i64>().ok()));
             }
         }
         "open" => {
@@ -1854,6 +1912,8 @@ pub fn run() {
             reorder_notes,
             create_item,
             update_item,
+            forget_done,
+            undo_tick,
             delete_item,
             set_setting,
             language_now,

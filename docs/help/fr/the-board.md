@@ -11,11 +11,11 @@ De haut en bas :
 - **La ligne Ensuite** : vos prochaines tâches à heure fixe.
 - **Le bandeau « À trier »** (voir [À trier et dépôt rapide](inbox-and-dump.md)). Quand vous portez une tâche, une bande juste en dessous ouvre les heures du jour par-dessus vos notes, sans les déplacer (voir [Les heures du jour](the-hours-ruler.md)).
 - **Vos notes**, en colonnes. Pendant que vous portez une ligne, une carte en pointillés, **+ Nouvelle note**, attend au bout : déposez-y la ligne pour en faire une nouvelle note au bout, ou sur un coin vide pour la créer juste là (voir [Tâches et idées](tasks-and-ideas.md)).
-- En bas à droite, **A A A** (taille des notes) et **?** (aide et visite rapide). Sous vos notes, à gauche, **Archives (2)**, tant que des notes sont archivées.
+- En bas à droite, **Archives (2)** tant que des notes sont archivées (son icône seule, avec le nombre dessus, dans une fenêtre étroite), puis **A A A** (taille des notes) et **?** (aide et visite rapide).
 
 ## Dans une note
 
-Une note montre d’abord ses tâches (à faire, puis faites), puis ses images, puis ses idées sur une bande plus claire, et **Ajouter** à la fin pour y écrire une nouvelle ligne.
+Une note montre d’abord ses tâches (une tâche cochée reste à sa place), puis ses images, puis ses idées sur une bande plus claire, et **Ajouter** à la fin pour y écrire une nouvelle ligne.
 
 Quand toutes les tâches d’une note sont faites, la note le dit : une grande coche discrète en bas à droite, ses mots un peu adoucis, et **Tout est fait** sous son titre (ses idées toujours comptées : « Tout est fait · 1 idée »). Cochez la dernière tâche et la coche se dessine ; décochez-en une et la note redevient comme avant. Repliée, elle montre une petite coche devant **Tout est fait**. Une note sans tâche ne l’affiche jamais, pas plus que « À trier ».
 
@@ -37,6 +37,7 @@ Les colonnes restent en place quand une note grandit ou rétrécit. Une nouvelle
 - **Papier** : **Uni**, **Ligné**, **Quadrillé** ou **Ancien**.
 - **Écrire dans cette note** : la ligne de saisie affiche « Dans Courses » et écrit là jusqu’à ce que vous cliquiez sur son **×** (**Revenir à « À trier »**).
 - **Élargir** / **Largeur normale**, **Plier sur son titre** / **Déplier**.
+- **Mettre les tâches faites à la fin** / **Laisser les tâches faites en place** : où vont ses tâches faites. Au départ, elles restent là où elles sont, et une liste d’étapes garde son ordre. Mises à la fin, elles se regroupent après celles à faire ; une tâche que vous cochez montre sa coche sur place un instant, puis glisse jusque-là. Leur ordre à elles ne change jamais : vous pouvez revenir en arrière quand vous voulez. (« À trier » laisse ses tâches faites en place.)
 - **Enregistrer comme modèle** : pour commencer de nouvelles notes d’après elle.
 - **Enregistrer en image** : un PNG dans **Images › Dobo**, copié aussi pour le coller dans un message.
 - **Copier comme texte** : son titre, ses tâches en liste à cocher et ses idées (le lien ou le fichier d’une ligne en dessous), à coller n’importe où. Un court « Copié » le confirme.

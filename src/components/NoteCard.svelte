@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
+  import { DoneHold, glideOrder } from "../lib/doneHold.svelte";
   import { composing } from "../lib/compose";
   import Icon from "./Icon.svelte";
   import NoteMenu from "./NoteMenu.svelte";
@@ -60,7 +61,16 @@
     store.setFolded(note, !note.folded);
   }
 
-  let tasks = $derived([...items.filter((i) => i.kind === "task" && i.done_at == null), ...items.filter((i) => i.kind === "task" && i.done_at != null)]);
+  // (Done ones at the end only when the note asks for it: one just ticked a moment later, gliding
+  // there; lib/doneHold.)
+  const hold = new DoneHold();
+  $effect(() => () => hold.stop());
+  let tasks = $derived(hold.order(items.filter((i) => i.kind === "task"), note.done_last));
+  let tasksEl = $state<HTMLUListElement>();
+  glideOrder(
+    () => tasksEl,
+    () => tasks.map((i) => i.id),
+  );
   let ideas = $derived(items.filter((i) => i.kind === "idea"));
   // (The quick tour's lines live in the Inbox strip, never in a note.)
   let open = $derived(tasks.filter((t) => t.done_at == null).length);
@@ -293,7 +303,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (its "+ Add" button is the way in by keyboard) -->
   <div class="body" transition:fold={{ y: -6, duration: 340, room: 1, show: 0.15 }} onpointerdown={emptyPress} onclick={emptyClick}>
   {#if tasks.length || blanks.task}
-    <ul class="tasks" transition:fold>
+    <ul class="tasks" bind:this={tasksEl} transition:fold>
       {#each tasks as it (it.id)}
         <ItemRow item={it} />
       {/each}

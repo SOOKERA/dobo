@@ -25,3 +25,7 @@ Les étapes sont des lignes comme les autres : cochez-les, modifiez-les d’un 
 ## Des étapes avec une heure
 
 Une étape peut avoir sa propre heure, et sonne comme n’importe quelle tâche. Une fois la tâche cochée, ses étapes cessent de sonner (leurs heures sont gardées, et leurs notifications s’en vont). Décochez la tâche, et elles sonnent de nouveau, sauf une étape dont l’heure est arrivée pendant que la tâche était faite : elle reste en sourdine jusqu’à ce que vous lui donniez une nouvelle heure.
+
+## Les étapes d’une tâche qui se répète
+
+Quand une tâche qui se répète revient à sa prochaine date, ses étapes repartent de zéro avec elle : décochées, prêtes à refaire, et leurs heures avancent avec celle de la tâche (une étape à 09:00 est de nouveau à 09:00 le nouveau jour). Les étapes que vous aviez cochées comptent toujours dans le [bilan](look-back.md) du jour où vous les avez faites. Une étape qui se répète d’elle-même garde son propre rythme.

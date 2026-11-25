@@ -215,6 +215,13 @@
   <button
     class="item"
     onclick={() => {
+      store.setDoneLast(note, !note.done_last);
+      onClose();
+    }}><span>{note.done_last ? t("Keep done tasks in place") : t("Move done tasks to the end")}</span></button
+  >
+  <button
+    class="item"
+    onclick={() => {
       store.saveTemplate(note);
       onClose();
     }}><span>{t("Save as a template")}</span><Icon name="template" size={14} /></button
@@ -223,7 +230,7 @@
   <button
     class="item"
     onclick={() => {
-      void store.copy(noteAsText(noteTitle(note), store.itemsByNote.get(note.id) ?? [], (id) => store.stepsOf.get(id) ?? []));
+      void store.copy(noteAsText(noteTitle(note), store.itemsByNote.get(note.id) ?? [], (id) => store.stepsOf.get(id) ?? [], note.done_last));
       onClose();
     }}><span>{t("Copy as text")}</span></button
   >

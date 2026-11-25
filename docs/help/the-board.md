@@ -11,11 +11,11 @@ From the top:
 - **The Next line**: your next timed tasks.
 - **The Inbox strip** (see [Inbox and quick dump](inbox-and-dump.md)). While you carry a task, a strip just under it opens today's hours over your notes, without moving them (see [The hours ruler](the-hours-ruler.md)).
 - **Your notes**, in columns. While you carry a line, a dashed **+ New note** card waits at the end: drop the line there to start a new note with it at the end, or on any empty spot to start it right there (see [Tasks and ideas](tasks-and-ideas.md)).
-- At the bottom right, **A A A** (note size) and **?** (help and the quick tour). Under your notes, on the left, **Archive (2)**, while some notes are archived.
+- At the bottom right, **Archive (2)** while some notes are archived (its icon alone, with the count on it, in a narrow window), then **A A A** (note size) and **?** (help and the quick tour).
 
 ## Inside a note
 
-A note shows its tasks first (open ones, then done ones), then its pictures, then its ideas on a lighter band, and **+ Add** at the end to write a new line there.
+A note shows its tasks first (a ticked one stays in its place), then its pictures, then its ideas on a lighter band, and **+ Add** at the end to write a new line there.
 
 When every task in a note is done, the note says so: a big faint check across its lower right, its words a little softer, and **All done** under its title (its ideas still counted: "All done · 1 idea"). Tick the last task and the check draws itself in; untick one and the note is back as it was. Folded, it shows a small check before **All done**. A note with no tasks never shows it, and neither does the Inbox.
 
@@ -37,6 +37,7 @@ Columns stay put while a note grows or shrinks. A new note takes the free place 
 - **Paper**: **Plain**, **Ruled**, **Grid** or **Antique**.
 - **Write into this note**: the entry line shows "Into Shopping" and writes there until you click its **×** (**Back to the Inbox**).
 - **Make wide** / **Make normal width**, **Fold to its title** / **Unfold**.
+- **Move done tasks to the end** / **Keep done tasks in place**: where its done tasks show. At first they stay where they are, so a list of steps keeps its order. Moved to the end, they gather after the open ones: a task you tick shows its tick where it is for a moment, then glides there. Their own order never changes, so you can switch back at any time. (The Inbox keeps its done tasks in place.)
 - **Save as a template**: start new notes from it later.
 - **Save as a picture**: a PNG in **Pictures › Dobo**, also copied so you can paste it into a message.
 - **Copy as text**: its title, its tasks as a checklist and its ideas (a line's link or file under it), to paste anywhere. A short "Copied" says it's done.

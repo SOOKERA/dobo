@@ -3,9 +3,11 @@
 <script lang="ts">
   // One task (or a step under it): checkbox, text, time (hourglass for a deadline), its menu,
   // its link / file / pictures, and its steps. Press and drag the text to carry it elsewhere.
+  import { DoneHold, glideOrder } from "../lib/doneHold.svelte";
   import { composing } from "../lib/compose";
   import Icon from "./Icon.svelte";
   import ItemMenu from "./ItemMenu.svelte";
+  import RepeatHistory from "./RepeatHistory.svelte";
   import ItemRow from "./ItemRow.svelte";
   import LinkCard from "./LinkCard.svelte";
   import FileCard from "./FileCard.svelte";
@@ -17,10 +19,11 @@
   import { formatDue, formatDueLong } from "../lib/time";
   import { findDate } from "../lib/capture";
   import { repeatLabel } from "../lib/repeat";
+  import { nextOne } from "../lib/doneLog";
   import { snap } from "../lib/snap";
   import { blip, fadeQuick, fold, widen } from "../lib/motion";
   import type { Item } from "../lib/types";
-  import { t } from "../lib/i18n.svelte";
+  import { cap, t } from "../lib/i18n.svelte";
   import { rightClick, takeMenu, type Point } from "../lib/rightclick.svelte";
   import { untrack } from "svelte";
 
@@ -29,8 +32,25 @@
   let editing = $state(false);
   let draft = $state("");
   let menuOpen = $state(false);
+  /** A repeating task's History card, opened from its menu (in the menu's place). */
+  let historyOpen = $state(false);
   /** Where its menu was right-clicked open (null: under its ⋯). */
   let menuAt = $state.raw<Point | null>(null);
+  // The menu and its History take each other's place (History…, Back): the one leaving steps
+  // aside, then the other comes in (motion `popSwap`, read as each starts: 1 on to History, -1
+  // back). Before, the keyboard goes to the ⋯, so either one closing gives it back there, never to
+  // the entry line.
+  let swapDir = 0;
+  const swapping = () => swapDir;
+  let menuBtn = $state<HTMLButtonElement>();
+  function swapTo(history: boolean) {
+    menuBtn?.focus({ preventScroll: true });
+    swapDir = history ? 1 : -1;
+    menuOpen = !history;
+    historyOpen = history;
+    // (Once both have started.)
+    setTimeout(() => (swapDir = 0));
+  }
   let rowEl = $state<HTMLElement>();
   let addingStep = $state(false);
   let stepDraft = $state("");
@@ -60,13 +80,29 @@
 
   // (The same steps give the same list: a line whose steps didn't change isn't redrawn.)
   let stepsWere: Item[] | null = null;
+  // (Its steps follow its note: done ones after the others only when the note asks for it.)
+  let stepsLast = $derived(!nested && store.doneLastIds.has(item.note_id));
+  let lastWas = false;
   let stepsList: Item[] = NO_ITEMS;
+  // (A step just ticked keeps its place a moment, then glides to the end: lib/doneHold.)
+  const hold = new DoneHold();
+  $effect(() => () => hold.stop());
   let steps = $derived.by(() => {
     const s = nested ? NO_ITEMS : (store.stepsOf.get(item.id) ?? NO_ITEMS);
-    if (s === stepsWere) return stepsList;
+    const last = stepsLast;
+    if (s === stepsWere && last === lastWas && !last) return stepsList;
     stepsWere = s;
-    return (stepsList = s.length ? [...s.filter((x) => x.done_at == null), ...s.filter((x) => x.done_at != null)] : NO_ITEMS);
+    lastWas = last;
+    const next = s.length ? hold.order(s, last) : NO_ITEMS;
+    // (The same steps in the same order: the same list, nothing drawn again.)
+    if (next.length === stepsList.length && next.every((x, i) => x === stepsList[i])) return stepsList;
+    return (stepsList = next);
   });
+  let stepsEl = $state<HTMLUListElement>();
+  glideOrder(
+    () => stepsEl,
+    () => steps.map((i) => i.id),
+  );
   let stepsDone = $derived(steps.filter((s) => s.done_at != null).length);
   // Every step ticked: the task itself is still yours to tick (nothing ticks it for you).
   let allSteps = $derived(steps.length > 0 && stepsDone === steps.length);
@@ -145,6 +181,7 @@
       const got = takeMenu("line", item.id);
       if (!got) return;
       menuAt = got.at;
+      historyOpen = false;
       menuOpen = true;
     });
   });
@@ -160,7 +197,7 @@
     class="row"
     class:done={item.done_at != null}
     class:drop={dropHere}
-    class:menu-open={menuOpen}
+    class:menu-open={menuOpen || historyOpen}
     class:focused
     class:tint
     data-drop-item={item.id}
@@ -222,14 +259,34 @@
         {formatDue(item.due_at, store.now)}
         {#if item.repeat}<Icon name="repeat" size={11} stroke={2.2} />{/if}
       </span>
+    {:else if item.due_at != null && item.done_at != null && item.repeat?.ticked && !editing}
+      <!-- Ticked, waiting for its next day: when that is, quietly (never late, never ringing). -->
+      {@const nextTip = [cap(nextOne(item.due_at, store.now)), repeatLabel(item.repeat)].join(" · ")}
+      <!-- (Read once, as a sentence: "Every day, next one tomorrow at 07:30"; the time shown is
+           the same words.) -->
+      <span class="pill next" transition:widen={{ gap: 10 }} data-tip={nextTip}>
+        <span class="visually-hidden">{t("{rule}, {next}", { rule: repeatLabel(item.repeat), next: nextOne(item.due_at, store.now) })}</span>
+        <span aria-hidden="true">{formatDue(item.due_at, store.now)}</span>
+        <Icon name="repeat" size={11} stroke={2.2} />
+      </span>
     {/if}
     <span class="acts">
-      <button class="act" data-item-menu={item.id} aria-haspopup="dialog" data-tip={t("Time, repeat, reminder, steps…")} aria-label={t("Menu for “{name}”", { name: item.text })} aria-expanded={menuOpen} onclick={() => ((menuAt = null), (menuOpen = !menuOpen))}
+      <button class="act" bind:this={menuBtn} data-item-menu={item.id} aria-haspopup="dialog" data-tip={t("Time, repeat, reminder, steps…")} aria-label={t("Menu for “{name}”", { name: item.text })} aria-expanded={menuOpen} onclick={() => (historyOpen ? (historyOpen = false) : ((menuAt = null), (menuOpen = !menuOpen)))}
         ><Icon name="more" size={15} /></button
       >
     </span>
     {#if menuOpen}
-      <ItemMenu {item} at={menuAt} onClose={() => (menuOpen = false)} onAddStep={() => (addingStep = true)} />
+      <ItemMenu
+        {item}
+        at={menuAt}
+        onClose={() => (menuOpen = false)}
+        onAddStep={() => (addingStep = true)}
+        swap={swapping}
+        onHistory={() => swapTo(true)}
+      />
+    {/if}
+    {#if historyOpen && item.repeat}
+      <RepeatHistory {item} at={menuAt} swap={swapping} onBack={() => swapTo(false)} onClose={() => (historyOpen = false)} />
     {/if}
   </div>
 
@@ -250,7 +307,7 @@
   {/if}
 
   {#if steps.length || addingStep}
-    <ul class="steps" transition:fold>
+    <ul class="steps" bind:this={stepsEl} transition:fold>
       {#each steps as s (s.id)}
         <ItemRow item={s} nested {tint} />
       {/each}
@@ -546,6 +603,12 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+  /* (Ticked, its next time: quieter than a time still to do.) */
+  .pill.next {
+    background: transparent;
+    color: var(--done-ink);
+    font-weight: 400;
   }
   .pill.late,
   .pill.ringing {

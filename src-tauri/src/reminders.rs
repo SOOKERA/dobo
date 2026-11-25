@@ -282,7 +282,10 @@ fn notice_for(it: &Item, ring: Ring, note_title: &str, now: i64) -> Notice {
             buttons.push((tr!("1 hour", "1 h"), "snooze:60".into()));
         }
     }
-    let mut buttons: Vec<(String, String)> = buttons.into_iter().map(|(l, a)| (l, format!("ring?item={}&a={}", it.id, a))).collect();
+    // (With the time it rings for: once the line has moved on, to a repeating task's next
+    // occurrence, an answer from this one is an old one's.)
+    let due_q = it.due_at.map(|d| format!("&due={d}")).unwrap_or_default();
+    let mut buttons: Vec<(String, String)> = buttons.into_iter().map(|(l, a)| (l, format!("ring?item={}&a={}{}", it.id, a, due_q))).collect();
     // "Later…" opens the panel on the Now card with its choices (this evening, tomorrow…).
     if ring != Ring::Check {
         buttons.push((tr!("Later…", "Plus tard…"), format!("open?item={}&later=1", it.id)));
@@ -384,6 +387,14 @@ pub fn tick(app: &AppHandle) {
     {
         let state = app.state::<AppState>();
         let conn = state.db.lock().unwrap();
+        // Ticked repeating tasks whose next day has come: to-dos again (before the rings, so
+        // one due now rings at once).
+        let reopened = db::reopen_due(&conn, now).unwrap_or_else(|e| {
+            eprintln!("Repeating tasks couldn't open again: {e}");
+            vec![]
+        });
+        // (The times their steps were done stay in the look back.)
+        let reopened_logs = db::steps_logs(&conn, &reopened).unwrap_or_default();
         if let Ok(items) = db::timed_items(&conn) {
             for mut it in items {
                 let r = rhythm_of(&conn, &it);
@@ -401,6 +412,15 @@ pub fn tick(app: &AppHandle) {
         }
         tidy = tidy_tick(&conn, now);
         look = lookback_tick(&conn, now);
+        // The lines opened again told to the board while the notes are still held, first of all:
+        // a change saved right after (it waits for them) answers the board after this, so this
+        // older copy never lands on the board over the newer one.
+        for (id, rows) in reopened_logs {
+            crate::emit_done_log(app, id, rows);
+        }
+        for it in reopened {
+            let _ = app.emit_to("main", "item-updated", it);
+        }
         // Shown while the notes are still held: an answer saved right after (it waits for them)
         // clears its notification after this, never before.
         // (A new group replaces the one on screen: it names those still waiting there too.)
@@ -422,9 +442,10 @@ pub fn tick(app: &AppHandle) {
         for n in tidy.iter().chain(look.iter()) {
             notify::show(app, n);
         }
-    }
-    for (_, ev) in rang {
-        let _ = app.emit("ring", ev);
+        // (The rings too: each carries its line as the clock saved it.)
+        for (_, ev) in rang {
+            let _ = app.emit("ring", ev);
+        }
     }
     if tidy.is_some() {
         let _ = app.emit("tidy-ring", ());
@@ -542,71 +563,93 @@ fn lookback_tick(conn: &Connection, now: i64) -> Option<Notice> {
 }
 
 /// What the look back of the day starting at `midnight` shows, counted as LookBack.svelte lists
-/// it: the tasks ticked in its span, the tasks still open that were due that day or the day
-/// before (up to its span's end), and the ideas written in its span.
+/// it: the tasks ticked in its span (a repeating task's from its history too, once it is open
+/// again: never twice while it is still ticked; also once made an idea, a time from its history
+/// stays: src/lib/doneLog.ts `doneBetween`), the tasks still open that were due that day or
+/// the day before (up to its span's end), and the ideas written in its span.
 fn lookback_count(conn: &Connection, midnight: i64) -> Option<i64> {
     let (start, end) = lookback_span(&work_hours(conn), midnight)?;
     // (The day before: 23 or 25 hours long when the clocks change.)
     let day_before = crate::clock::day_at(midnight, -1, "00:00")?;
     conn.query_row(
-        "SELECT COUNT(*) FROM items WHERE
+        "SELECT (SELECT COUNT(*) FROM items WHERE
            (kind = 'task' AND done_at >= ?1 AND done_at < ?2)
            OR (kind = 'task' AND done_at IS NULL AND due_at >= ?3 AND due_at < ?2)
-           OR (kind = 'idea' AND created_at >= ?1 AND created_at < ?2)",
+           OR (kind = 'idea' AND created_at >= ?1 AND created_at < ?2))
+         + (SELECT COUNT(*) FROM done_log d JOIN items i ON i.id = d.item_id
+            WHERE d.done_at >= ?1 AND d.done_at < ?2 AND NOT (i.kind = 'task' AND i.done_at IS d.done_at))",
         rusqlite::params![start, end, day_before],
         |r| r.get(0),
     )
     .ok()
 }
 
-/// An answer (notification button, Now card). Returns the updated item.
-pub fn answer(app: &AppHandle, item_id: i64, action: &str) -> Result<Item, String> {
+/// An answer (notification button, Now card). `for_due`: the time the notification rang for
+/// (None: the Now card, or a notification from before it said). Returns the updated item.
+pub fn answer(app: &AppHandle, item_id: i64, action: &str, for_due: Option<i64>) -> Result<Item, String> {
     if !valid_action(action) {
         return Err(tr!("Unknown answer: {}", "Réponse inconnue : {}", action));
     }
     let now = db::now_ms();
-    let (it, next, steps) = {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
-        let saved = save_answer(&conn, item_id, action, now)?;
-        // (While the notes are held: after a ring saved just before, never before its notification.)
-        clear_ring(app, item_id);
-        // Done: its steps' reminders are paused with it.
-        for s in &saved.2 {
-            clear_ring(app, s.id);
-        }
-        saved
-    };
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().unwrap();
+    let (it, log, steps) = save_answer(&conn, item_id, action, now, for_due)?;
+    // (While the notes are held: after a ring saved just before, never before its notification.)
+    clear_ring(app, item_id);
+    // Done: its steps' reminders are paused with it.
+    for s in &steps {
+        clear_ring(app, s.id);
+    }
+    // (Open again at once: the times its steps were done stay in the look back.)
+    let steps_logs = db::steps_logs(&conn, &steps).unwrap_or_default();
+    // (Told while the notes are held too: a change saved right after never lands on the board
+    // before this older copy.)
     let _ = app.emit("item-updated", it.clone());
-    for n in next.into_iter().chain(steps) {
+    for n in steps {
         let _ = app.emit("item-updated", n);
+    }
+    if let Some(rows) = log {
+        crate::emit_done_log(app, it.id, rows);
+    }
+    for (id, rows) in steps_logs {
+        crate::emit_done_log(app, id, rows);
     }
     Ok(it)
 }
 
-/// The answer saved, with a repeating task's next occurrence, all or nothing: never a task done
-/// whose next one wasn't made (the series would stop there).
-fn save_answer(conn: &Connection, item_id: i64, action: &str, now: i64) -> Result<db::Saved, String> {
+/// The answer saved, with a repeating task's history and next time, all or nothing: never a task
+/// done whose next time wasn't set (the series would stop there).
+pub(crate) fn save_answer(conn: &Connection, item_id: i64, action: &str, now: i64, for_due: Option<i64>) -> Result<db::Saved, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut it = db::get_item(conn, item_id)?;
     // An old notification's button (the task ticked meanwhile, on the board or from another
     // notification, or made an idea): nothing to answer. "Done" again would move when it was
-    // done (into today's look back), a snooze would wake a finished task.
-    if it.done_at.is_some() || it.kind != "task" {
+    // done (into today's look back), a snooze would wake a finished task. Rung for another time:
+    // a repeating task ticked and open again since is at its next occurrence, that one is over,
+    // and "Done" or a snooze would land on the one now. A one-off task moved on the board is
+    // still the same task: its "Done" is done; a snooze for its old time means nothing now.
+    let moved = for_due.is_some_and(|d| it.due_at != Some(d));
+    if it.done_at.is_some() || it.kind != "task" || (moved && (it.repeat.is_some() || action != "done")) {
         return Ok((it, None, vec![]));
     }
     let was_open = it.done_at.is_none();
     let r = rhythm_of(conn, &it);
     apply_answer(&mut it, &r, action, now);
     db::save_ring(conn, &it)?;
-    // A repeating task: its next occurrence.
+    // A repeating task: its history, and its next time (ticked until that day, or open again at
+    // once when that day has come already).
     let done = was_open && it.done_at.is_some();
-    let next = if done { db::spawn_next(conn, &it)? } else { None };
-    let steps = if done { db::after_done(conn, &it)? } else { vec![] };
+    let (log, fresh) = if done { db::finish_tick(conn, item_id, now)? } else { (None, None) };
+    // (Open again at once: its steps start fresh for the next one.)
+    let steps = match fresh {
+        Some(fresh) => fresh,
+        None if done => db::after_done(conn, &db::get_item(conn, item_id)?)?,
+        None => vec![],
+    };
     let steps = steps.into_iter().map(|id| db::get_item(conn, id)).collect::<Result<Vec<_>, _>>()?;
     let saved = db::get_item(conn, item_id)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok((saved, next, steps))
+    Ok((saved, log, steps))
 }
 
 // ---- The tidy-the-inbox reminder ----
@@ -738,16 +781,18 @@ mod tests {
         let due = crate::clock::today_at(now, "09:00").unwrap();
         let it = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Weekly", due_at: Some(due), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
         let it = db::update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "week", "interval": 1})), ..it }).unwrap();
-        // The next occurrence can't be made (here: refused by the file): the answer isn't kept
-        // either, so the task is still open with its rule, and answering again works.
-        c.execute_batch("CREATE TRIGGER no_new BEFORE INSERT ON items BEGIN SELECT RAISE(ABORT, 'disk full'); END;").unwrap();
-        assert!(save_answer(&c, it.id, "done", now).is_err());
+        // Its history can't be written (here: refused by the file): the answer isn't kept
+        // either, so the task is still open at its time, and answering again works.
+        c.execute_batch("CREATE TRIGGER no_new BEFORE INSERT ON done_log BEGIN SELECT RAISE(ABORT, 'disk full'); END;").unwrap();
+        assert!(save_answer(&c, it.id, "done", now, None).is_err());
         let kept = db::get_item(&c, it.id).unwrap();
-        assert!(kept.done_at.is_none() && kept.repeat.is_some());
+        assert!(kept.done_at.is_none() && kept.due_at == Some(due));
         c.execute_batch("DROP TRIGGER no_new").unwrap();
-        let (done, next, _) = save_answer(&c, it.id, "done", now).unwrap();
-        assert!(done.done_at.is_some() && done.repeat.is_none());
-        assert!(next.expect("the next one").repeat.is_some());
+        let (done, log, _) = save_answer(&c, it.id, "done", now, None).unwrap();
+        // One line, ticked, at next week's time, with its history.
+        assert!(done.done_at.is_some() && done.repeat.as_ref().unwrap().get("ticked").is_some());
+        assert_eq!(done.due_at, crate::clock::day_at(due, 7, "09:00"));
+        assert_eq!(log.expect("its history").len(), 1);
     }
 
     #[test]
@@ -880,6 +925,141 @@ mod tests {
     }
 
     #[test]
+    fn a_repeating_task_counts_in_the_look_back_of_each_day_it_was_done_once() {
+        let at = |d: u32, h: u32| crate::repeat::to_ms(jiff::civil::date(2026, 11, d as i8).at(h as i8, 0, 0, 0)).unwrap();
+        let c = db::open(std::path::Path::new(":memory:")).unwrap();
+        let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let it = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Stretch", due_at: Some(at(16, 10)), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
+        c.execute("UPDATE items SET created_at = ?1 WHERE id = ?2", rusqlite::params![at(10, 12), it.id]).unwrap();
+        let it = db::update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1})), ..db::get_item(&c, it.id).unwrap() }).unwrap();
+        // Ticked on Monday: Monday's look back has it once (the line, still ticked, and its history).
+        db::update_item_at(&c, &Item { done_at: Some(at(16, 11)), ..it.clone() }, at(16, 11)).unwrap();
+        assert_eq!(lookback_count(&c, at(16, 0)), Some(1));
+        // Open again on Tuesday (due then): Monday's still has it, from its history; Tuesday's has it open.
+        db::reopen_due(&c, at(17, 8)).unwrap();
+        assert_eq!(lookback_count(&c, at(16, 0)), Some(1));
+        assert_eq!(lookback_count(&c, at(17, 0)), Some(1));
+        // Ticked on Tuesday too: each day once.
+        db::update_item_at(&c, &Item { done_at: Some(at(17, 11)), ..db::get_item(&c, it.id).unwrap() }, at(17, 11)).unwrap();
+        assert_eq!((lookback_count(&c, at(16, 0)), lookback_count(&c, at(17, 0))), (Some(1), Some(1)));
+        // A step done on Wednesday, then the task: Wednesday's has both, and keeps them once the
+        // task opens again on Thursday (its step fresh, unticked).
+        db::reopen_due(&c, at(18, 8)).unwrap();
+        let step = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Mat", due_at: None, parent_id: Some(it.id), alarm: "reminder", link: None, file: None }).unwrap();
+        db::update_item_at(&c, &Item { done_at: Some(at(18, 9)), ..step.clone() }, at(18, 9)).unwrap();
+        db::update_item_at(&c, &Item { done_at: Some(at(18, 11)), ..db::get_item(&c, it.id).unwrap() }, at(18, 11)).unwrap();
+        assert_eq!(lookback_count(&c, at(18, 0)), Some(2));
+        db::reopen_due(&c, at(19, 8)).unwrap();
+        assert_eq!(db::get_item(&c, step.id).unwrap().done_at, None);
+        assert_eq!((lookback_count(&c, at(18, 0)), lookback_count(&c, at(19, 0))), (Some(2), Some(1)));
+        // Ticked on Thursday, then made an idea while it waits (the page keeps its "done"): still
+        // in Thursday's look back, from its history (doneLog.ts `doneBetween` the same).
+        db::update_item_at(&c, &Item { done_at: Some(at(19, 11)), ..db::get_item(&c, it.id).unwrap() }, at(19, 11)).unwrap();
+        assert_eq!(lookback_count(&c, at(19, 0)), Some(1));
+        let idea = db::update_item_at(&c, &Item { kind: "idea".into(), due_at: None, repeat: None, ..db::get_item(&c, it.id).unwrap() }, at(19, 12)).unwrap().0;
+        assert_eq!((idea.kind.as_str(), idea.done_at), ("idea", Some(at(19, 11))));
+        assert_eq!(lookback_count(&c, at(19, 0)), Some(1));
+    }
+
+    #[test]
+    fn a_repeating_task_open_again_rings_for_its_next_time_and_so_do_its_steps() {
+        let at = |d: u32, h: u32, m: u32| crate::repeat::to_ms(jiff::civil::date(2026, 11, d as i8).at(h as i8, m as i8, 0, 0)).unwrap();
+        let c = db::open(std::path::Path::new(":memory:")).unwrap();
+        let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let new = |text: &str, due, parent| db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text, due_at: due, parent_id: parent, alarm: "reminder", link: None, file: None }).unwrap();
+        let task = new("Weekly review", Some(at(16, 10, 0)), None);
+        let task = db::update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1})), ..task }).unwrap();
+        let step = new("Inbox zero", Some(at(16, 9, 0)), Some(task.id));
+        db::update_item_at(&c, &Item { done_at: Some(at(16, 11, 0)), ..task.clone() }, at(16, 11, 0)).unwrap();
+        // Ticked: neither it nor its step rings.
+        assert!(db::timed_items(&c).unwrap().is_empty());
+        // Open again on Tuesday at 08:00: it rings at 10:00, its step (moved on a day with it)
+        // at 09:00.
+        let changed = db::reopen_due(&c, at(17, 8, 0)).unwrap();
+        assert!(changed.iter().any(|x| x.id == task.id));
+        let r = Rhythm::standard();
+        let ring = |id: i64, now: i64| db::timed_items(&c).unwrap().into_iter().find(|x| x.id == id).and_then(|x| due_ring(&x, &r, now));
+        assert!(ring(task.id, at(17, 9, 59)).is_none());
+        assert!(ring(task.id, at(17, 10, 0)).is_some());
+        assert!(ring(step.id, at(17, 9, 0)).is_some());
+    }
+
+    #[test]
+    fn a_task_before_the_day_starts_rings_at_its_own_time_once_open_again() {
+        let at = |d: u32, h: u32, m: u32| crate::repeat::to_ms(jiff::civil::date(2026, 11, d as i8).at(h as i8, m as i8, 0, 0)).unwrap();
+        let c = db::open(std::path::Path::new(":memory:")).unwrap();
+        let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let new = |text: &str, due, alarm| db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text, due_at: due, parent_id: None, alarm, link: None, file: None }).unwrap();
+        let daily = || Some(serde_json::json!({"freq": "day", "interval": 1}));
+        // Every day at 07:00, the day starting at 08:00: open again at 07:00, it rings then.
+        let pills = new("Pills", Some(at(16, 7, 0)), "reminder");
+        let pills = db::update_item(&c, &Item { repeat: daily(), ..pills }).unwrap();
+        db::update_item_at(&c, &Item { done_at: Some(at(16, 7, 10)), ..pills.clone() }, at(16, 7, 10)).unwrap();
+        let ring = |id: i64, now: i64| db::timed_items(&c).unwrap().into_iter().find(|x| x.id == id).and_then(|x| due_ring(&x, &rhythm_of(&c, &x), now));
+        assert!(db::reopen_due(&c, at(17, 6, 59)).unwrap().is_empty());
+        db::reopen_due(&c, at(17, 7, 0) + 3_000).unwrap();
+        assert_eq!(db::get_item(&c, pills.id).unwrap().snooze_until, None, "no minute's wait");
+        assert_eq!(ring(pills.id, at(17, 7, 0) + 3_000).map(|r| r.1), Some(Ring::Due));
+        // A deadline at 10:00 (early rings from 09:00), open at 08:00: they keep their times.
+        let report = new("Report", Some(at(16, 10, 0)), "deadline");
+        let report = db::update_item(&c, &Item { repeat: daily(), ..report }).unwrap();
+        db::update_item_at(&c, &Item { done_at: Some(at(16, 10, 5)), ..report.clone() }, at(16, 10, 5)).unwrap();
+        db::reopen_due(&c, at(17, 8, 0) + 2_000).unwrap();
+        assert!(ring(report.id, at(17, 8, 1)).is_none());
+        assert!(ring(report.id, at(17, 8, 59)).is_none());
+        assert_eq!(ring(report.id, at(17, 9, 0)).map(|r| r.1), Some(Ring::Early));
+        // Opened late (the computer asleep until 09:30, its 07:00 past): a minute's wait, as after
+        // "Not done", never at once.
+        db::update_item_at(&c, &Item { done_at: Some(at(17, 7, 5)), ..db::get_item(&c, pills.id).unwrap() }, at(17, 7, 5)).unwrap();
+        db::reopen_due(&c, at(18, 9, 30)).unwrap();
+        assert!(ring(pills.id, at(18, 9, 30)).is_none());
+        assert!(ring(pills.id, at(18, 9, 31)).is_some());
+    }
+
+    #[test]
+    fn an_old_notification_never_answers_the_next_occurrence() {
+        let at = |d: u32, h: u32, m: u32| crate::repeat::to_ms(jiff::civil::date(2026, 11, d as i8).at(h as i8, m as i8, 0, 0)).unwrap();
+        let c = db::open(std::path::Path::new(":memory:")).unwrap();
+        let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let it = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Stretch", due_at: Some(at(18, 10, 0)), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
+        let it = db::update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1})), ..it }).unwrap();
+        // Wednesday's notification says which time it rang for.
+        let notice = notice_for(&it, Ring::Due, "Hub", at(18, 10, 0));
+        assert!(notice.buttons.iter().any(|(_, a)| a == &format!("ring?item={}&a=done&due={}", it.id, at(18, 10, 0))));
+        // Ticked on the board, open again on Thursday: Wednesday's Done (or snooze) does nothing.
+        db::update_item_at(&c, &Item { done_at: Some(at(18, 10, 5)), ..it.clone() }, at(18, 10, 5)).unwrap();
+        db::reopen_due(&c, at(19, 8, 0)).unwrap();
+        for a in ["done", "snooze:10"] {
+            let (kept, log, _) = save_answer(&c, it.id, a, at(19, 8, 30), Some(at(18, 10, 0))).unwrap();
+            assert_eq!((kept.done_at, kept.due_at, kept.snooze_until, log), (None, Some(at(19, 10, 0)), None, None));
+        }
+        assert_eq!(db::done_log_of(&c, it.id).unwrap().len(), 1);
+        // Thursday's own works; so does one from before notifications said (none given).
+        let (done, _, _) = save_answer(&c, it.id, "done", at(19, 10, 1), Some(at(19, 10, 0))).unwrap();
+        assert_eq!((done.due_at, db::done_log_of(&c, it.id).unwrap().len()), (Some(at(20, 10, 0)), 2));
+        db::reopen_due(&c, at(20, 8, 0)).unwrap();
+        save_answer(&c, it.id, "snooze:10", at(20, 10, 1), None).unwrap();
+        assert!(db::get_item(&c, it.id).unwrap().snooze_until.is_some());
+    }
+
+    #[test]
+    fn a_one_off_task_moved_on_the_board_is_still_done_from_its_old_notification() {
+        let at = |d: u32, h: u32, m: u32| crate::repeat::to_ms(jiff::civil::date(2026, 11, d as i8).at(h as i8, m as i8, 0, 0)).unwrap();
+        let c = db::open(std::path::Path::new(":memory:")).unwrap();
+        let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+        let new = |text: &str| db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text, due_at: Some(at(18, 10, 0)), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
+        // Rang at 10:00, then moved to 15:00 on the board: the 10:00 notification's snooze means
+        // nothing now…
+        let call = new("Call the bank");
+        db::update_item(&c, &Item { due_at: Some(at(18, 15, 0)), ..call.clone() }).unwrap();
+        let (kept, _, _) = save_answer(&c, call.id, "snooze:10", at(18, 10, 5), Some(at(18, 10, 0))).unwrap();
+        assert_eq!((kept.snooze_until, kept.ring_state.as_str()), (None, ""));
+        // …but its Done is done.
+        let (done, log, _) = save_answer(&c, call.id, "done", at(18, 10, 6), Some(at(18, 10, 0))).unwrap();
+        assert_eq!((done.done_at, done.due_at, log), (Some(at(18, 10, 6)), Some(at(18, 15, 0)), None));
+    }
+
+    #[test]
     fn many_waiting_in_the_inbox_never_rings_in_the_night() {
         let c = db::open(std::path::Path::new(":memory:")).unwrap();
         let inbox = db::create_note(&c, "Inbox", "work", "soft", "Sage").unwrap();
@@ -908,7 +1088,7 @@ mod tests {
         let mut s = step.clone();
         apply_ring(&mut s, Ring::Due, now);
         db::save_ring(&c, &s).unwrap();
-        let (_, _, steps) = save_answer(&c, task.id, "done", now).unwrap();
+        let (_, _, steps) = save_answer(&c, task.id, "done", now, None).unwrap();
         assert_eq!((steps.len(), steps[0].ring_state.as_str()), (1, ""));
         assert!(db::timed_items(&c).unwrap().is_empty());
     }
@@ -968,15 +1148,15 @@ mod tests {
         let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
         let now = db::now_ms();
         let it = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Pay", due_at: Some(now), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
-        let (done, _, _) = save_answer(&c, it.id, "done", now - 3 * 60 * MIN).unwrap();
+        let (done, _, _) = save_answer(&c, it.id, "done", now - 3 * 60 * MIN, None).unwrap();
         for a in ["done", "snooze:10", "onit", "notyet", "until:99999999999999"] {
-            let (again, next, _) = save_answer(&c, it.id, a, now).unwrap();
+            let (again, next, _) = save_answer(&c, it.id, a, now, None).unwrap();
             assert!(next.is_none());
             assert_eq!((again.done_at, again.snooze_until, again.on_it_at, again.check_at), (done.done_at, None, None, None), "{a}");
         }
         // An idea now: a "Done" from the notification it had as a task doesn't tick it.
         let idea = db::create_item(&c, db::NewItem { note_id: n.id, kind: "idea", text: "Maybe", due_at: None, parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
-        assert!(save_answer(&c, idea.id, "done", now).unwrap().0.done_at.is_none());
+        assert!(save_answer(&c, idea.id, "done", now, None).unwrap().0.done_at.is_none());
     }
 
     #[test]
@@ -987,7 +1167,7 @@ mod tests {
         let due = now - 30 * MIN;
         let it = db::create_item(&c, db::NewItem { note_id: n.id, kind: "task", text: "Pay", due_at: Some(due), parent_id: None, alarm: "reminder", link: None, file: None }).unwrap();
         // It rang, then was snoozed for an hour.
-        save_answer(&c, it.id, "snooze:60", now).unwrap();
+        save_answer(&c, it.id, "snooze:60", now, None).unwrap();
         let before = db::get_item(&c, it.id).unwrap();
         assert_eq!(before.ring_state, "snoozed");
         // Deleted, then Undo: still snoozed, quiet until then.

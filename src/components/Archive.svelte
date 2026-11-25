@@ -8,6 +8,7 @@
   // asks first, and is one step Undo takes back whole.
   // Opened from the board's right-click menu, the "See archive" of an Archived toast, or
   // Settings › Archive (then Back goes to Settings).
+  import { doneOrder } from "../lib/doneOrder";
   import Icon from "./Icon.svelte";
   import StepTrace from "./StepTrace.svelte";
   import ViewHeader, { type Crumb } from "./ViewHeader.svelte";
@@ -49,13 +50,12 @@
     confirmEmpty = false;
   }
 
-  /** The first lines, as the note shows them: open tasks, then done ones, then ideas. */
+  /** The first lines, as the note shows them: its tasks (done ones last only when it puts them
+   * there), then its ideas. */
   function preview(n: Note): { tasks: Item[]; ideas: Item[]; more: number } {
     const lines = store.itemsByNote.get(n.id) ?? [];
-    const open = lines.filter((i) => i.kind === "task" && i.done_at == null);
-    const done = lines.filter((i) => i.kind === "task" && i.done_at != null);
     const ideas = lines.filter((i) => i.kind === "idea");
-    const tasks = [...open, ...done].slice(0, 3);
+    const tasks = doneOrder(lines.filter((i) => i.kind === "task"), n.done_last).slice(0, 3);
     const shownIdeas = ideas.slice(0, Math.max(0, 4 - tasks.length));
     return { tasks, ideas: shownIdeas, more: lines.length - tasks.length - shownIdeas.length };
   }

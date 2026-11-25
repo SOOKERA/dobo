@@ -5,6 +5,7 @@
   // progress, Make it a task and Delete on hover, its link / file and its steps. Double-click (or
   // Enter on the board) edits it; press and drag the words to carry it elsewhere. The tint comes
   // from where it sits (--tint, --idea-ink, --corner).
+  import { DoneHold, glideOrder } from "../lib/doneHold.svelte";
   import { composing } from "../lib/compose";
   import Icon from "./Icon.svelte";
   import ItemRow from "./ItemRow.svelte";
@@ -23,7 +24,16 @@
 
   let editing = $state(false);
   let draft = $state("");
-  let steps = $derived(store.stepsOf.get(item.id) ?? NO_ITEMS);
+  // (Its steps follow its note: done ones after the others only when the note asks for it.)
+  // (A step just ticked keeps its place a moment, then glides to the end: lib/doneHold.)
+  const hold = new DoneHold();
+  $effect(() => () => hold.stop());
+  let steps = $derived(hold.order(store.stepsOf.get(item.id) ?? NO_ITEMS, store.doneLastIds.has(item.note_id)));
+  let stepsEl = $state<HTMLUListElement>();
+  glideOrder(
+    () => stepsEl,
+    () => steps.map((i) => i.id),
+  );
   let stepsDone = $derived(steps.filter((s) => s.done_at != null).length);
   let focused = $derived(store.focus?.item === item.id);
   let dropHere = $derived(itemDrag.target?.kind === "idea" && itemDrag.target.id === item.id);
@@ -91,7 +101,7 @@
   {#if item.link}<div class="idea-attach" data-menu-line={item.id} transition:fold use:snap={lined}><LinkCard link={item.link} /></div>{/if}
   {#if item.file}<div class="idea-attach" data-menu-line={item.id} transition:fold use:snap={lined}><FileCard path={item.file} /></div>{/if}
   {#if steps.length}
-    <ul class="idea-steps" transition:fold>
+    <ul class="idea-steps" bind:this={stepsEl} transition:fold>
       {#each steps as s (s.id)}
         <ItemRow item={s} nested tint />
       {/each}

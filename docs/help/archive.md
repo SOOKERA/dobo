@@ -8,7 +8,7 @@ Open the note's menu (its coloured dot or **⋯**) › **Archive note**. The not
 
 ## Open the Archive
 
-- **Archive (2)** under your notes, on the left, while some notes are archived.
+- **Archive (2)** at the bottom right, beside the note sizes, while some notes are archived. In a narrow window it is its icon alone, with the count on it.
 - The board's right-click menu › **Archived notes…**
 - The header's **⋯** menu › **Archive**.
 - The **?** menu at the board's corner › **Archive**.

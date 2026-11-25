@@ -22,6 +22,7 @@
   import Toast from "./components/Toast.svelte";
   import LookBack from "./components/LookBack.svelte";
   import Templates from "./components/Templates.svelte";
+  import RepeatHistory from "./components/RepeatHistory.svelte";
   import Archive from "./components/Archive.svelte";
   import Report from "./components/Report.svelte";
   import WhatsNew from "./components/WhatsNew.svelte";
@@ -36,7 +37,7 @@
   import { heldBy, lookIsDark } from "./lib/looks";
   import { store, SIZES } from "./lib/store.svelte";
   import type { BoardPoint } from "./lib/newNote";
-  import { inTauri, type EventName } from "./lib/backend";
+  import { blankItem, inTauri, type EventName } from "./lib/backend";
   import { boardCovered, closeTopLayer, layerBack, layerCount, layerForward, pushLayer } from "./lib/layers";
   import { copyOffer, menuTargetOf, selectedAt, type CopyOffer, type Point } from "./lib/contextmenu";
   import { askMenu, atPointer, fromKeys, noteMenuKey, rightClick, swallowed, takeMenu } from "./lib/rightclick.svelte";
@@ -52,8 +53,7 @@
   import { warmStyle } from "./lib/warm";
   import { rehearse } from "./lib/rehearse";
   import { installWindowDrag } from "./lib/windrag";
-  import { arrive, fadeQuick, pop, rise } from "./lib/motion";
-  import Icon from "./components/Icon.svelte";
+  import { arrive, fadeQuick, pop } from "./lib/motion";
   import { i18n, keysText, t, type Key } from "./lib/i18n.svelte";
   import { untrack } from "svelte";
 
@@ -211,6 +211,11 @@
           [Report, { from: "board", onBack: none, onClose: none }],
           [WhatsNew, { from: "board", shown: { entries: bundled(i18n.lang).slice(0, 2), since: "1.0.0" }, onBack: none, onClose: none }],
           [Templates, { onClose: none }],
+          // (A repeating task's History card, for a line that is nowhere: only built.)
+          [RepeatHistory, { item: blankItem({ id: -1, note_id: -1, due_at: Date.now(), repeat: { freq: "day", interval: 1, ends: { kind: "never" } } }), onBack: none, onClose: none }],
+          // (…and a weekly and a monthly one's: a year of weeks, a year of months.)
+          [RepeatHistory, { item: blankItem({ id: -1, note_id: -1, due_at: Date.now(), repeat: { freq: "week", interval: 2, days: [1, 4], ends: { kind: "never" } } }), onBack: none, onClose: none }],
+          [RepeatHistory, { item: blankItem({ id: -1, note_id: -1, due_at: Date.now(), repeat: { freq: "month", interval: 1, monthday: 1, ends: { kind: "never" } } }), onBack: none, onClose: none }],
         ]),
       1500,
     );
@@ -1040,8 +1045,6 @@
 
   // ---- The docked panel's width, dragged by its inner edge ----
   let resizing = $state(false);
-  /** The board's "Archive (n)" link is fading out (its room stays until it is gone). */
-  let archiveLeaving = $state(false);
   function gripDown(e: PointerEvent) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -1271,7 +1274,6 @@
         class:textured={!["plain", "paper", "dotted"].includes(look.active.bg)}
         class:dark-board={lookIsDark(look.active)}
         class:held={heldBy(look.active) !== "none"}
-        class:to-archive-room={store.archived.length > 0 || archiveLeaving}
         oncontextmenu={boardMenu}
       >
         <!-- The evening's look back (or today's, from its button): whole, at the top of the board,
@@ -1289,15 +1291,7 @@
         {#if !store.boardNotes.length && !itemDrag.item}
           <p class="nothing" in:arrive={{ delay: 160, duration: 280, y: 6 }} out:fadeQuick={{ duration: 120 }}>{t("No notes here yet. Type a line with #name to start one.")}</p>
         {/if}
-        <!-- Under the last notes, at the left (clear of the note sizes and "?" at the right corner):
-             the way to the notes put away, while there are some. -->
-        {#if store.archived.length}
-          <div class="to-archive" class:alone={!store.boardNotes.length} class:hushed={!!itemDrag.item} transition:rise={{ y: 6, duration: 240 }} onoutrostart={() => (archiveLeaving = true)} onoutroend={() => (archiveLeaving = false)} onintrostart={() => (archiveLeaving = false)}>
-            <button data-tip={t("Open the archive")} onclick={() => openArchive("board")}
-              ><Icon name="archive" size={14} stroke={1.8} /><span>{t("Archive ({n})", { n: store.archived.length })}</span></button
-            >
-          </div>
-        {/if}
+        <!-- (The way to the notes put away sits by the note sizes, at the corner: SizeControl.) -->
       </div>
       <SizeControl />
     </div>
@@ -1653,47 +1647,6 @@
     font-size: var(--t-sm);
     font-weight: 600;
     pointer-events: none;
-  }
-  /* 12 px under the notes. It takes the room kept there for the corner controls, and the board
-     ends 20 px under it: scrolled to the end, it sits in one row with the note sizes and "?". */
-  .scroll.to-archive-room {
-    padding-bottom: 20px;
-  }
-  .scroll.to-archive-room .zoom {
-    padding-bottom: 0;
-  }
-  .to-archive {
-    margin-top: 12px;
-    display: flex;
-    transition: opacity 0.18s var(--ease-glide);
-  }
-  .to-archive.alone {
-    margin-top: var(--s4);
-  }
-  /* While a line is carried, the "+ New note" card may reach down over it (Board.svelte): it steps
-     aside, without moving. */
-  .to-archive.hushed {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .to-archive button {
-    height: 28px;
-    padding: 0 11px 0 9px;
-    border: 0;
-    border-radius: var(--r-md);
-    background: color-mix(in srgb, var(--ground) 88%, transparent);
-    color: var(--muted);
-    font-size: var(--t-sm);
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
-  }
-  .to-archive button:hover,
-  .to-archive button:focus-visible {
-    background: var(--card);
-    color: var(--ink);
   }
   .nothing {
     width: fit-content;

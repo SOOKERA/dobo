@@ -31,6 +31,8 @@ const BACK: Partial<Record<Key, [Key, Key]>> = {
   Renamed: ["Old name back", "New name back"],
   "Colour changed": ["Old colour back", "New colour back"],
   "Paper changed": ["Old paper back", "New paper back"],
+  "Done tasks moved to the end": ["Done tasks back in place", "Done tasks at the end again"],
+  "Done tasks kept in place": ["Done tasks at the end again", "Done tasks back in place"],
   "Line moved": ["Line back in its place", "Line moved again"],
   Moved: ["Line back in its place", "Line moved again"],
   "Time set": ["Time change undone", "Time change redone"],

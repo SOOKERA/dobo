@@ -16,8 +16,10 @@ import { thumbs } from "./thumbs.svelte";
 import { copyText } from "./contextmenu";
 import { lineInNote, titleFromLine } from "./lineNote";
 import { blankIds, blanksOf, isBlank, spaceForSpot, withoutBlank, type BlankIds, type BoardPoint } from "./newNote";
+import { daysApart, nextOne, shiftDays, waitsUntil } from "./doneLog";
 import type {
   Alarm,
+  Done,
   Item,
   Kind,
   LinkPreview,
@@ -51,6 +53,8 @@ export interface Template {
   palette: PaletteName;
   color: string;
   paper: Paper;
+  /** Its notes put their done tasks at the end (else where they are). */
+  done_last?: boolean;
   lines: TemplateLine[];
 }
 
@@ -91,6 +95,9 @@ export const defaultShortcuts: Shortcuts = { toggle: "Ctrl+Shift+Space", dump: "
 
 const RING_ORDER: Record<string, number> = { check: 0, ringing: 1, early: 2 };
 
+/** The reminder clock's own fields: never put back by an undo (the backend keeps its own). */
+const RING_KEYS = new Set<keyof Item>(["ring_state", "rings", "last_ring_at", "snooze_until", "on_it_at", "check_at"]);
+
 /** The list of nothing: one for all (a new empty list each time would look like a change). */
 export const NO_ITEMS: Item[] = [];
 export const NO_PICTURES: Picture[] = [];
@@ -130,6 +137,13 @@ function keepRows<T extends { id: number }>(was: T[], next: T[]): T[] {
   return same ? was : out;
 }
 
+/** Unticking a repeating task's ticked copy (`prev`) came back as the open line it already was
+ * (the board kept that copy from before it opened again): a real untick goes back to the time
+ * ticked, with its count as it was; this one is still at its time, with its count. */
+export function staleUntick(prev: Item, saved: Item): boolean {
+  return prev.done_at != null && !!prev.repeat?.ticked && saved.done_at == null && !saved.repeat?.ticked && saved.due_at === prev.due_at && saved.repeat?.done === prev.repeat.done;
+}
+
 /** How long a note takes to fade off the board (Board.svelte's noteLeaves). */
 const LEAVE_MS = 240;
 
@@ -140,6 +154,8 @@ class Store {
   notes = $state.raw<Note[]>([]);
   items = $state.raw<Item[]>([]);
   pictures = $state.raw<Picture[]>([]);
+  /** Repeating tasks' history: each time one was done (the History card, the look back). */
+  doneLog = $state.raw<Done[]>([]);
   settings = $state<Record<string, unknown>>({});
   view = $state<SpaceView>("all");
   win = $state<WindowInfo>({ mode: "docked", chosen: "docked", docked_possible: true, side: "right", float_on_top: false, width: 720 });
@@ -299,21 +315,64 @@ class Store {
     const found = this.items.find((x) => x.id === next.id);
     const prev = found ? ($state.snapshot(found) as Item) : undefined;
     next = $state.snapshot(next) as Item;
+    // (A ticked repeating task waiting for its next day: the change may open it at once, its
+    // steps fresh; as they are now, for that Undo.)
+    const steps = label && prev && waitsUntil(prev, this.day) != null ? this.snapshotItem(prev).items.filter((x) => x.id !== prev.id) : null;
     this.replaceItem(next);
+    const had = this.doneLog;
+    const shown = this.logTick(prev, next);
+    const unshown = had.filter((r) => !this.doneLog.includes(r));
     const saved = await this.api.updateItem(next);
     this.replaceItem(saved);
+    // (A tick the backend didn't take, the copy being from another moment of the line, db.rs
+    // `not_stale`: no time of it in the history. An untick it didn't take: its time back.)
+    if (shown != null && saved.done_at != null && saved.done_at !== next.done_at) this.doneLog = this.doneLog.filter((r) => r.id !== shown);
+    if (unshown.length && saved.done_at != null) this.doneLog = [...this.doneLog, ...unshown.filter((r) => !this.doneLog.some((x) => x.id === r.id))];
     if (label && prev) {
-      const keys = changedKeys(prev, next);
-      this.history.record({ label, undo: () => this.revertItem(prev, keys), redo: () => this.revertItem(next, keys) });
+      // (With what the backend changed with it: "Repeat removed" on a ticked task also takes it
+      // back to the time ticked, and its Undo gives that time back too. Not when the backend
+      // kept the line's own "done", time and rule (a copy from another moment, `not_stale`), nor
+      // when the change opened it at once: those are not this change's, and an Undo of them
+      // would undo what the copy never saw.)
+      const kept = saved.done_at !== next.done_at || (saved.done_at == null && !!next.repeat?.ticked && !saved.repeat?.ticked);
+      const keys = [...new Set([...changedKeys(prev, next), ...(kept ? [] : changedKeys(prev, saved))])].filter((k) => !RING_KEYS.has(k));
+      this.history.record({ label, undo: () => (steps ? this.backToWaiting(prev, keys, steps) : this.revertItem(prev, keys)), redo: () => this.revertItem(next, keys) });
     }
     return saved;
+  }
+
+  /** Undo of a change to a ticked repeating task waiting for its next day (`prev`; `steps`, its
+   * steps then). When that change opened it at once (its time set earlier today), it goes back
+   * to waiting exactly as it was: ticked, its time, its rule and count, its steps as they were,
+   * its history as it is (never a second time in it), all in one go (`undoTick`). Otherwise
+   * (still waiting, open on its own day since, ticked again), the change alone is undone. */
+  private async backToWaiting(prev: Item, keys: (keyof Item)[], steps: Item[]) {
+    const now = this.items.find((x) => x.id === prev.id);
+    const opens = waitsUntil(prev, this.day);
+    if (now && now.done_at == null && opens != null && Date.now() < opens && (now.repeat?.done ?? 0) === (prev.repeat?.done ?? 0)) {
+      const want = withFields($state.snapshot(now) as Item, prev, [...new Set<keyof Item>([...keys, "done_at", "due_at", "repeat"])]);
+      return this.undoTick(want, null, steps, prev.repeat?.ticked?.due ?? null);
+    }
+    return this.revertItem(prev, keys);
   }
 
   /** An undo or redo of a change to a line: only the fields that change made, onto the line as it
    * is now (`withFields`). */
   private async revertItem(want: Item, keys: (keyof Item)[]) {
     const now = this.items.find((x) => x.id === want.id);
-    await this.putItem(now ? withFields($state.snapshot(now) as Item, want, keys) : want, null);
+    if (!now) return void (await this.putItem(want, null));
+    const line = withFields($state.snapshot(now) as Item, want, keys);
+    // (A change made while it waited ticked for its next day, undone or redone once it is open
+    // again: its time and its rule, never its tick. An open line never takes a `ticked`, db.rs
+    // `not_stale`, which would keep the line and lose the Undo; nor a tick from it: it would be
+    // open by now anyway.)
+    if (now.done_at == null && line.repeat?.ticked) {
+      const repeat = { ...line.repeat };
+      delete repeat.ticked;
+      line.repeat = repeat;
+      line.done_at = null;
+    }
+    await this.putItem(line, null);
   }
 
   /** The same for a note. */
@@ -386,6 +445,7 @@ class Store {
     this.notes = [...all.notes, ...this.notes.filter((n) => inMemory(n.id))];
     this.items = [...all.items, ...this.items.filter((i) => inMemory(i.id))];
     this.pictures = all.pictures ?? [];
+    this.doneLog = all.done_log ?? [];
     thumbs.fill(this.api, this.pictures);
   }
 
@@ -558,6 +618,9 @@ class Store {
 
   /** Each note's space (a look-up instead of a search through the notes for every line). */
   private spaceOfNote = $derived(new Map(this.notes.map((n) => [n.id, n.space])));
+  /** The notes that put their done tasks at the end (a look-up for every line and step, never a
+   * search through the notes). */
+  doneLastIds = $derived(new Set(this.notes.filter((n) => n.done_last).map((n) => n.id)));
 
   /** Open lines waiting in the Inbox (of the space showing; both when All). The tour's sample
    * line counts, as if just dumped, also while "Or make it a step" shows it as one; the bigger
@@ -599,6 +662,11 @@ class Store {
       this.error = String(e);
     }
     this.api.onEvent("item-updated", (p) => this.upsertItem(p as Item));
+    // A repeating task's history, as the notes file has it now.
+    this.api.onEvent("done-log", (p) => {
+      const { item_id, rows } = p as { item_id: number; rows: Done[] };
+      this.setLog(item_id, rows);
+    });
     // A picture pasted in the quick dump bar.
     this.api.onEvent("picture-added", (p) => {
       const pic = p as Picture;
@@ -621,6 +689,7 @@ class Store {
     this.notes = keepRows(this.notes, all.notes);
     this.items = keepRows(this.items, all.items);
     this.pictures = keepRows(this.pictures, all.pictures ?? []);
+    this.doneLog = keepRows(this.doneLog, all.done_log ?? []);
     thumbs.fill(this.api, this.pictures);
     if (!sameValue($state.snapshot(this.settings), all.settings)) this.settings = all.settings;
     i18n.choice = readChoice(all.settings.language);
@@ -641,6 +710,30 @@ class Store {
   private replaceNote(n: Note) {
     this.notes = this.notes.map((x) => (x.id === n.id ? n : x));
   }
+  /** A line's history, all of it. */
+  private setLog(itemId: number, rows: Done[]) {
+    this.doneLog = [...this.doneLog.filter((r) => r.item_id !== itemId), ...rows].sort((a, b) => a.done_at - b.done_at || a.id - b.id);
+  }
+
+  /** The history a tick or an untick makes, shown at once (the backend's own comes a moment
+   * later: `done-log`). Returns the id of the time a tick shows (null: none). */
+  private logTick(before: Item | undefined, after: Item): number | null {
+    if (!before || after.kind !== "task" || !(after.repeat ?? before.repeat)) return null;
+    if (before.done_at == null && after.done_at != null) {
+      const id = -(++this.provisional);
+      this.doneLog = [...this.doneLog, { id, item_id: after.id, due_at: before.due_at, done_at: after.done_at }];
+      return id;
+    }
+    if (before.done_at != null && after.done_at == null) this.doneLog = this.doneLog.filter((r) => !(r.item_id === after.id && r.done_at === before.done_at));
+    return null;
+  }
+  private provisional = 0;
+
+  /** A line's history (oldest first). */
+  logOf(itemId: number): Done[] {
+    return this.doneLog.filter((r) => r.item_id === itemId);
+  }
+
   private replaceItem(i: Item) {
     this.items = this.items.map((x) => (x.id === i.id ? i : x));
   }
@@ -822,27 +915,81 @@ class Store {
     return it;
   }
 
+  /** Ticks a task, or unticks it. A repeating task stays one line: ticked, it goes into its
+   * history and waits, ticked, for its next occurrence's day (the backend opens it again then,
+   * its steps fresh); unticked while it waits, it is back as it was. */
   async toggleDone(it: Item) {
     if (inMemory(it.id)) return;
     const prev = $state.snapshot(this.items.find((x) => x.id === it.id) ?? it) as Item;
+    // (Its steps as they were: opening again makes them fresh, and Undo gives them back.)
+    const steps = prev.repeat && prev.done_at == null ? this.snapshotItem(prev).items.filter((x) => x.id !== prev.id) : [];
     const next = { ...prev, done_at: prev.done_at == null ? Date.now() : null };
-    await this.putItem(next, null);
+    const saved = await this.putItem(next, null);
+    // (A ticked copy kept from before it opened again: the backend keeps the open line as it is,
+    // `not_stale`. Nothing changed, nothing to undo: an Undo would tick it again.)
+    if (staleUntick(prev, saved)) return;
+    // (The same for a tick of an open copy kept from before a tick it never saw, a
+    // notification's Done: the line stays ticked as it was.)
+    if (next.done_at != null && saved.done_at != null && saved.done_at !== next.done_at) return;
+    // (And an untick it never took: a second click on its box before the tick came back, from a
+    // copy that never saw it move on. It stays ticked, with nothing to undo.)
+    if (next.done_at == null && saved.done_at != null) return;
+    // (Yesterday's ticked this morning: today's is already here, open at once. Said, so the tick
+    // that went never looks lost.)
+    if (next.done_at != null && saved.done_at == null && saved.due_at != null && saved.repeat) {
+      const due = saved.due_at;
+      this.showToast(() => tr("Done · {next}", { next: nextOne(due, new Date()) }), { label: () => tr("Undo"), run: () => void this.undo() });
+    }
     this.history.record({
       label: next.done_at != null ? "Done" : "Not done",
-      undo: async () => {
-        // A repeating task: its next occurrence goes away again.
-        if (prev.done_at == null && prev.repeat) {
-          const spawned = this.items.find((x) => x.id !== prev.id && x.note_id === prev.note_id && x.text === prev.text && x.repeat && x.done_at == null && x.created_at >= (next.done_at ?? 0) - 1000);
-          if (spawned) {
-            this.removeLocal([spawned.id]);
-            await this.api.deleteItem(spawned.id);
-          }
-        }
-        // (The rule too: the backend moved it to the next occurrence.)
-        await this.revertItem(prev, ["done_at", "repeat"]);
-      },
+      undo: () => (next.done_at != null && prev.repeat ? this.untickRepeat(prev, next.done_at, saved, steps) : this.revertItem(prev, ["done_at"])),
       redo: () => this.revertItem(next, ["done_at"]),
     });
+  }
+
+  /** Undo of a repeating task's "Done" (`doneAt`, from `prev`; `steps`, its steps then): back
+   * to the occurrence ticked, that time out of its history. While it still waits for its next
+   * day, unticking it does all that (the backend gives back what the tick moved). Ticked again
+   * since at another time (its next one, from a notification), only that time leaves its
+   * history: the line stays as it is, never two times undone at once. Once open again (its next
+   * day came, or at once) with only that tick behind it (`ticked`: the line as that tick left
+   * it), its time and its rule go back as they were, its steps too, and that time leaves its
+   * history, all in one go (`undoTick`: the reminder clock never rings it in between); moved on
+   * further since (ticked again and open again), only that time leaves it. */
+  private async untickRepeat(prev: Item, doneAt: number, ticked: Item, steps: Item[] = []) {
+    const now = this.items.find((x) => x.id === prev.id);
+    if (!now || now.done_at === doneAt) return this.revertItem(prev, ["done_at"]);
+    this.doneLog = this.doneLog.filter((r) => !(r.item_id === prev.id && r.done_at === doneAt));
+    // (Counted by the rule's count, as that tick left it: a tick a few days late moves it on past
+    // the ones missed in one go.)
+    if (now.done_at == null && (now.repeat?.done ?? 0) === (ticked.repeat?.done ?? 0)) {
+      return this.undoTick(withFields($state.snapshot(now) as Item, prev, ["done_at", "due_at", "repeat"]), doneAt, steps, prev.due_at);
+    }
+    this.setLog(prev.id, await this.api.forgetDone(prev.id, doneAt));
+  }
+
+  /** The line put back as it was before what opened it (`want`), in one go with its steps and,
+   * with `forget`, that tick's time out of its history (the backend's `undo_tick`). The steps
+   * given back are those its opening made fresh (unticked, moved on by as many days as it moved,
+   * from the occurrence `from` to the one it is open at: the backend's `fresh_steps`), back
+   * exactly as they were, their reminders too, and the times they were done out of the history
+   * again (the opening kept them there); one changed since (ticked, its time changed, moved
+   * under another line) stays as it is. */
+  private async undoTick(want: Item, forget: number | null, steps: Item[], from: number | null) {
+    const now = this.items.find((x) => x.id === want.id);
+    const days = from != null && now?.due_at != null ? daysApart(from, now.due_at) : null;
+    const back = steps.filter((was) => {
+      const s = this.items.find((x) => x.id === was.id);
+      if (!s || s.kind !== "task" || s.repeat || s.parent_id !== was.parent_id) return false;
+      return s.done_at == null && (was.due_at == null ? s.due_at == null : days != null && s.due_at === shiftDays(was.due_at, days));
+    });
+    const r = await this.api.undoTick(want, forget, back);
+    this.replaceItem(r.item);
+    for (const s of r.steps) this.replaceItem(s);
+    const given = new Set(back.map((s) => s.id));
+    const gone = new Set(r.steps.flatMap((s) => (given.has(s.id) && s.done_at != null ? [`${s.id}:${s.done_at}`] : [])));
+    this.doneLog = this.doneLog.filter((x) => !gone.has(`${x.item_id}:${x.done_at}`));
+    this.setLog(want.id, r.log);
   }
 
   async editItem(it: Item, text: string, due?: number | null) {
@@ -876,11 +1023,13 @@ class Store {
     this.showToast(() => tr("{what}: “{text}”", { what: tr(label), text: it.text.length > 40 ? it.text.slice(0, 38) + "…" : it.text }), { label: () => tr("Undo"), run: () => void this.undo() });
   }
 
-  /** Ctrl+Up / Ctrl+Down: swaps a line with its neighbour (same note, same level, same kind). */
+  /** Ctrl+Up / Ctrl+Down: swaps a line with its neighbour as shown (same note, same level, same
+   * kind; done tasks among their own only when the note puts them at the end). */
   async moveLine(it: Item, dir: -1 | 1) {
     if (inMemory(it.id)) return;
+    const apart = this.doneLastIds.has(it.note_id);
     const sibs = this.items
-      .filter((x) => x.note_id === it.note_id && (x.parent_id ?? null) === (it.parent_id ?? null) && x.kind === it.kind && (x.done_at == null) === (it.done_at == null))
+      .filter((x) => x.note_id === it.note_id && (x.parent_id ?? null) === (it.parent_id ?? null) && x.kind === it.kind && (!apart || (x.done_at == null) === (it.done_at == null)))
       .sort((a, b) => a.sort - b.sort || a.id - b.id);
     const i = sibs.findIndex((x) => x.id === it.id);
     const other = sibs[i + dir];
@@ -1072,6 +1221,11 @@ class Store {
 
   async setFolded(n: Note, folded: boolean) {
     await this.putNote({ ...n, folded }, folded ? "Folded" : "Unfolded");
+  }
+
+  /** Its done tasks after the open ones, or where they are (the default). */
+  async setDoneLast(n: Note, done_last: boolean) {
+    await this.putNote({ ...n, done_last }, done_last ? "Done tasks moved to the end" : "Done tasks kept in place");
   }
 
   async setPaper(n: Note, paper: Paper) {
@@ -1274,14 +1428,15 @@ class Store {
   async saveTemplate(n: Note) {
     if (inMemory(n.id)) return;
     const lines: TemplateLine[] = (this.itemsByNote.get(n.id) ?? [])
-      .filter((i) => i.done_at == null && !inMemory(i.id))
+      // (A repeating task ticked and waiting for its next day is still one of its tasks.)
+      .filter((i) => (i.done_at == null || i.repeat?.ticked) && !inMemory(i.id))
       .map((i) => ({
         kind: i.kind,
         text: i.text,
         deadline: i.alarm === "deadline" || undefined,
         steps: (this.stepsOf.get(i.id) ?? []).map((s) => s.text),
       }));
-    const t: Template = { id: Date.now(), name: n.title, palette: n.palette, color: n.color, paper: n.paper ?? "plain", lines };
+    const t: Template = { id: Date.now(), name: n.title, palette: n.palette, color: n.color, paper: n.paper ?? "plain", ...(n.done_last ? { done_last: true } : {}), lines };
     // (One of the same name is replaced: Undo brings it back.)
     const said = () => tr("Saved “{name}” as a template", { name: noteTitle(n) });
     await this.putTemplates([...this.templates.filter((x) => x.name !== t.name), t], said);
@@ -1321,7 +1476,7 @@ class Store {
     // once (Esc) leaves it so, as if never made (dropNew).
     const was = at ? { steps: structuredClone($state.snapshot(this.settings.board_steps ?? null)) as SavedSteps | null, order: [...this.notes].sort((a, b) => a.sort - b.sort).map((x) => x.id) } : null;
     let n = await this.api.createNote(name, space, t?.palette ?? c.palette, t?.color ?? c.color);
-    if (t && t.paper !== "plain") n = await this.api.updateNote({ ...n, paper: t.paper });
+    if (t && (t.paper !== "plain" || t.done_last)) n = await this.api.updateNote({ ...n, paper: t.paper, done_last: !!t.done_last });
     this.notes = [...this.notes, n];
     // (In the same moment as it comes on the board: it is never seen at the end first.)
     // (Only a note whose title waits is remembered so: only it can be taken away as if never made.)

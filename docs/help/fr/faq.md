@@ -21,7 +21,7 @@ Une ligne sans **#note** va dans « À trier », le bandeau en haut du tablea
 Cliquez sur **Ajouter** au bas de la note (ou dans son espace vide), ou écrivez la ligne avec **#** et le nom de la note dans la ligne de saisie.
 
 **J’ai archivé une note. Comment la retrouver ?**
-Ouvrez les Archives (**Archives (2)** en bas du tableau, ou le menu **?**) et cliquez sur **Restaurer**. Voir [Archives](archive.md).
+Ouvrez les Archives (**Archives (2)** en bas à droite du tableau, ou le menu **?**) et cliquez sur **Restaurer**. Voir [Archives](archive.md).
 
 **Comment revoir la visite ?**
 **Faire la visite** dans le menu **?** au coin du tableau (**F1**), le menu **⋯** de l’en-tête, le clic droit sur le tableau, ou **Paramètres › Aide**.

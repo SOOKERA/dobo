@@ -44,11 +44,13 @@ describe("a note says it's all done", () => {
     expect(allDone([idea(1), task(2, true, { parent_id: 1 })], false, NOW)).toBe(false);
   });
 
-  it("not for a ticked repeating task about to come back (no flash before its next time arrives)", () => {
+  it("not for a repeating task just ticked, before it has moved on (no flash if it comes straight back)", () => {
     const due = new Date(2026, 10, 23, 10).getTime();
     expect(allDone([task(1, true, { due_at: due, repeat: weekly })], false, NOW)).toBe(false);
-    // Once its next time is made, the ticked one has no rule left and the new one is open.
-    expect(allDone([task(1, true, { due_at: due }), task(2, false, { due_at: due + 7 * 864e5, repeat: { ...weekly, done: 1 } })], false, NOW)).toBe(false);
+    // Moved on, ticked and waiting for its next day: done until then, like any task.
+    expect(allDone([task(1, true, { due_at: due + 7 * 864e5, repeat: { ...weekly, done: 1, ticked: { due, done: 0 } } })], false, NOW)).toBe(true);
+    // Open again at its next day: to do.
+    expect(allDone([task(1, false, { due_at: due + 7 * 864e5, repeat: { ...weekly, done: 1 } })], false, NOW)).toBe(false);
     // A rule that has ended: nothing comes back, so the note is done.
     expect(allDone([task(1, true, { due_at: due, repeat: { ...weekly, ends: { kind: "after", count: 1 } } })], false, NOW)).toBe(true);
   });

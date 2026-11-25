@@ -459,6 +459,15 @@ fn open_checked(file: &Path) -> Result<rusqlite::Connection, String> {
             return Err(tr!("That folder isn’t a Dobo backup. Nothing was changed.", "Ce dossier n’est pas une sauvegarde Dobo. Rien n’a été changé."));
         }
     }
+    // Repeating tasks' history (1.2.1), when it has one: as Dobo keeps it, or the notes it brings
+    // couldn't be read once put back (an older backup has none: it is made when restored).
+    let cols: Vec<String> = src
+        .prepare("SELECT name FROM pragma_table_info('done_log')")
+        .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+        .map_err(|e| bad(&e))?;
+    if !cols.is_empty() && !["id", "item_id", "due_at", "done_at"].iter().all(|c| cols.iter().any(|x| x == c)) {
+        return Err(tr!("That folder isn’t a Dobo backup. Nothing was changed.", "Ce dossier n’est pas une sauvegarde Dobo. Rien n’a été changé."));
+    }
     Ok(src)
 }
 
@@ -1517,6 +1526,26 @@ mod tests {
             assert!(root.join(other).is_dir(), "{other} isn't Dobo's");
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A backup whose repeating tasks' history isn't as Dobo keeps it (another app's, a future
+    /// one's) is refused before anything is changed; one with none (an older one) is fine.
+    #[test]
+    fn a_backup_with_a_history_not_as_dobo_keeps_it_is_refused() {
+        let dir = temp_dir("done-log");
+        let older = dir.join("older.sqlite");
+        {
+            let c = crate::db::open(&older).unwrap();
+            c.execute_batch("DROP INDEX done_log_item; DROP TABLE done_log;").unwrap();
+        }
+        assert!(open_checked(&older).is_ok());
+        let other = dir.join("other.sqlite");
+        {
+            let c = crate::db::open(&other).unwrap();
+            c.execute_batch("DROP INDEX done_log_item; DROP TABLE done_log; CREATE TABLE done_log (id INTEGER PRIMARY KEY, line INTEGER, at INTEGER);").unwrap();
+        }
+        assert!(open_checked(&other).is_err(), "refused");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// After an older backup comes back, the ids given since it are still never given again (a

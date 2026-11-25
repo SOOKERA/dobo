@@ -74,31 +74,36 @@ export function inWorkHours(w: WorkHoursLike, now: Date | number): boolean {
 export interface Span {
   start: number;
   end: number;
-  /** "Today", "Tomorrow", "Monday". */
+  /** "Today", "Tomorrow", "Monday" (always as seen from now: the day after tomorrow by its name). */
   label: string;
 }
 
 export interface RulerRange {
   /** What the ruler shows first. */
   main: Span;
-  /** Where "Tomorrow" leads (drop: its start; hold: the ruler shows it). */
+  /** Where its next-day spot leads (drop: its start; hold: the ruler shows it). */
   next: Span;
 }
 
 /** The hours of the drag ruler: from now to the end of the day (Work: a little after work hours
- * end; Personal: "My day ends at"). Late in the evening it shows tomorrow right away. */
+ * end; Personal: "My day ends at"). Late in the evening it shows tomorrow right away, and its
+ * next-day spot is then the day after, by its name. */
 export function rulerRange(now: number, space: "work" | "personal", day: DaySettings, work: WorkHoursLike): RulerRange {
   const useWork = space === "work" && work.on;
+  // A day as seen from now: "Tomorrow", else its name. (Whole calendar days: a night the clocks
+  // change is 23 or 25 hours.)
+  const today = dayBounds(now).start;
+  const nameOf = (d: Date): string => (Math.round((dayBounds(d).start - today) / 86_400_000) === 1 ? "Tomorrow" : DAY_NAMES[d.getDay()]);
   // The next span after a given day.
   const nextSpan = (from: number): Span => {
     if (useWork) {
       for (let k = 1; k <= 7; k++) {
         const d = addDays(from, k);
-        if (isWorkDay(work, d)) return { ...workSpan(work, d), label: k === 1 ? "Tomorrow" : DAY_NAMES[d.getDay()] };
+        if (isWorkDay(work, d)) return { ...workSpan(work, d), label: nameOf(d) };
       }
     }
     const d = addDays(from, 1);
-    return { start: at(d, day.start), end: at(d, day.end), label: "Tomorrow" };
+    return { start: at(d, day.start), end: at(d, day.end), label: nameOf(d) };
   };
   const shift = useWork ? currentShift(work, now) : null;
   const todayEnd = shift ? shift.end + 60 * MIN : at(now, day.end);
@@ -116,6 +121,102 @@ export function hourLabelStep(hours: number, width: number, minGap = 32): number
   const per = width / Math.max(hours, 1);
   for (const s of [1, 2, 3, 4, 6, 12]) if (per * s >= minGap) return s;
   return 24;
+}
+
+export interface RulerHour {
+  /** Where on the track (0…1). */
+  x: number;
+  at: number;
+  /** On the hour (a taller tick). */
+  major: boolean;
+  /** Its name under the track, or null (a tick alone). */
+  label: string | null;
+}
+
+/** The ruler's ticks (every half hour on a day of 9 hours or less, else every hour) and the names
+ * under them: as many hours as fit without crowding (names `minGap` px apart, centre to centre),
+ * and the half hours too when a short span leaves room for them. The two ends have names of their
+ * own (`startRoom` and `endRoom` px wide): every name is clear of them, and of the one before
+ * it, by 6 px (`nameW`: a name's width; about `minGap` less 6 without it). Whole hours on the
+ * smallest of the clock's own steps (every 1, 2, 3… hours) that names all its hours between the
+ * ends, so they stay evenly apart; else any hours that fit, so a narrow ruler still reads. */
+export function rulerHours(start: number, end: number, width: number, o: { minGap: number; startRoom: number; endRoom: number; hourName: (h: number) => string; clock: (h: number, m: number) => string; nameW?: (name: string) => number }): RulerHour[] {
+  const len = end - start;
+  if (len <= 0) return [];
+  const hours = len / 3_600_000;
+  const w = width || 400;
+  const step = hourLabelStep(hours, w, o.minGap);
+  const halves = hours <= 9;
+  // (The half hours named as well: room for two names an hour, each "20:30" wide.)
+  const fine = halves && step === 1 && w / hours >= 2 * (o.minGap + 24);
+  const first = new Date(start);
+  first.setMinutes(first.getMinutes() > 0 ? 60 : 0, 0, 0);
+  const out: RulerHour[] = [];
+  for (let at = first.getTime() - (halves ? 1_800_000 : 0); at <= end; at += halves ? 1_800_000 : 3_600_000) {
+    if (at < start) continue;
+    const d = new Date(at);
+    out.push({ x: (at - start) / len, at, major: d.getMinutes() === 0, label: null });
+  }
+  const nameOf = (h: RulerHour) => {
+    const d = new Date(h.at);
+    return fine ? o.clock(d.getHours(), d.getMinutes()) : o.hourName(d.getHours());
+  };
+  /** Half a name's width. */
+  const halfOf = (name: string) => (o.nameW?.(name) ?? o.minGap - 6) / 2;
+  /** A tick whose name is clear of the two ends' names. */
+  const inside = (h: RulerHour) => {
+    const px = h.x * w;
+    const half = halfOf(nameOf(h));
+    return px - half >= o.startRoom + 6 && px + half <= w - o.endRoom - 6;
+  };
+  /** Names the ticks `pick` allows, left to right, each clear of the ends and of the one before. */
+  const place = (pick: (h: RulerHour) => boolean): Map<RulerHour, string> => {
+    const named = new Map<RulerHour, string>();
+    let lastX = -Infinity;
+    let lastRight = -Infinity;
+    for (const h of out) {
+      if (!pick(h) || !inside(h)) continue;
+      const name = nameOf(h);
+      const px = h.x * w;
+      const half = halfOf(name);
+      if (px - lastX < o.minGap || px - half < lastRight + 6) continue;
+      named.set(h, name);
+      lastX = px;
+      lastRight = px + half;
+    }
+    return named;
+  };
+  let named: Map<RulerHour, string> | null = null;
+  if (fine) named = place(() => true);
+  else {
+    // (The smallest of the clock's own steps whose hours all fit between the ends, so the names
+    // stay evenly apart; else any hours that fit.)
+    for (const s of [1, 2, 3, 4, 6, 12]) {
+      if (s < step) continue;
+      const pick = (h: RulerHour) => h.major && new Date(h.at).getHours() % s === 0;
+      const even = place(pick);
+      if (even.size && even.size === out.filter((h) => pick(h) && inside(h)).length) {
+        named = even;
+        break;
+      }
+    }
+    named ??= place((h) => h.major);
+  }
+  for (const [h, name] of named) h.label = name;
+  return out;
+}
+
+/** An end of the ruler named as its hours are when it falls on the hour ("10 PM", « 22h »), else
+ * with its minutes ("21:40"). */
+export function endName(at: number, o: { hourName: (h: number) => string; clock: (h: number, m: number) => string }): string {
+  const d = new Date(at);
+  return d.getMinutes() === 0 ? o.hourName(d.getHours()) : o.clock(d.getHours(), d.getMinutes());
+}
+
+/** Daytime at this hour (the ruler's sun), else night (its moon). */
+export function daylight(at: number): boolean {
+  const h = new Date(at).getHours();
+  return h >= 6 && h < 18;
 }
 
 /** A pointer position on the ruler (0…1) as a time: snapped to the quarter hour unless exact. */

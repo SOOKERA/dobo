@@ -4,11 +4,12 @@
 import { nextAfterDone } from "./repeat";
 import type { Item } from "./types";
 
-/** A ticked task that will come back: a repeating one whose next time is still to be made (the
- * backend makes it a moment after the tick, and the ticked one then loses its rule). Counted as
- * open, so the note never flashes "All done" in between. */
+/** A repeating task just ticked, before the backend has moved it on (a moment later it is
+ * ticked at its next time, `repeat.ticked`, or open again): counted as open, so the note never
+ * flashes "All done" when it comes straight back. Once it waits, ticked, for its next day, it
+ * is done like any other until then. */
 function comesBack(it: Item, now: number): boolean {
-  return it.repeat != null && it.due_at != null && nextAfterDone(it.repeat, it.due_at, now) != null;
+  return it.repeat != null && !it.repeat.ticked && it.due_at != null && nextAfterDone(it.repeat, it.due_at, now) != null;
 }
 
 /** True when the note has at least one task and every one of them is done. Only its own lines

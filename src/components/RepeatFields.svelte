@@ -122,7 +122,7 @@
         </span>
       {/if}
     </div>
-    <p class="sum">{t("{label} · ticking it makes the next one", { label: repeatLabel(rule) })}</p>
+    <p class="sum">{t("{label} · ticked, it comes back on its next day", { label: repeatLabel(rule) })}</p>
     </div>
   {/if}
 </div>
@@ -225,5 +225,6 @@
     font-style: italic;
     font-size: var(--t-base);
     color: var(--muted);
+    text-wrap: pretty;
   }
 </style>

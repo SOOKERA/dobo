@@ -5,7 +5,7 @@ Prenez une tâche et posez-la sur l’horloge. Vos notes ne bougent pas : les h
 ## Glisser une tâche sur les heures
 
 1. Appuyez sur les mots d’une tâche et commencez à la faire glisser. Rien ne bouge sur le tableau : une discrète bande en pointillés, **Déposez ici pour lui donner une heure**, apparaît juste sous le bandeau « À trier », par-dessus le haut de vos notes.
-2. Portez la tâche sur cette bande (ou tout près). Les heures d’aujourd’hui s’ouvrent à sa place, par-dessus les notes, à partir de maintenant, avec « maintenant » marqué (un point orange dans une fenêtre étroite) et vos autres tâches à heure fixe en points. Le tableau s’assombrit un peu pendant ce temps.
+2. Portez la tâche sur cette bande (ou tout près). Les heures d’aujourd’hui s’ouvrent à sa place, par-dessus les notes, à partir de maintenant, avec « maintenant » marqué (un soleil le jour, une lune le soir ; dans une fenêtre étroite, le soleil ou la lune seuls) et vos autres tâches à heure fixe en points. Le tableau s’assombrit un peu pendant ce temps.
 3. Avancez le long des heures. Sous le papier, l’heure qu’elle prendrait : 14:00, 14:15, 14:30…
 4. Déposez-la sur une heure. La tâche affiche sa nouvelle heure, et les heures s’en vont.
 
@@ -16,7 +16,7 @@ Prenez une tâche et posez-la sur l’horloge. Vos notes ne bougent pas : les h
 - Une tâche du bandeau « À trier » est juste au-dessus : déposez-la sur une heure, puis faites-la glisser dans sa note.
 - Quand « À trier » est déplié, la bande est sous ses lignes. Quand le tableau défile et que « À trier » n’est plus en vue, la bande reste en haut du tableau, toujours à portée.
 
-Les heures affichées vont de maintenant à la fin de votre journée (**Paramètres › Ma journée**, de 08:00 à 22:00 au départ). Une tâche de **Travail**, avec **Paramètres › Heures de travail** activé, va jusqu’à un peu après la fin de vos heures de travail (le lendemain matin, pour des heures qui passent minuit), et son **Demain** est le prochain jour travaillé (avec son nom quand ce n’est pas demain). Tard le soir, quand il reste moins d’une demi-heure, les heures de demain s’affichent tout de suite. Les heures se lisent « 14h », ou « 2 PM » quand Windows est réglé sur 12 heures.
+Les heures affichées vont de maintenant à la fin de votre journée (**Paramètres › Ma journée**, de 08:00 à 22:00 au départ). Une tâche de **Travail**, avec **Paramètres › Heures de travail** activé, va jusqu’à un peu après la fin de vos heures de travail (le lendemain matin, pour des heures qui passent minuit), et son **Demain** est le prochain jour travaillé (avec son nom quand ce n’est pas demain). Tard le soir, quand il reste moins d’une demi-heure, les heures de demain s’affichent tout de suite : le nom de leur jour s’affiche au-dessus (« Demain »), et la case au bout mène au surlendemain, par son nom (« Vendredi »). Les deux bouts sont nommés : le début des heures (aujourd’hui, l’heure qu’il est, sous son trait) et leur fin, à l’heure pile comme les autres (« 22h », ou « 10 PM »). Entre les deux, les heures se lisent « 14h », ou « 2 PM » quand Windows est réglé sur 12 heures, autant qu’il en tient, même dans une fenêtre étroite ; une courte soirée, quand il y a la place, nomme aussi ses demi-heures, avec leurs minutes (20:30, 21:00, 21:30). Pendant que vous choisissez une heure proche de maintenant, son soleil ou sa lune se décale, juste après l’heure affichée.
 
 ## Sans glisser
 

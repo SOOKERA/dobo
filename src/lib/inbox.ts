@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
 // The Inbox strip's lines, in the order it shows them: by space (Work first, when All shows
-// both), then open tasks, done tasks and ideas, as in a note. The board's keys walk them in that
+// both), then tasks and ideas, as in a note (done tasks where they are, unless the Inbox note
+// puts them last). The board's keys walk them in that
 // order too.
 import { store } from "./store.svelte";
+import { doneOrder } from "./doneOrder";
 import type { Item, Picture, Space } from "./types";
 
 export interface InboxGroup {
@@ -24,7 +26,7 @@ export function inboxGroups(): InboxGroup[] {
       const top = mine.flatMap((n) => store.itemsByNote.get(n.id) ?? []).sort(bySort);
       return {
         space,
-        tasks: [...top.filter((i) => i.kind === "task" && i.done_at == null), ...top.filter((i) => i.kind === "task" && i.done_at != null)],
+        tasks: doneOrder(top.filter((i) => i.kind === "task"), mine.some((n) => n.done_last)),
         ideas: top.filter((i) => i.kind === "idea"),
         pictures: mine.flatMap((n) => store.picturesByNote.get(n.id) ?? []),
       };
@@ -32,12 +34,9 @@ export function inboxGroups(): InboxGroup[] {
     .filter((g) => g.tasks.length || g.ideas.length || g.pictures.length);
 }
 
-/** Every line the strip shows, steps under their line (open steps first). */
+/** Every line the strip shows, steps under their line (ordered as their note orders them). */
 export function inboxLines(): Item[] {
   if (!store.inboxShown) return [];
-  const withSteps = (it: Item) => {
-    const s = store.stepsOf.get(it.id) ?? [];
-    return [it, ...s.filter((x) => x.done_at == null), ...s.filter((x) => x.done_at != null)];
-  };
+  const withSteps = (it: Item) => [it, ...doneOrder(store.stepsOf.get(it.id) ?? [], store.doneLastIds.has(it.note_id))];
   return inboxGroups().flatMap((g) => [...g.tasks.flatMap(withSteps), ...g.ideas.flatMap(withSteps)]);
 }

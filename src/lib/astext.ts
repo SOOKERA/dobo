@@ -3,6 +3,7 @@
 // A line, or a whole note, as plain text for the clipboard (Copy text, Copy as text): a note's
 // title, its tasks as a checklist ("- [ ]", "- [x]", the way most notes apps and Markdown read
 // them pasted), their steps under them, then its ideas.
+import { doneOrder } from "./doneOrder";
 import type { Item } from "./types";
 
 /** A line's words, then what is attached to it, each on its own line: its link's address (when
@@ -14,10 +15,10 @@ export function lineText(it: Pick<Item, "text" | "link" | "file">): string {
   return [text, ...more].filter(Boolean).join("\n");
 }
 
-/** A note as text: its title, its tasks (to do, then done, each with its steps), then its ideas
- * (with theirs), as the note shows them. */
-export function noteAsText(title: string, lines: readonly Item[], stepsOf: (id: number) => readonly Item[]): string {
-  const ordered = (list: readonly Item[]) => [...list.filter((i) => i.done_at == null), ...list.filter((i) => i.done_at != null)];
+/** A note as text: its title, its tasks (each with its steps), then its ideas (with theirs), as
+ * the note shows them (done tasks last only when it puts them there). */
+export function noteAsText(title: string, lines: readonly Item[], stepsOf: (id: number) => readonly Item[], doneLast = false): string {
+  const ordered = (list: readonly Item[]) => doneOrder(list, doneLast);
   // (A line's link or file, on the lines under it, lined up with its words to stay with it in a
   // list.)
   const under = (it: Item, head: string) => head + lineText(it).replace(/\n/g, "\n" + " ".repeat(head.length));

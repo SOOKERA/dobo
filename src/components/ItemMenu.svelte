@@ -17,7 +17,7 @@
   import { pushLayer } from "../lib/layers";
   import { closeOnLeave, keepInView, modal } from "../lib/modal";
   import type { Item, PresetName, Rhythm } from "../lib/types";
-  import { fadeQuick, fold, pop, widen } from "../lib/motion";
+  import { fadeQuick, fold, popSwap, widen } from "../lib/motion";
   import { keysText, t } from "../lib/i18n.svelte";
   import { atPointer, type Point } from "../lib/rightclick.svelte";
   import { lineText } from "../lib/astext";
@@ -26,7 +26,9 @@
 
   const PRESET_NAME = { gentle: "Gentle", normal: "Normal", insistent: "Insistent", custom: "Custom" } as const;
   // (`at`: opened by a right-click, at the pointer; else under its ⋯.)
-  let { item, onClose, onAddStep, at = null }: { item: Item; onClose: () => void; onAddStep: () => void; at?: Point | null } = $props();
+  // (`onHistory`: a repeating task's History card, opened in the menu's place; `swap`: which way
+  // they are taking each other's place, for its motion.)
+  let { item, onClose, onAddStep, onHistory, swap, at = null }: { item: Item; onClose: () => void; onAddStep: () => void; onHistory?: () => void; swap?: () => number; at?: Point | null } = $props();
   /** How it comes in: from above, or from below when it opens above the pointer. */
   const motion = { y: -4 };
 
@@ -60,6 +62,8 @@
     };
   });
 
+  let doneCount = $derived(store.logOf(item.id).length);
+
   let parsed = $derived(when.trim() ? parseCapture(`x ${when}`, "task", store.now).due : null);
 
   async function setWhen() {
@@ -84,7 +88,7 @@
 </script>
 
 <!-- (The keyboard comes in, to When, and goes back to the line's button when it closes.) -->
-<div class="menu" use:atPointer={{ at, motion }} transition:pop|global={motion} bind:this={menuEl} role="dialog" aria-label={item.parent_id == null ? t("Task options") : t("Step options")} use:modal={{ initial: "input", trap: false }} use:closeOnLeave={onClose} use:keepInView={[repeatOpen, item.due_at != null, item.alarm, preset]}>
+<div class="menu" use:atPointer={{ at, motion }} transition:popSwap|global={{ motion, swap }} bind:this={menuEl} role="dialog" aria-label={item.parent_id == null ? t("Task options") : t("Step options")} use:modal={{ initial: "input", trap: false }} use:closeOnLeave={onClose} use:keepInView={[repeatOpen, item.due_at != null, item.alarm, preset]}>
   <div class="head">
     <span class="label">{t("When")}</span>
     <span class="current">{item.due_at != null ? formatDueLong(item.due_at, store.now) : t("No time")}</span>
@@ -170,6 +174,9 @@
   {/if}
 
   <div class="divider"></div>
+  {#if item.repeat && item.kind === "task" && onHistory && !inMemory(item.id)}
+    <button class="item" transition:fold onclick={onHistory}><span>{t("History…")}</span><span class="keys">{doneCount ? t("Done {n} times", { n: doneCount }) : ""}</span></button>
+  {/if}
   {#if item.parent_id == null}
     <button
       class="item"

@@ -23,17 +23,16 @@ import { noteTitle } from "./names";
 import { nextBox, type Box, type Way } from "./spatial";
 import { askMenu, isMenuKey, openedByKey } from "./rightclick.svelte";
 import type { Item } from "./types";
+import { shownOrder } from "./doneHold.svelte";
 
-/** A note's lines in the order they show (tasks, done tasks, then ideas; steps under each). */
+/** A note's lines in the order they show (tasks, then ideas; steps under each; done tasks last
+ * only when the note asks for it, one ticked a moment ago still in its place: lib/doneHold). */
 export function linesOf(noteId: number): Item[] {
   const note = store.notes.find((n) => n.id === noteId);
   if (!note || note.folded) return [];
   const top = store.itemsByNote.get(noteId) ?? [];
-  const withSteps = (it: Item) => {
-    const s = store.stepsOf.get(it.id) ?? [];
-    return [it, ...s.filter((x) => x.done_at == null), ...s.filter((x) => x.done_at != null)];
-  };
-  const tasks = [...top.filter((i) => i.kind === "task" && i.done_at == null), ...top.filter((i) => i.kind === "task" && i.done_at != null)];
+  const withSteps = (it: Item) => [it, ...shownOrder(store.stepsOf.get(it.id) ?? [], note.done_last)];
+  const tasks = shownOrder(top.filter((i) => i.kind === "task"), note.done_last);
   const ideas = top.filter((i) => i.kind === "idea");
   return [...tasks.flatMap(withSteps), ...ideas.flatMap(withSteps)];
 }

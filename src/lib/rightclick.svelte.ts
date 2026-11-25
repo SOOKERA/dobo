@@ -81,8 +81,11 @@ export function swallowed(): boolean {
  * window), growing from the pointer; never taller than the board, scrolling inside itself past it. `motion` (the menu's `pop` options, if given) gets the
  * way it comes in: from above, or from below when it opens above the pointer. (In the board's
  * zoom: placed in its own pixels.) */
-export function atPointer(node: HTMLElement, opts: { at: Point | null | undefined; motion?: { y?: number } }) {
+export function atPointer(node: HTMLElement, opts: { at: Point | null | undefined; motion?: { y?: number }; margin?: number; fit?: unknown }) {
   let motion = opts.motion;
+  // (`margin`: what it keeps clear of the board's edges, 28 px by default; `fit`: a card that
+  // tightens itself to fit, placed again once it has.)
+  let margin = opts.margin;
   const place = (p: Point | null | undefined) => {
     const s = node.style;
     const host = node.offsetParent as HTMLElement | null;
@@ -98,7 +101,7 @@ export function atPointer(node: HTMLElement, opts: { at: Point | null | undefine
     // (Never taller than the board's room, at the pointer or at its ⋯: past it, it scrolls inside
     // itself, so a long menu, a task's with Repeat open, is never cut off.)
     // (Its scroll is in app.css: Svelte puts the inline overflow back as it was once it is in.)
-    s.maxHeight = `${menuCap(room, z).toFixed(1)}px`;
+    s.maxHeight = `${menuCap(room, z, margin).toFixed(1)}px`;
     node.dataset.capped = "";
     if (!p) {
       s.left = s.top = s.right = s.transformOrigin = "";
@@ -136,6 +139,7 @@ export function atPointer(node: HTMLElement, opts: { at: Point | null | undefine
   return {
     update(o: typeof opts) {
       motion = o.motion;
+      margin = o.margin;
       place(o.at);
       edges();
     },

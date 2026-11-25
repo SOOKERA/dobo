@@ -26,6 +26,8 @@ export interface Note {
   /** When it went into the archive (ms; set by the backend, null when not archived or archived
    * before the archive kept the time). */
   archived_at?: number | null;
+  /** Its done tasks show after the open ones (else where they are: the default). */
+  done_last?: boolean;
 }
 
 export type Paper = "plain" | "ruled" | "grid" | "antique";
@@ -46,6 +48,19 @@ export interface Repeat {
   /** Its own time of day ("02:30"), set by the backend from the time it is given: every
    * occurrence is at that time, also after the clocks change. */
   at?: string;
+  /** Set by the backend while the task is ticked and already at its next occurrence (it is a
+   * to-do again on that day): what unticking gives back, the occurrence ticked and the count
+   * before. */
+  ticked?: { due: number; done: number };
+}
+
+/** One time a repeating task was done (its history; src-tauri/src/db.rs `Done`). */
+export interface Done {
+  id: number;
+  item_id: number;
+  /** The occurrence that was done (null: a repeat without a time). */
+  due_at: number | null;
+  done_at: number;
 }
 
 export interface Rhythm {
@@ -124,6 +139,8 @@ export interface Everything {
   items: Item[];
   pictures: Picture[];
   settings: Record<string, unknown>;
+  /** Repeating tasks' history (older previews' saved boards have none). */
+  done_log?: Done[];
 }
 
 export interface WindowInfo {

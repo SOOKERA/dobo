@@ -354,6 +354,20 @@ export const side = (n: Element, p: Move = {}, o?: { direction?: "in" | "out" | 
 export const rise = (n: Element, p: Move = {}, o?: { direction?: "in" | "out" | "both" }) => move(n, { y: 8, scale: 0.99, duration: 260, ...p }, o);
 /** A menu: grows from its anchor (set transform-origin on the menu). */
 export const pop = (n: Element, p: Move = {}, o?: { direction?: "in" | "out" | "both" }) => move(n, { y: -4, scale: 0.97, duration: 180, ...p }, o);
+/** A popover that takes another's place where it was (a task's menu and its History): the one
+ * leaving steps aside and is gone before the other comes in from the side it goes to, so the two
+ * are never seen at once (`swap()`: 1 on to it, -1 back; 0: not a swap, a menu's `pop`). Read as
+ * it starts, after the card has placed itself (above or below: `motion.y`). */
+export function popSwap(node: Element, { motion = {}, swap }: { motion?: Move; swap?: () => number } = {}, o?: { direction?: "in" | "out" | "both" }) {
+  return ({ direction }: { direction?: "in" | "out" | "both" } = {}) => {
+    const dir = swap?.() ?? 0;
+    if (!dir) return pop(node, motion, o);
+    const out = direction === "out";
+    if (reduced()) return out ? { duration: 80, css: (t: number) => `opacity:${t}` } : { delay: 70, duration: 120, css: (t: number) => `opacity:${t}` };
+    if (out) return { duration: 90, css: (t: number, u: number) => `opacity:${t.toFixed(3)};transform:translateX(${(-dir * u * 10).toFixed(2)}px)` };
+    return { delay: 70, duration: 230, easing: glide, css: (t: number, u: number) => `opacity:${t.toFixed(3)};transform:translateX(${(dir * u * 14).toFixed(2)}px)` };
+  };
+}
 /** A veil or a dimmed backdrop. */
 export function veil(_node: Element, { duration = 200 }: { duration?: number } = {}, opts?: { direction?: "in" | "out" | "both" }) {
   return { duration: opts?.direction === "out" ? Math.round(duration * 0.75) : duration, css: (t: number) => `opacity:${t}` };

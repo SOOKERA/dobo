@@ -8,7 +8,7 @@ Once a day, Dobo offers a look back at the top of the board. It comes at the end
 
 A Windows notification tells you it's there: "That was Tuesday." On a day when the look back would be empty (nothing ticked, nothing still open, no new idea), there's no notification. The look back itself says "That was Tuesday." and shows:
 
-- **Done today**: what you ticked ("Nothing ticked. Some days are like that." on a quiet day).
+- **Done today**: what you ticked ("Nothing ticked. Some days are like that." on a quiet day). A repeating task counts on each day you ticked it, even after it has come back for its next time.
 - **Still open from today**: each task due today (or yesterday) and not ticked, with **Tomorrow** (the next day, at the same time), **Pick a day** (type "Monday 9am", "Friday"…) or **No time**.
 - **New ideas**: the ideas you wrote today.
 

@@ -38,13 +38,13 @@ Chaque note se termine par **Ajouter**. Cliquez dessus, ou dans l’espace vide 
 
 ## Gérer une ligne
 
-- **Cocher une tâche** : cliquez sur sa case, ou sélectionnez-la et appuyez sur **Espace**. Cochez la dernière tâche à faire d’une note et la note affiche **Tout est fait** (voir [Le tableau](the-board.md)).
+- **Cocher une tâche** : cliquez sur sa case, ou sélectionnez-la et appuyez sur **Espace**. Une tâche cochée reste à sa place ; pour regrouper les tâches faites à la fin d’une note, choisissez **Mettre les tâches faites à la fin** dans son menu. Cochez la dernière tâche à faire d’une note et la note affiche **Tout est fait** (voir [Le tableau](the-board.md)).
 - **Modifier une ligne** : double-cliquez dessus (ou sélectionnez-la et appuyez sur **Entrée** ou **F2**). **Entrée** enregistre, **Échap** laisse tel quel.
 - **Supprimer une ligne** : son menu › **Supprimer**, ou sélectionnez-la et appuyez sur **Suppr**.
 - **Déplacer une ligne** : appuyez sur ses mots et faites-la glisser sur une autre note, sur une tâche (elle devient une étape) ou sur le bandeau « À trier ». **Échap** pendant le transport la renvoie à sa place.
 - **Faire d’une ligne une nouvelle note** : faites-la glisser sur **+ Nouvelle note**, la carte en pointillés qui attend au bout du tableau pendant que vous portez une ligne (la note y apparaît), ou sur n’importe quel coin vide du tableau (la note apparaît là où vous la déposez, puis se range sous la note du dessus). Ou choisissez **En faire une nouvelle note** dans le menu de la ligne : comme sur la carte en pointillés. La note prend les mots de la ligne pour titre (coupés vers 60 caractères) et la ligne y entre entière : son heure, ses étapes, son lien et ses images. Cela marche pour toute ligne, de « À trier » ou d’une note, tâche, idée ou étape. Un seul **Ctrl+Z** remet la ligne à sa place et retire la note.
 - **Donner une heure à une tâche** : pendant que vous la portez, une bande apparaît juste sous le bandeau « À trier ». Glissez-y la tâche : les heures du jour s’y ouvrent, par-dessus les notes, et vous la déposez sur l’une d’elles (voir [Les heures du jour](the-hours-ruler.md)).
-- **Le menu d’une tâche** (**⋯** sur la ligne, ou clic droit dessus) : son heure, **Choisir sur les heures du jour**, **Répéter**, **Type de rappel**, **Ajouter une étape**, **Copier le texte**, **En faire une idée**, **En faire une nouvelle note**.
+- **Le menu d’une tâche** (**⋯** sur la ligne, ou clic droit dessus) : son heure, **Choisir sur les heures du jour**, **Répéter**, **Rappel**, **Historique…** (celui d’une tâche qui se répète, voir [Heures et rappels](times-and-reminders.md#les-répétitions)), **Ajouter une étape**, **Copier le texte**, **En faire une idée**, **En faire une nouvelle note**.
 - **Le menu d’une idée** (clic droit dessus) : **Copier le texte**, **En faire une tâche**, **En faire une nouvelle note**, **Supprimer**.
 - **Copier le texte** copie les mots de la ligne, avec l’adresse de son lien et le chemin de son fichier, chacun sur sa propre ligne ; un court « Copié » le confirme.
 

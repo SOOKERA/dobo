@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
 //! Repeating tasks: "every Monday 10h", "every weekday", "every 2 weeks on Mon, Thu",
-//! "every month on the 1st". Ticking one makes the next occurrence, at the same time of day.
+//! "every month on the 1st". A repeating task is one line: ticked, its completion goes into its
+//! history (db.rs `done_log`) and the line moves on to its next occurrence, at the same time of
+//! day, staying ticked until that day comes (`reopens_at_in`); then it is a to-do again.
 //! The page has the same rules (src/lib/repeat.ts) for its previews.
 
 use crate::clock::{Local, Zone};
@@ -22,6 +24,15 @@ pub enum Ends {
 
 fn one() -> i64 {
     1
+}
+
+/// A repeating task ticked, waiting for its next day: what unticking it gives back.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Ticked {
+    /// The occurrence that was ticked (the line's time before it moved on).
+    pub due: i64,
+    /// The "done" count before.
+    pub done: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -48,6 +59,52 @@ pub struct Repeat {
     /// time of the occurrence before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    /// Set while the line is ticked and already at its next occurrence (it opens again on that
+    /// day). Never set once the repeat is over: the line then stays done, as any task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticked: Option<Ticked>,
+}
+
+/// When a ticked repeating task, now at its next occurrence `due`, is a to-do again: at the start
+/// of the person's day that occurrence belongs to ("My day", `day_start`–`day_end`), but never
+/// later than the occurrence's own time (a 07:00 task opens by 07:00 when the day starts at
+/// 08:00). A day that crosses midnight (22:00–06:00) started the evening before for a time before
+/// its end: a 02:00 task opens at 22:00 the evening before.
+pub(crate) fn reopens_at_in(tz: &impl Zone, due: i64, day_start: &str, day_end: &str) -> i64 {
+    let (start, end) = (parse_hhmm(day_start), parse_hhmm(day_end));
+    let night = matches!((start, end, tz.civil(due)), (Some(s), Some(e), Some(d)) if s > e && d.time() < e);
+    crate::clock::day_at_in(tz, due, if night { -1 } else { 0 }, day_start).map_or(due, |start| start.min(due))
+}
+
+/// `reopens_at_in` on this computer's clock.
+pub fn reopens_at(due: i64, day_start: &str, day_end: &str) -> i64 {
+    reopens_at_in(&Local, due, day_start, day_end)
+}
+
+/// Whole calendar days from the day of `from` to the day of `to` on this computer's clock
+/// (negative when `to` comes first).
+pub fn days_apart(from: i64, to: i64) -> Option<i64> {
+    days_apart_in(&Local, from, to)
+}
+
+/// `days_apart` in a given time zone.
+pub(crate) fn days_apart_in(tz: &impl Zone, from: i64, to: i64) -> Option<i64> {
+    Some(crate::clock::days_between(tz.civil(from)?.date(), tz.civil(to)?.date()))
+}
+
+/// `ms` moved on by `days` calendar days, at the same time of day on the clock: never a fixed
+/// number of hours (the days the clocks change are 23 or 25 hours long). A time skipped that night
+/// is the first minute after it that exists (`to_ms_in`). The page moves them the same way
+/// (src/lib/doneLog.ts `shiftDays`).
+pub fn shift_days(ms: i64, days: i64) -> Option<i64> {
+    shift_days_in(&Local, ms, days)
+}
+
+/// `shift_days` in a given time zone.
+pub(crate) fn shift_days_in(tz: &impl Zone, ms: i64, days: i64) -> Option<i64> {
+    let dt = tz.civil(ms)?;
+    let day = dt.date().checked_add(Span::new().try_days(days).ok()?).ok()?;
+    to_ms_in(tz, day.to_datetime(dt.time()))
 }
 
 fn local_in(tz: &impl Zone, ms: i64) -> Option<DateTime> {
@@ -151,8 +208,22 @@ impl Repeat {
     /// Ticked late (the Monday one on Wednesday), it jumps to the first occurrence still to
     /// come, same time of day, so nothing rings at once; the missed ones count as passed.
     /// Returns that time and the new "done" count.
+    #[cfg(test)]
     pub fn next_after_done(&self, due: i64, now: i64) -> Option<(i64, i64)> {
         self.next_after_done_in(&Local, due, now)
+    }
+
+    /// Ticking the occurrence due at `due`, at `now`: the line's next time, and the rule as it is
+    /// then (its "done" count, and `ticked` to give back on unticking); None when the repeat is
+    /// over (the line stays done, at the time it had).
+    pub fn tick(&self, due: i64, now: i64) -> Option<(i64, Repeat)> {
+        self.tick_in(&Local, due, now)
+    }
+
+    /// `tick` in a given time zone.
+    pub(crate) fn tick_in(&self, tz: &impl Zone, due: i64, now: i64) -> Option<(i64, Repeat)> {
+        let (next, done) = self.next_after_done_in(tz, due, now)?;
+        Some((next, Repeat { done, ticked: Some(Ticked { due, done: self.done }), ..self.clone() }))
     }
 
     /// `next_after_done` in a given time zone.
@@ -193,7 +264,7 @@ mod tests {
     }
 
     fn rule(freq: &str) -> Repeat {
-        Repeat { freq: freq.into(), interval: 1, days: vec![], monthday: None, ends: Ends::Never, done: 0, at: None }
+        Repeat { freq: freq.into(), interval: 1, days: vec![], monthday: None, ends: Ends::Never, done: 0, at: None, ticked: None }
     }
 
     #[test]
@@ -342,6 +413,25 @@ mod tests {
         }
     }
 
+    /// A step of a repeating task moves on by whole calendar days, at its own time of day, across
+    /// the clock changes too (never by the hours between the task's two occurrences).
+    #[test]
+    fn steps_move_by_calendar_days_across_the_clock_changes() {
+        use crate::clock::zones::paris;
+        let tz = paris();
+        let at = |m: i8, d: i8, h: i8, min: i8| to_ms_in(&tz, jiff::civil::date(2026, m, d).at(h, min, 0, 0)).unwrap();
+        // Saturday 09:00 to Sunday, the day the clocks go forward (23 hours later): 09:00.
+        assert_eq!(days_apart_in(&tz, at(3, 28, 22, 0), at(3, 29, 7, 0)), Some(1));
+        assert_eq!(shift_days_in(&tz, at(3, 28, 9, 0), 1), Some(at(3, 29, 9, 0)));
+        assert_eq!(shift_days_in(&tz, at(3, 28, 9, 0), 1).unwrap() - at(3, 28, 9, 0), 23 * 3_600_000);
+        // And the day they go back (25 hours later); a week back over it.
+        assert_eq!(shift_days_in(&tz, at(10, 24, 9, 0), 1), Some(at(10, 25, 9, 0)));
+        assert_eq!(shift_days_in(&tz, at(10, 31, 9, 0), -7), Some(at(10, 24, 9, 0)));
+        assert_eq!(days_apart_in(&tz, at(10, 31, 9, 0), at(10, 24, 23, 0)), Some(-7));
+        // 02:30, skipped that night: 03:00, the first minute after it there is.
+        assert_eq!(shift_days_in(&tz, at(3, 28, 2, 30), 1), Some(at(3, 29, 3, 0)));
+    }
+
     /// A repeat keeps its own time of day across both clock changes, in Paris (the change at
     /// 02:00 → 03:00 and 03:00 → 02:00) and New York (02:00 → 03:00 and 02:00 → 01:00).
     #[test]
@@ -410,7 +500,7 @@ mod pinned_repeats {
     use crate::clock::zones::{Zone, new_york, paris};
 
     fn rule(freq: &str, at: Option<&str>) -> Repeat {
-        Repeat { freq: freq.into(), interval: 1, days: vec![], monthday: None, ends: Ends::Never, done: 0, at: at.map(String::from) }
+        Repeat { freq: freq.into(), interval: 1, days: vec![], monthday: None, ends: Ends::Never, done: 0, at: at.map(String::from), ticked: None }
     }
 
     fn ms(tz: &Zone, y: i32, m: u32, d: u32, h: u32, mi: u32) -> i64 {
@@ -461,6 +551,50 @@ mod pinned_repeats {
         let march = monthly.next_in(&p, ms(&p, 2026, 2, 28, 2, 30)).unwrap();
         assert_eq!(utc_str(march), "2026-03-29 01:00:00");
         assert_eq!(next(&monthly, &p, march), "2026-04-29 00:30:00");
+    }
+
+    #[test]
+    fn ticked_before_a_clock_change_it_opens_at_the_start_of_that_day() {
+        let (p, ny) = (paris(), new_york());
+        // Every day at 09:00, Saturday 28 March's ticked: Sunday's 09:00 is summer time (07:00
+        // UTC), and the line opens at 08:00 that morning (06:00 UTC), never an hour off.
+        let r = rule("day", Some("09:00"));
+        let sat = ms(&p, 2026, 3, 28, 9, 0);
+        let (next, after) = r.tick_in(&p, sat, sat + 60_000).unwrap();
+        assert_eq!(utc_str(next), "2026-03-29 07:00:00");
+        assert_eq!(after.ticked, Some(Ticked { due: sat, done: 0 }));
+        assert_eq!(after.done, 1);
+        assert_eq!(utc_str(reopens_at_in(&p, next, "08:00", "22:00")), "2026-03-29 06:00:00");
+        // A day that starts at 02:30, which that night skips: at 03:00.
+        assert_eq!(utc_str(reopens_at_in(&p, next, "02:30", "22:00")), "2026-03-29 01:00:00");
+        // The autumn change in New York: Saturday's 07:00 ticked, Sunday's at 07:00 EST (12:00
+        // UTC); its day starts at 08:00, later than the task: it opens at the task's own time.
+        let r = rule("day", Some("07:00"));
+        let sat = ms(&ny, 2026, 10, 31, 7, 0);
+        let (next, _) = r.tick_in(&ny, sat, sat).unwrap();
+        assert_eq!(utc_str(next), "2026-11-01 12:00:00");
+        assert_eq!(reopens_at_in(&ny, next, "08:00", "22:00"), next);
+    }
+
+    #[test]
+    fn a_night_shift_day_opens_the_evening_before() {
+        let p = paris();
+        // "My day" 22:00–06:00: a 02:00 task belongs to the night that started at 22:00 the
+        // evening before, and opens then; a 23:00 one, at 22:00 that evening; a noon one, at its
+        // own time (between the day's end and its start).
+        let two = ms(&p, 2026, 11, 19, 2, 0);
+        assert_eq!(reopens_at_in(&p, two, "22:00", "06:00"), ms(&p, 2026, 11, 18, 22, 0));
+        assert_eq!(reopens_at_in(&p, ms(&p, 2026, 11, 19, 23, 0), "22:00", "06:00"), ms(&p, 2026, 11, 19, 22, 0));
+        let noon = ms(&p, 2026, 11, 19, 12, 0);
+        assert_eq!(reopens_at_in(&p, noon, "22:00", "06:00"), noon);
+        // (A day that ends at 06:00 sharp: a 06:00 task is at its own time.)
+        let six = ms(&p, 2026, 11, 19, 6, 0);
+        assert_eq!(reopens_at_in(&p, six, "22:00", "06:00"), six);
+        // A plain day never looks at the evening before.
+        assert_eq!(reopens_at_in(&p, two, "08:00", "22:00"), two);
+        // Over the spring change: Sunday 29 March's 02:30 (moved to 03:00), its night from 22:00 on Saturday.
+        let moved = rule("day", Some("02:30")).next_in(&p, ms(&p, 2026, 3, 28, 2, 30)).unwrap();
+        assert_eq!(reopens_at_in(&p, moved, "22:00", "06:00"), ms(&p, 2026, 3, 28, 22, 0));
     }
 
     #[test]

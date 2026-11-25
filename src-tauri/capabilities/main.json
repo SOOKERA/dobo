@@ -19,6 +19,8 @@
     "allow-reorder-notes",
     "allow-create-item",
     "allow-update-item",
+    "allow-forget-done",
+    "allow-undo-tick",
     "allow-delete-item",
     "allow-set-setting",
     "allow-language-now",

@@ -1,5 +1,20 @@
 # What's new
 
+## 1.2.1
+
+Dobo 1.2.1 keeps a repeating task on one line with its history, leaves done tasks where they are, and makes the hours easier to read.
+
+### Highlights
+
+- **A repeating task is one line now.** Tick it and it stays ticked, showing its next time, until its next day comes; then it opens again by itself, in the same place, at the start of your day (or by its own time, if that comes first). A daily task comes back tomorrow, a weekly one on its next day, a monthly one next month. Its steps start fresh each time. Ticked copies left from before stay until you delete them. See [Times and reminders](times-and-reminders.md).
+- **History, for every repeating task.** Its menu (**⋯**, or right-click) › **History…** shows how it went: a month of days for a daily task, a year of weeks for a weekly one, a year of months for a monthly one. Done, missed and still to come at a glance, and a short line in its own rhythm: "Done 7 of the last 8 weeks · 3 weeks in a row". See [Times and reminders](times-and-reminders.md).
+- **Done tasks stay where they are.** A ticked task keeps its place, so a list of steps keeps its order. To gather a note’s done tasks at the end, as before, choose **Move done tasks to the end** in its **⋯** menu. See [The board](the-board.md).
+- **Clearer hours.** When you carry a task onto the hours, both ends are named: the time now, under its line, and when your day ends. "Now" has a sun by day and a moon in the evening, and a short evening names its half hours too. See [The hours ruler](the-hours-ruler.md).
+
+### Also
+
+- **Archive (2)**, shown while some notes are archived, has moved to the board’s bottom right corner, beside the note sizes and **?**. See [Archive](archive.md).
+
 ## 1.2.0
 
 Dobo 1.2.0 keeps your notes in place while you carry a task, starts a new note wherever you want one, shows at a glance when a note is all done, and tells you what’s new after each update.

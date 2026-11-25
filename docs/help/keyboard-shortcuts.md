@@ -67,6 +67,7 @@ Opening a view or a menu (Search, Settings, Style, a note's or a line's menu, fr
 | Left / Right (Shift), Home / End, Enter, Esc | Pick on today's hours: 15 minutes (an hour) earlier or later, first / last hour, set, close |
 | Up / Down, Page Up / Page Down, Home / End, digits, Left / Right, A / P, Enter | A time in Settings (My day, work hours, the tidy reminder, dark mode by hours): one more or less, 3 hours or 10 minutes, the first or last, type it ("930" is 09:30), between hours, minutes and AM/PM, AM or PM, save now (it also saves when you stop or leave it) |
 | Up / Down, Page Up / Page Down, Home / End, digits, Left / Right, Enter | A repeat's **Last day** (task menu › Repeat › Ends › On a date): one more or less, a week, a quarter or 5 years, the first or last, type it ("19", "3" for March, "2027"), between day, month and year, save now (it also saves when you stop or leave it) |
+| Page Up / Page Down, arrows, Home / End, Esc | A repeating task's **History**: the month (or the year) before or after; in a year of weeks or months, square to square (on into the year before or after at either end), the first or last square of its row; close |
 | → or Enter, ←, Esc | Quick tour: next, back, close |
 | Shift (while dropping on the hours) | The exact minute instead of the quarter hour |
 | Esc (while carrying a line) | Send it back |

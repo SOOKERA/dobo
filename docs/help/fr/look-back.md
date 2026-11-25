@@ -8,7 +8,7 @@ Une fois par jour, Dobo propose un bilan en haut du tableau. Il arrive à la fin
 
 Une notification Windows vous le signale : « C’était mardi. » Un jour où le bilan serait vide (rien de coché, rien qui reste, aucune nouvelle idée), il n’y a pas de notification. Le bilan lui-même dit « C’était mardi. » et montre :
 
-- **Fait aujourd’hui** : ce que vous avez coché (« Rien de coché. Il y a des jours comme ça. » les jours calmes).
+- **Fait aujourd’hui** : ce que vous avez coché (« Rien de coché. Il y a des jours comme ça. » les jours calmes). Une tâche qui se répète compte pour chaque jour où vous l’avez cochée, même après être revenue à faire.
 - **Encore à faire** : chaque tâche prévue aujourd’hui (ou hier) et pas cochée, avec **Demain** (le lendemain, à la même heure), **Choisir un jour** (tapez « lundi 9h », « vendredi »…) ou **Pas d’heure**.
 - **Nouvelles idées** : les idées écrites aujourd’hui.
 

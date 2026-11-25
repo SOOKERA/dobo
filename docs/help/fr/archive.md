@@ -8,7 +8,7 @@ Ouvrez le menu de la note (sa pastille de couleur ou **⋯**) › **Archiver la 
 
 ## Ouvrir les Archives
 
-- **Archives (2)** sous vos notes, à gauche, tant que des notes sont archivées.
+- **Archives (2)** en bas à droite, à côté de la taille des notes, tant que des notes sont archivées. Dans une fenêtre étroite, il ne reste que son icône, avec le nombre dessus.
 - Clic droit sur le tableau › **Notes archivées…**
 - Le menu **⋯** de l’en-tête › **Archives**.
 - Le menu **?** au coin du tableau › **Archives**.

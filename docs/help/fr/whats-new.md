@@ -1,5 +1,20 @@
 # Nouveautés
 
+## 1.2.1
+
+Dobo 1.2.1 garde une tâche qui se répète sur une seule ligne, avec son historique, laisse les tâches faites à leur place et rend les heures plus lisibles.
+
+### L’essentiel
+
+- **Une tâche qui se répète tient désormais sur une ligne.** Cochez-la : elle reste cochée, avec sa prochaine heure, jusqu’à son prochain jour ; elle se rouvre alors d’elle-même, au même endroit, au début de votre journée (ou à sa propre heure, si elle vient avant). Une tâche quotidienne revient le lendemain, une tâche hebdomadaire à son prochain jour, une tâche mensuelle le mois suivant. Ses étapes repartent de zéro à chaque fois. Les copies cochées d’avant restent jusqu’à ce que vous les supprimiez. Voir [Heures et rappels](times-and-reminders.md).
+- **Un historique pour chaque tâche qui se répète.** Son menu (**⋯**, ou clic droit) › **Historique…** montre comment elle s’est passée : un mois de jours pour une tâche quotidienne, une année de semaines pour une tâche hebdomadaire, une année de mois pour une tâche mensuelle. Ce qui est fait, manqué ou à venir, d’un coup d’œil, et une courte ligne à son propre rythme : « Faite 7 semaines sur les 8 dernières · 3 semaines d’affilée ». Voir [Heures et rappels](times-and-reminders.md).
+- **Les tâches faites restent à leur place.** Une tâche cochée garde sa place : une liste d’étapes garde son ordre. Pour regrouper les tâches faites d’une note à la fin, comme avant, choisissez **Mettre les tâches faites à la fin** dans son menu **⋯**. Voir [Le tableau](the-board.md).
+- **Des heures plus lisibles.** Quand vous portez une tâche sur les heures, les deux bouts sont nommés : l’heure qu’il est, sous son trait, et la fin de votre journée. « Maintenant » a un soleil le jour et une lune le soir, et une courte soirée nomme aussi ses demi-heures. Voir [Les heures du jour](the-hours-ruler.md).
+
+### Et aussi
+
+- **Archives (2)**, affiché tant que des notes sont archivées, se trouve désormais en bas à droite du tableau, à côté de la taille des notes et de **?**. Voir [Archives](archive.md).
+
 ## 1.2.0
 
 Dobo 1.2.0 garde vos notes en place quand vous portez une tâche, crée une nouvelle note là où vous la voulez, montre d’un coup d’œil quand une note est terminée et vous présente ses nouveautés après chaque mise à jour.

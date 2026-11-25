@@ -25,12 +25,16 @@ describe("a line as text", () => {
 });
 
 describe("a note as text", () => {
-  it("its title, its tasks as a checklist (to do, then done, steps under each), then its ideas", () => {
+  it("its title, its tasks as a checklist (in their order, steps under each), then its ideas", () => {
     const done = line("Order the mouse", { done_at: 5 });
     const open = line("Call Léa");
     const idea = line("A mouse with a dial", { kind: "idea" });
     const steps = new Map([[open.id, [line("Find the number", { done_at: 3 }), line("Ask about Friday")]]]);
     expect(noteAsText("Logitech", [done, open, idea], (id) => steps.get(id) ?? [])).toBe(
+      ["Logitech", "", "- [x] Order the mouse", "- [ ] Call Léa", "  - [x] Find the number", "  - [ ] Ask about Friday", "", "- A mouse with a dial"].join("\n"),
+    );
+    // A note that puts its done tasks last: to do, then done (its steps too).
+    expect(noteAsText("Logitech", [done, open, idea], (id) => steps.get(id) ?? [], true)).toBe(
       ["Logitech", "", "- [ ] Call Léa", "  - [ ] Ask about Friday", "  - [x] Find the number", "- [x] Order the mouse", "", "- A mouse with a dial"].join("\n"),
     );
   });

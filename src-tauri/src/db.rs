@@ -39,6 +39,9 @@ pub struct Note {
     /// a version that didn't keep the time).
     #[serde(default)]
     pub archived_at: Option<i64>,
+    /// Its done tasks move to the end of its list (else they stay where they are, the default).
+    #[serde(default)]
+    pub done_last: bool,
 }
 
 fn paper_default() -> String {
@@ -115,12 +118,26 @@ pub struct Picture {
     pub thumb: Option<crate::thumbs::Thumb>,
 }
 
+/// One time a repeating task was done (its history: the History card, the look back). Kept by
+/// the line's id, so it follows the line wherever it goes (another note, a step, a new note made
+/// of it). A deleted line's history stays until the next start, so Undo finds it again
+/// (`add_tables`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Done {
+    pub id: i64,
+    pub item_id: i64,
+    /// The occurrence that was done (None: a repeat without a time).
+    pub due_at: Option<i64>,
+    pub done_at: i64,
+}
+
 #[derive(Serialize)]
 pub struct Everything {
     pub notes: Vec<Note>,
     pub items: Vec<Item>,
     pub pictures: Vec<Picture>,
     pub settings: serde_json::Map<String, serde_json::Value>,
+    pub done_log: Vec<Done>,
 }
 
 pub fn now_ms() -> i64 {
@@ -328,6 +345,16 @@ fn rebuild_with_unique_ids(conn: &Connection, todo: &[&str]) -> Result<()> {
 /// gives an older file unique ids.
 pub fn migrate(conn: &Connection) -> Result<()> {
     add_columns(conn)?;
+    add_tables(conn)?;
+    // A repeating task unticked by 1.2.0 (started after 1.2.1, then 1.2.1 again) is open with
+    // what unticking gives back still on it: open, it waits for nothing. (Never in the way of
+    // opening the notes either: `not_stale` copes with one left.)
+    if let Err(e) = conn.execute(
+        "UPDATE items SET repeat = json_remove(repeat, '$.ticked') WHERE done_at IS NULL AND repeat LIKE '%\"ticked\"%' AND json_valid(repeat)",
+        [],
+    ) {
+        eprintln!("Repeating tasks open again couldn't be tidied: {e}");
+    }
     // (Never in the way of opening the notes: they work as before if this can't be done now, and
     // it is tried again at the next start.)
     if let Err(e) = ids_never_reused(conn) {
@@ -357,7 +384,27 @@ fn add_columns(conn: &Connection) -> Result<()> {
     add_column(conn, "items", "repeat", "TEXT")?;
     // The Archive page.
     add_column(conn, "notes", "archived_at", "INTEGER")?;
+    // Done tasks moved to the end of their note (1.2.1; before, they always were).
+    add_column(conn, "notes", "done_last", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(())
+}
+
+/// The tables newer versions use, made in files from older ones (or restored backups).
+fn add_tables(conn: &Connection) -> Result<()> {
+    // Repeating tasks' history (1.2.1). No link to the line (ON DELETE CASCADE): a line deleted
+    // and brought back with Undo finds its history where it was (ids are never given again), and
+    // what no line has any more is cleared here, at the next start, when no Undo can need it.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS done_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            due_at INTEGER,
+            done_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS done_log_item ON done_log(item_id);
+         DELETE FROM done_log WHERE item_id NOT IN (SELECT id FROM items);",
+    )
+    .map_err(err)
 }
 
 fn note_from_row(r: &rusqlite::Row) -> rusqlite::Result<Note> {
@@ -374,6 +421,7 @@ fn note_from_row(r: &rusqlite::Row) -> rusqlite::Result<Note> {
         folded: r.get::<_, i64>(9)? != 0,
         paper: r.get(10)?,
         archived_at: r.get(11)?,
+        done_last: r.get::<_, i64>(12)? != 0,
     })
 }
 
@@ -406,11 +454,15 @@ fn item_from_row(r: &rusqlite::Row) -> rusqlite::Result<Item> {
     })
 }
 
+fn done_from_row(r: &rusqlite::Row) -> rusqlite::Result<Done> {
+    Ok(Done { id: r.get(0)?, item_id: r.get(1)?, due_at: r.get(2)?, done_at: r.get(3)? })
+}
+
 fn picture_from_row(r: &rusqlite::Row) -> rusqlite::Result<Picture> {
     Ok(Picture { id: r.get(0)?, note_id: r.get(1)?, item_id: r.get(2)?, path: r.get(3)?, sort: r.get(4)?, created_at: r.get(5)?, thumb: None })
 }
 
-const NOTE_COLS: &str = "id, title, space, palette, color, sort, archived, created_at, wide, folded, paper, archived_at";
+const NOTE_COLS: &str = "id, title, space, palette, color, sort, archived, created_at, wide, folded, paper, archived_at, done_last";
 pub const ITEM_COLS: &str = "id, note_id, kind, text, due_at, done_at, sort, created_at, parent_id, alarm, rhythm, link, file, \
      ring_state, rings, last_ring_at, snooze_until, on_it_at, check_at, repeat";
 const PICTURE_COLS: &str = "id, note_id, item_id, path, sort, created_at";
@@ -429,7 +481,21 @@ pub fn load_all(conn: &Connection) -> Result<Everything> {
         let (k, v) = row.map_err(err)?;
         settings.insert(k, serde_json::from_str(&v).unwrap_or(serde_json::Value::Null));
     }
-    Ok(Everything { notes, items, pictures, settings })
+    let mut st = conn.prepare("SELECT id, item_id, due_at, done_at FROM done_log ORDER BY done_at, id").map_err(err)?;
+    let done_log = st.query_map([], done_from_row).map_err(err)?.collect::<rusqlite::Result<Vec<_>>>().map_err(err)?;
+    Ok(Everything { notes, items, pictures, settings, done_log })
+}
+
+/// One time a line was done leaves its history (Undo of a "Done").
+pub fn forget_done(conn: &Connection, item_id: i64, done_at: i64) -> Result<()> {
+    conn.execute("DELETE FROM done_log WHERE item_id = ?1 AND done_at = ?2", params![item_id, done_at]).map_err(err)?;
+    Ok(())
+}
+
+/// A line's history (oldest first).
+pub fn done_log_of(conn: &Connection, item_id: i64) -> Result<Vec<Done>> {
+    let mut st = conn.prepare("SELECT id, item_id, due_at, done_at FROM done_log WHERE item_id = ?1 ORDER BY done_at, id").map_err(err)?;
+    st.query_map([item_id], done_from_row).map_err(err)?.collect::<rusqlite::Result<Vec<_>>>().map_err(err)
 }
 
 pub fn get_note(conn: &Connection, id: i64) -> Result<Note> {
@@ -486,12 +552,12 @@ pub fn create_note(conn: &Connection, title: &str, space: &str, palette: &str, c
 /// it stays there, cleared when it comes out.
 pub fn update_note(conn: &Connection, n: &Note) -> Result<Note> {
     conn.execute(
-        "UPDATE notes SET title = ?2, space = ?3, palette = ?4, color = ?5, sort = ?6, archived = ?7, wide = ?8, folded = ?9, paper = ?10,
+        "UPDATE notes SET title = ?2, space = ?3, palette = ?4, color = ?5, sort = ?6, archived = ?7, wide = ?8, folded = ?9, paper = ?10, done_last = ?13,
             archived_at = CASE WHEN ?7 = 0 THEN NULL
                                WHEN archived = 0 THEN COALESCE(?12, ?11)
                                ELSE COALESCE(archived_at, ?12, ?11) END
          WHERE id = ?1",
-        params![n.id, n.title, n.space, n.palette, n.color, n.sort, n.archived as i64, n.wide as i64, n.folded as i64, n.paper, now_ms(), n.archived_at],
+        params![n.id, n.title, n.space, n.palette, n.color, n.sort, n.archived as i64, n.wide as i64, n.folded as i64, n.paper, now_ms(), n.archived_at, n.done_last as i64],
     )
     .map_err(err)?;
     get_note(conn, n.id)
@@ -541,7 +607,10 @@ pub fn create_item(conn: &Connection, n: NewItem) -> Result<Item> {
         ],
     )
     .map_err(err)?;
-    get_item(conn, conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    // (Never someone else's history: only possible in a file whose ids couldn't be made unique.)
+    conn.execute("DELETE FROM done_log WHERE item_id = ?1", [id]).map_err(err)?;
+    get_item(conn, id)
 }
 
 /// Saves what the person can change. When the time, the reminder type, the rhythm or "done"
@@ -556,13 +625,13 @@ pub fn update_item(conn: &Connection, it: &Item) -> Result<Item> {
 const ANCESTORS: &str = "WITH RECURSIVE up(id, anc) AS (SELECT id, parent_id FROM items WHERE parent_id IS NOT NULL
     UNION SELECT up.id, i.parent_id FROM up JOIN items i ON i.id = up.anc WHERE i.parent_id IS NOT NULL)";
 
-/// What saving a line changed: the line, a repeating task's next occurrence, and the steps
-/// under it whose reminder was paused or brought back (their notifications to clear, the board
-/// to tell).
-pub type Saved = (Item, Option<Item>, Vec<Item>);
+/// What saving a line changed: the line, a repeating task's history when it changed (all of
+/// it, for the board), and the steps under it whose reminder was paused or brought back (their
+/// notifications to clear, the board to tell).
+pub type Saved = (Item, Option<Vec<Done>>, Vec<Item>);
 
-/// Like `update_item`; when a repeating task was just ticked, also makes its next occurrence
-/// (returned second).
+/// Like `update_item`; a repeating task ticked or unticked also changes its history (returned
+/// second) and its time (`finish_tick`, `after_unticked`).
 pub fn update_item_full(conn: &Connection, it: &Item) -> Result<Saved> {
     update_item_at(conn, it, now_ms())
 }
@@ -576,25 +645,40 @@ pub fn update_item_full(conn: &Connection, it: &Item) -> Result<Saved> {
 pub const UNDONE_WAIT: i64 = 60_000;
 
 fn after_undone(conn: &Connection, task: &Item, done_at: i64, now: i64) -> Result<Vec<i64>> {
+    wait_a_minute(conn, task, now)?;
+    let mut changed = Vec::new();
+    for id in subtree_ids(conn, task.id).into_iter().filter(|i| *i != task.id) {
+        if unpause_step(conn, &get_item(conn, id)?, done_at, now)? {
+            changed.push(id);
+        }
+    }
+    Ok(changed)
+}
+
+/// A step paused while its task was done (from `done_at`), going on at `now` (`after_undone`):
+/// its time come meanwhile, it stays quiet ("passed"); else it goes on with its next ring to
+/// come. Whether it changed.
+fn unpause_step(conn: &Connection, s: &Item, done_at: i64, now: i64) -> Result<bool> {
+    let Some(due) = s.due_at else { return Ok(false) };
+    if s.done_at.is_some() || s.kind != "task" || s.alarm == "off" {
+        return Ok(false);
+    }
+    if due > done_at && due <= now {
+        conn.execute("UPDATE items SET ring_state = 'passed' WHERE id = ?1", [s.id]).map_err(err)?;
+    } else {
+        conn.execute("UPDATE items SET last_ring_at = MAX(COALESCE(last_ring_at, ?2), ?2) WHERE id = ?1", params![s.id, now]).map_err(err)?;
+    }
+    Ok(true)
+}
+
+/// The task's own wait (`after_undone`): overdue, or with an early ring already past, it rings a
+/// minute from `now`, never at once.
+fn wait_a_minute(conn: &Connection, task: &Item, now: i64) -> Result<()> {
     let r = crate::reminders::rhythm_of(conn, task);
     if crate::reminders::slots(task, &r).first().is_some_and(|(t, _)| *t <= now) {
         conn.execute("UPDATE items SET snooze_until = ?2 WHERE id = ?1", params![task.id, now + UNDONE_WAIT]).map_err(err)?;
     }
-    let mut changed = Vec::new();
-    for id in subtree_ids(conn, task.id).into_iter().filter(|i| *i != task.id) {
-        let s = get_item(conn, id)?;
-        let Some(due) = s.due_at else { continue };
-        if s.done_at.is_some() || s.kind != "task" || s.alarm == "off" {
-            continue;
-        }
-        if due > done_at && due <= now {
-            conn.execute("UPDATE items SET ring_state = 'passed' WHERE id = ?1", [id]).map_err(err)?;
-        } else {
-            conn.execute("UPDATE items SET last_ring_at = MAX(COALESCE(last_ring_at, ?2), ?2) WHERE id = ?1", params![id, now]).map_err(err)?;
-        }
-        changed.push(id);
-    }
-    Ok(changed)
+    Ok(())
 }
 
 /// A task just ticked: its steps' rings stop showing (their reminders are kept, paused).
@@ -629,9 +713,13 @@ fn repeat_with_time(it: &Item, old: &Item) -> Option<serde_json::Value> {
 /// `update_item_full` at a given time.
 pub fn update_item_at(conn: &Connection, it: &Item, now: i64) -> Result<Saved> {
     let old = get_item(conn, it.id)?;
+    // (A stale copy's history may be stale too: the board is sent the line's.)
+    let (it, stale) = not_stale(it, &old);
+    let it = &it;
     let it = &Item { repeat: repeat_with_time(it, &old), ..it.clone() };
+    let it = &still_ticked(it, &old, now);
     let restart = old.due_at != it.due_at || old.done_at != it.done_at || old.alarm != it.alarm || old.rhythm != it.rhythm || old.kind != it.kind;
-    // All or nothing (the line, its steps' note and the next occurrence of a repeat).
+    // All or nothing (the line, its steps' note, a repeat's history and time).
     let tx = conn.unchecked_transaction().map_err(err)?;
     conn.execute(
         "UPDATE items SET note_id = ?2, kind = ?3, text = ?4, due_at = ?5, done_at = ?6, sort = ?7, parent_id = ?8,
@@ -663,59 +751,379 @@ pub fn update_item_at(conn: &Connection, it: &Item, now: i64) -> Result<Saved> {
         conn.execute(&format!("{SUBTREE} UPDATE pictures SET note_id = ?2 WHERE item_id IN (SELECT id FROM sub)"), params![it.id, it.note_id])
             .map_err(err)?;
     }
+    let (log, fresh) = match (old.done_at, it.done_at) {
+        (None, Some(_)) => finish_tick(conn, it.id, now)?,
+        (Some(_), None) => (after_unticked(conn, &old, it.id)?, None),
+        _ => (if stale { Some(done_log_of(conn, it.id)?) } else { None }, None),
+    };
     let saved = get_item(conn, it.id)?;
-    let steps = match (old.done_at, saved.done_at) {
-        (None, Some(_)) => after_done(conn, &saved)?,
-        (Some(was), None) => after_undone(conn, &saved, was, now)?,
+    // (Ticked and open again at once: its steps were never paused, they start fresh.)
+    let steps = match (old.done_at, saved.done_at, fresh) {
+        (_, _, Some(fresh)) => fresh,
+        (None, Some(_), _) => after_done(conn, &saved)?,
+        (Some(was), None, _) => after_undone(conn, &saved, was, now)?,
         _ => vec![],
     };
-    let next = if old.done_at.is_none() && saved.done_at.is_some() { spawn_next(conn, &saved)? } else { None };
     let saved = get_item(conn, it.id)?;
     let steps = steps.into_iter().map(|id| get_item(conn, id)).collect::<Result<Vec<_>>>()?;
     tx.commit().map_err(err)?;
-    Ok((saved, next, steps))
+    Ok((saved, log, steps))
 }
 
 /// A line and everything under it (its steps, their steps…), as the table `sub(id)`.
 /// `?1` is the line. UNION (not UNION ALL) also stops on a loop.
 const SUBTREE: &str = "WITH RECURSIVE sub(id) AS (SELECT ?1 UNION SELECT i.id FROM items i JOIN sub ON i.parent_id = sub.id)";
 
-/// A repeating task that was just done: its next occurrence, right after it in the note.
-/// Only the newest occurrence carries the rule.
-pub fn spawn_next(conn: &Connection, it: &Item) -> Result<Option<Item>> {
-    let (Some(rule), Some(due)) = (it.repeat.as_ref(), it.due_at) else { return Ok(None) };
+/// A repeating task's rule, when it is one (a task with a rule that reads).
+fn rule_of(it: &Item) -> Option<crate::repeat::Repeat> {
     if it.kind != "task" {
-        return Ok(None);
+        return None;
     }
-    let Ok(mut rule) = serde_json::from_value::<crate::repeat::Repeat>(rule.clone()) else { return Ok(None) };
+    serde_json::from_value(it.repeat.clone()?).ok()
+}
+
+fn rule_json(r: &crate::repeat::Repeat) -> Result<String> {
+    serde_json::to_string(r).map_err(err)
+}
+
+/// "My day", its start and its end (Settings › My day; 08:00–22:00 when not set).
+pub fn my_day(conn: &Connection) -> (String, String) {
+    let day = get_setting(conn, "day");
+    let time = |k: &str, or: &str| {
+        day.as_ref().and_then(|d| d.get(k)).and_then(|v| v.as_str()).filter(|s| crate::repeat::parse_hhmm(s).is_some()).map_or_else(|| or.to_string(), String::from)
+    };
+    (time("start", "08:00"), time("end", "22:00"))
+}
+
+/// When a ticked repeating task waiting for its next day is a to-do again (`reopens_at`), or
+/// None when it isn't one.
+fn reopen_time(it: &Item, day: &(String, String)) -> Option<i64> {
+    rule_of(it)?.ticked?;
+    it.done_at?;
+    Some(crate::repeat::reopens_at(it.due_at?, &day.0, &day.1))
+}
+
+fn has_ticked(it: &Item) -> bool {
+    it.repeat.as_ref().and_then(|r| r.get("ticked")).is_some()
+}
+
+/// A copy of a repeating task the board kept from another moment never ticks it a second time,
+/// nor unticks a tick it never saw. Its other changes (its words, its note…) are kept; its
+/// "done", its time and its rule stay as the line has them:
+/// - a copy from before it opened again (still ticked, with what unticking gives back), saved on
+///   the open line: a real tick always comes from the open line, without `ticked`;
+/// - a copy from before it was ticked (open, or ticked on the board a moment before the tick came
+///   back moved on: at the occurrence ticked, without `ticked`), saved while it waits ticked for
+///   its next day.
+///
+/// An open line never takes a `ticked`, and one left on an open line (a 1.2.0 started meanwhile
+/// unticked it) is dropped: the copy is the line as it is. Returns the line to save, and whether
+/// the copy was stale (the board is then sent the line's history).
+fn not_stale(it: &Item, old: &Item) -> (Item, bool) {
+    let kept = || Item { done_at: old.done_at, due_at: old.due_at, repeat: old.repeat.clone(), ..it.clone() };
+    if old.done_at.is_none() {
+        if !has_ticked(it) {
+            return (it.clone(), false);
+        }
+        if !has_ticked(old) {
+            return (kept(), true);
+        }
+        let mut repeat = it.repeat.clone();
+        if let Some(obj) = repeat.as_mut().and_then(|r| r.as_object_mut()) {
+            obj.remove("ticked");
+        }
+        return (Item { repeat, ..it.clone() }, false);
+    }
+    let Some(back) = rule_of(old).and_then(|r| r.ticked) else { return (it.clone(), false) };
+    let before_tick = rule_of(it).is_some() && !has_ticked(it) && it.due_at == Some(back.due) && old.due_at != Some(back.due);
+    if before_tick { (kept(), true) } else { (it.clone(), false) }
+}
+
+/// What ticking a line did (`finish_tick`): a repeating task's history, and, when it is open
+/// again at once, its steps made fresh.
+pub type Ticked = (Option<Vec<Done>>, Option<Vec<i64>>);
+
+/// The line, just ticked: a repeating task's completion goes into its history, and while the
+/// repeat goes on the line moves to its next occurrence, still ticked until that day comes
+/// (`reopen_due`). When that day has come already (yesterday's ticked this morning), it is open
+/// again at once, at that next occurrence. Returns its history (a repeating task's) and, when it
+/// is open again, its steps made fresh for it (`open_row`).
+pub fn finish_tick(conn: &Connection, id: i64, now: i64) -> Result<Ticked> {
+    let it = get_item(conn, id)?;
+    let (Some(done_at), Some(mut rule)) = (it.done_at, rule_of(&it)) else { return Ok((None, None)) };
+    conn.execute("INSERT INTO done_log (item_id, due_at, done_at) VALUES (?1, ?2, ?3)", params![id, it.due_at, done_at]).map_err(err)?;
+    let log = Some(done_log_of(conn, id)?);
+    // (A repeat without a time: its history only; it stays done.)
+    let Some(due) = it.due_at else { return Ok((log, None)) };
     // (A repeat made before it kept its own time: the time of this one.)
     if rule.at.as_deref().and_then(crate::repeat::parse_hhmm).is_none() {
         rule.at = Some(crate::clock::local_hhmm(due));
     }
-    let Some((next_due, done)) = rule.next_after_done(due, now_ms()) else { return Ok(None) };
-    rule.done = done;
-    let rule = serde_json::to_value(&rule).map_err(err)?;
+    rule.ticked = None;
+    // The repeat is over: the line stays done, as any task.
+    let Some((next, rule)) = rule.tick(due, now) else { return Ok((log, None)) };
+    conn.execute("UPDATE items SET due_at = ?2, repeat = ?3 WHERE id = ?1", params![id, next, rule_json(&rule)?]).map_err(err)?;
+    let moved = get_item(conn, id)?;
+    match reopen_time(&moved, &my_day(conn)) {
+        Some(at) if now >= at => Ok((log, Some(open_row(conn, &moved, at, now)?))),
+        _ => Ok((log, None)),
+    }
+}
+
+/// How late a ticked repeating task may open again and still be on time (the reminder clock looks
+/// every 5 seconds).
+const ON_TIME: i64 = 60_000;
+
+/// A ticked repeating task is a to-do again, at the occurrence it waited for (`it`, as it waited;
+/// `at`, when it was to open): its reminder ready for that occurrence, and its steps fresh for it
+/// too (`fresh_steps`). Opened on time, it rings at its own times (a 07:00 task opening at 07:00
+/// rings at 07:00); opened late (the computer asleep, Dobo not running) with its time or an early
+/// ring past meanwhile, it waits a minute, as after "Not done", and so do its steps. Returns the
+/// steps changed.
+fn open_row(conn: &Connection, it: &Item, at: i64, now: i64) -> Result<Vec<i64>> {
+    let rule = rule_of(it);
+    // (How far it moved on, in calendar days: from the occurrence ticked to the one it opens at.)
+    let days = match (rule.as_ref().and_then(|r| r.ticked.as_ref()), it.due_at) {
+        (Some(t), Some(due)) => crate::repeat::days_apart(t.due, due).unwrap_or(0),
+        _ => 0,
+    };
+    let json = rule.map(|r| crate::repeat::Repeat { ticked: None, ..r }).as_ref().map(rule_json).transpose()?;
+    conn.execute("UPDATE items SET done_at = NULL, repeat = COALESCE(?2, repeat) WHERE id = ?1", params![it.id, json]).map_err(err)?;
+    reset_ring(conn, it.id)?;
+    let late = now > at.saturating_add(ON_TIME);
+    if late {
+        wait_a_minute(conn, &get_item(conn, it.id)?, now)?;
+    }
+    fresh_steps(conn, it, days, late, now)
+}
+
+/// A repeating task open again (`task`, as it waited, ticked): its steps start fresh too,
+/// unticked, their times moved on by as many calendar days as the task's (`days`), each at the
+/// same time of day (never a fixed number of hours: the days the clocks change are 23 or 25
+/// hours long; `repeat::shift_days`), their reminders ready for
+/// them. Each one that was done keeps that time in the history (the look back counts it on its
+/// day). Opened `late`, a step whose time (or early ring) is past already waits a minute, as the
+/// task does, never ringing at once. A step with a repeat of its own keeps its own rhythm: it was
+/// paused while the task waited, and goes on as after "Not done" (`unpause_step`). Returns the
+/// steps changed.
+fn fresh_steps(conn: &Connection, task: &Item, days: i64, late: bool, now: i64) -> Result<Vec<i64>> {
+    let mut changed = Vec::new();
+    for id in subtree_ids(conn, task.id).into_iter().filter(|i| *i != task.id) {
+        let s = get_item(conn, id)?;
+        if s.kind != "task" {
+            continue;
+        }
+        if rule_of(&s).is_some() {
+            if let Some(since) = task.done_at
+                && unpause_step(conn, &s, since, now)?
+            {
+                changed.push(id);
+            }
+            continue;
+        }
+        if s.done_at.is_none() && s.due_at.is_none() && s.ring_state.is_empty() && s.snooze_until.is_none() && s.check_at.is_none() && s.on_it_at.is_none() {
+            continue;
+        }
+        if let Some(done) = s.done_at {
+            conn.execute(
+                "INSERT INTO done_log (item_id, due_at, done_at) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM done_log WHERE item_id = ?1 AND done_at = ?3)",
+                params![id, s.due_at, done],
+            )
+            .map_err(err)?;
+        }
+        let due = s.due_at.map(|d| crate::repeat::shift_days(d, days).unwrap_or(d));
+        conn.execute("UPDATE items SET done_at = NULL, due_at = ?2 WHERE id = ?1", params![id, due]).map_err(err)?;
+        reset_ring(conn, id)?;
+        if late {
+            wait_a_minute(conn, &get_item(conn, id)?, now)?;
+        }
+        changed.push(id);
+    }
+    Ok(changed)
+}
+
+/// Undo of a repeating task's "Done" once it opened again: the steps its opening made fresh
+/// (`fresh_steps`), back exactly as they were (`steps`, as they were then: ticked or not, their
+/// times, their reminders, the task they were under), and each one's time done out of the history
+/// again. One whose time or snooze is past by `now` waits a minute, as the task does, never
+/// ringing at once. Returns them as saved: one changed since is left out (deleted, made a
+/// repeating task, ticked, or moved under another task: a board's copy from before can't
+/// rewrite it).
+#[cfg(test)]
+pub fn steps_back(conn: &Connection, steps: &[Item], now: i64) -> Result<Vec<Item>> {
+    let tx = conn.unchecked_transaction().map_err(err)?;
+    let saved = steps_back_in(conn, steps, now)?;
+    tx.commit().map_err(err)?;
+    Ok(saved)
+}
+
+/// `steps_back`, inside a transaction of the caller's.
+fn steps_back_in(conn: &Connection, steps: &[Item], now: i64) -> Result<Vec<Item>> {
+    let mut saved = Vec::new();
+    for s in steps {
+        let n = conn
+            .execute(
+                "UPDATE items SET done_at = ?2, due_at = ?3, ring_state = ?4, rings = ?5, last_ring_at = ?6, snooze_until = ?7, on_it_at = ?8, check_at = ?9
+                 WHERE id = ?1 AND kind = 'task' AND repeat IS NULL AND done_at IS NULL AND parent_id IS ?10",
+                params![s.id, s.done_at, s.due_at, s.ring_state, s.rings, s.last_ring_at, s.snooze_until, s.on_it_at, s.check_at, s.parent_id],
+            )
+            .map_err(err)?;
+        if n == 0 {
+            continue;
+        }
+        if let Some(done) = s.done_at {
+            conn.execute("DELETE FROM done_log WHERE item_id = ?1 AND done_at = ?2", params![s.id, done]).map_err(err)?;
+        }
+        wait_a_minute(conn, &get_item(conn, s.id)?, now)?;
+        saved.push(get_item(conn, s.id)?);
+    }
+    Ok(saved)
+}
+
+/// The Undo of what opened a repeating task again (its "Done", once its next day came; or a change
+/// that opened it at once, a time set earlier), all in one go, so the reminder clock never sees a
+/// part of it: the line exactly as it was then (`it`: its "done", its time and its rule, ticked
+/// or open, with whatever else that change changed), its steps back as they were (`steps_back`),
+/// and the time that tick was done out of its history (`forget`; None when the tick stays: the
+/// line goes back to waiting for its next day, its history as it is, never a second row). Open
+/// again with its time (or an early ring) past, it waits a minute, as after "Not done", never
+/// ringing at once. Only while it is open: ticked again since (a notification's Done), it stays
+/// as it is. Returns the line, its history and the steps given back.
+pub fn undo_tick(conn: &Connection, it: &Item, forget: Option<i64>, steps: &[Item], now: i64) -> Result<Saved> {
+    let tx = conn.unchecked_transaction().map_err(err)?;
+    let old = get_item(conn, it.id)?;
+    if old.done_at.is_some() {
+        return Ok((old, Some(done_log_of(conn, it.id)?), vec![]));
+    }
     conn.execute(
-        "INSERT INTO items (note_id, kind, text, due_at, done_at, sort, created_at, parent_id, alarm, rhythm, link, file, repeat)
-         VALUES (?1, 'task', ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "UPDATE items SET kind = ?2, text = ?3, due_at = ?4, done_at = ?5, alarm = ?6, rhythm = ?7, link = ?8, file = ?9, repeat = ?10 WHERE id = ?1",
         params![
-            it.note_id,
+            it.id,
+            it.kind,
             it.text,
-            next_due,
-            it.sort + 0.001,
-            now_ms(),
-            it.parent_id,
+            it.due_at,
+            it.done_at,
             it.alarm,
             it.rhythm.as_ref().map(|v| v.to_string()),
             it.link.as_ref().map(|v| v.to_string()),
             it.file,
-            rule.to_string()
+            it.repeat.as_ref().map(|v| v.to_string())
         ],
     )
     .map_err(err)?;
-    let id = conn.last_insert_rowid();
-    conn.execute("UPDATE items SET repeat = NULL WHERE id = ?1", [it.id]).map_err(err)?;
-    get_item(conn, id).map(Some)
+    reset_ring(conn, it.id)?;
+    if let Some(done) = forget {
+        forget_done(conn, it.id, done)?;
+    }
+    let mut ids: Vec<i64> = steps_back_in(conn, steps, now)?.iter().map(|s| s.id).collect();
+    let saved = get_item(conn, it.id)?;
+    if saved.done_at.is_none() {
+        wait_a_minute(conn, &saved, now)?;
+    } else {
+        // (Ticked again: its steps' rings stop showing, as at a tick.)
+        for id in after_done(conn, &saved)? {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    let saved = get_item(conn, it.id)?;
+    let steps = ids.into_iter().map(|id| get_item(conn, id)).collect::<Result<Vec<_>>>()?;
+    let log = done_log_of(conn, it.id)?;
+    tx.commit().map_err(err)?;
+    Ok((saved, Some(log), steps))
+}
+
+/// The history of each step among `items` that has one (`fresh_steps` writes it), for the board.
+pub fn steps_logs(conn: &Connection, items: &[Item]) -> Result<Vec<(i64, Vec<Done>)>> {
+    let mut out = Vec::new();
+    for it in items.iter().filter(|i| i.parent_id.is_some()) {
+        let rows = done_log_of(conn, it.id)?;
+        if !rows.is_empty() {
+            out.push((it.id, rows));
+        }
+    }
+    Ok(out)
+}
+
+/// The line unticked (`old`: as it was, ticked): its completion leaves its history, and a
+/// repeating task waiting for its next day goes back to the occurrence that was ticked, with its
+/// count as it was. Returns its history when it is a repeating task's.
+fn after_unticked(conn: &Connection, old: &Item, id: i64) -> Result<Option<Vec<Done>>> {
+    let Some(was) = old.done_at else { return Ok(None) };
+    let gone = conn.execute("DELETE FROM done_log WHERE item_id = ?1 AND done_at = ?2", params![id, was]).map_err(err)?;
+    let old_rule = rule_of(old);
+    if let Some(back) = old_rule.as_ref().and_then(|r| r.ticked.clone()) {
+        let now = get_item(conn, id)?;
+        let rule = rule_of(&now).map(|r| crate::repeat::Repeat { done: back.done, ticked: None, ..r });
+        let json = rule.as_ref().map(rule_json).transpose()?;
+        conn.execute("UPDATE items SET due_at = ?2, repeat = COALESCE(?3, repeat) WHERE id = ?1", params![id, back.due, json]).map_err(err)?;
+    }
+    Ok(if gone > 0 || old_rule.is_some() { Some(done_log_of(conn, id)?) } else { None })
+}
+
+/// A ticked repeating task changed while it waits for its next day (its words, its note, its
+/// rule): it keeps what unticking gives back. A new rule moves it to the new rule's next
+/// occurrence after the one ticked; no rule any more, it goes back to the one ticked (done).
+fn still_ticked(it: &Item, old: &Item, now: i64) -> Item {
+    if old.done_at.is_none() || it.done_at != old.done_at {
+        return it.clone();
+    }
+    let Some(was) = rule_of(old) else { return it.clone() };
+    let Some(back) = was.ticked.clone() else { return it.clone() };
+    let same_time = it.due_at == old.due_at;
+    let Some(rule) = rule_of(it) else {
+        return if same_time && it.kind == "task" { Item { due_at: Some(back.due), ..it.clone() } } else { it.clone() };
+    };
+    let same_rule = (&rule.freq, rule.interval, &rule.days, rule.monthday, &rule.ends) == (&was.freq, was.interval, &was.days, was.monthday, &was.ends);
+    let with = |r: &crate::repeat::Repeat, due: Option<i64>| Item { due_at: due, repeat: serde_json::to_value(r).ok(), ..it.clone() };
+    // (Its time changed by hand: that is its next time now.)
+    if same_rule || !same_time {
+        return with(&crate::repeat::Repeat { ticked: Some(back), ..rule }, it.due_at);
+    }
+    let base = crate::repeat::Repeat { done: back.done, ticked: None, ..rule };
+    match base.tick(back.due, now) {
+        Some((next, r)) => with(&r, Some(next)),
+        None => with(&base, Some(back.due)),
+    }
+}
+
+/// Ticked repeating tasks whose next day has come (`reopens_at`): to-dos again, at that
+/// occurrence, their reminders ready for it, their steps fresh for it (`open_row`). Run by the
+/// reminder clock and when the board reads the notes. Returns the lines changed.
+pub fn reopen_due(conn: &Connection, now: i64) -> Result<Vec<Item>> {
+    let day = my_day(conn);
+    let waiting = {
+        let mut st = conn
+            .prepare(&format!("SELECT {ITEM_COLS} FROM items WHERE kind = 'task' AND done_at IS NOT NULL AND due_at IS NOT NULL AND repeat LIKE '%\"ticked\"%'"))
+            .map_err(err)?;
+        st.query_map([], item_from_row).map_err(err)?.collect::<rusqlite::Result<Vec<_>>>().map_err(err)?
+    };
+    let mut changed = Vec::new();
+    for it in waiting {
+        let Some(at) = reopen_time(&it, &day) else { continue };
+        if now < at {
+            continue;
+        }
+        // (Each one on its own: one that can't open now never holds back the others, nor what
+        // they changed from the board.)
+        let opened = (|| {
+            let tx = conn.unchecked_transaction().map_err(err)?;
+            let steps = open_row(conn, &it, at, now)?;
+            let saved = get_item(conn, it.id)?;
+            let steps = steps.into_iter().map(|id| get_item(conn, id)).collect::<Result<Vec<_>>>()?;
+            tx.commit().map_err(err)?;
+            Ok::<_, String>((saved, steps))
+        })();
+        match opened {
+            Ok((saved, steps)) => {
+                changed.push(saved);
+                changed.extend(steps);
+            }
+            Err(e) => eprintln!("A repeating task couldn't open again ({}): {e}", it.id),
+        }
+    }
+    Ok(changed)
 }
 
 /// `restore_rows` in a transaction of its own (tests).
@@ -733,12 +1141,13 @@ pub fn restore_rows(tx: &Connection, notes: &[Note], items: &[Item], pictures: &
         // An upsert, never INSERT OR REPLACE: replacing a note that still exists deletes it
         // first, and its lines and pictures would go with it (ON DELETE CASCADE).
         tx.execute(
-            "INSERT INTO notes (id, title, space, palette, color, sort, archived, created_at, wide, folded, paper, archived_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "INSERT INTO notes (id, title, space, palette, color, sort, archived, created_at, wide, folded, paper, archived_at, done_last)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET title = excluded.title, space = excluded.space, palette = excluded.palette,
                 color = excluded.color, sort = excluded.sort, archived = excluded.archived, created_at = excluded.created_at,
-                wide = excluded.wide, folded = excluded.folded, paper = excluded.paper, archived_at = excluded.archived_at",
-            params![n.id, n.title, n.space, n.palette, n.color, n.sort, n.archived as i64, n.created_at, n.wide as i64, n.folded as i64, n.paper, n.archived_at],
+                wide = excluded.wide, folded = excluded.folded, paper = excluded.paper, archived_at = excluded.archived_at,
+                done_last = excluded.done_last",
+            params![n.id, n.title, n.space, n.palette, n.color, n.sort, n.archived as i64, n.created_at, n.wide as i64, n.folded as i64, n.paper, n.archived_at, n.done_last as i64],
         )
         .map_err(err)?;
     }
@@ -1025,10 +1434,12 @@ mod tests {
         c.execute("INSERT INTO notes (title, space, sort, created_at) VALUES ('Inbox', 'work', -1, 1)", []).unwrap();
         c.execute("INSERT INTO items (note_id, text, created_at) VALUES (1, 'From the first version', 2)", []).unwrap();
         add_columns(&c).unwrap();
+        add_tables(&c).unwrap();
         assert!(!tables_reusing_ids(&c).unwrap().is_empty());
         let hub = create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
         let trip = create_note(&c, "Trip", "personal", "vivid", "Coral").unwrap();
-        update_note(&c, &Note { archived: true, wide: true, paper: "grid".into(), ..trip.clone() }).unwrap();
+        let trip = update_note(&c, &Note { archived: true, wide: true, paper: "grid".into(), done_last: true, ..trip.clone() }).unwrap();
+        assert!(trip.done_last && !hub.done_last, "done tasks move to the end only when asked");
         let task = create_item(&c, new_item(hub.id, "Migrate", Some(5))).unwrap();
         let step = create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(hub.id, "Ask", None) }).unwrap();
         update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "week", "interval": 1})), done_at: Some(9), ..step.clone() }).unwrap();
@@ -1328,37 +1739,628 @@ mod tests {
         assert_eq!(get_note(&c, a.id).unwrap().archived_at, Some(42));
     }
 
+    /// A local time on this computer's clock.
+    fn local(y: i16, m: i8, d: i8, h: i8, mi: i8) -> i64 {
+        crate::repeat::to_ms(jiff::civil::date(y, m, d).at(h, mi, 0, 0)).unwrap()
+    }
+
+    /// A repeating task due at `due`, with this rule.
+    fn repeating(c: &Connection, text: &str, due: i64, rule: serde_json::Value) -> Item {
+        let n = create_note(c, "Hub", "work", "soft", "Sage").unwrap();
+        let it = create_item(c, new_item(n.id, text, Some(due))).unwrap();
+        update_item(c, &Item { repeat: Some(rule), ..it }).unwrap()
+    }
+
+    /// Ticked at `now`, as the board does it.
+    fn tick(c: &Connection, it: &Item, now: i64) -> Item {
+        update_item_at(c, &Item { done_at: Some(now), ..get_item(c, it.id).unwrap() }, now).unwrap().0
+    }
+
+    fn ticked_of(it: &Item) -> Option<crate::repeat::Ticked> {
+        rule_of(it).and_then(|r| r.ticked)
+    }
+
+    /// Is it open again at `now` (the clock's look)?
+    fn opens_at(c: &Connection, it: &Item, now: i64) -> bool {
+        let open = reopen_due(c, now).unwrap().iter().any(|x| x.id == it.id);
+        assert_eq!(open, get_item(c, it.id).unwrap().done_at.is_none());
+        open
+    }
+
     #[test]
-    fn ticking_a_repeating_task_makes_the_next_one() {
+    fn ticking_a_repeating_task_keeps_one_line_ticked_until_its_next_day() {
         let c = temp_db();
-        let a = create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
-        let due = crate::clock::today_at(now_ms(), "10:00").unwrap();
-        let mut it = create_item(&c, new_item(a.id, "Weekly", Some(due))).unwrap();
-        it.repeat = Some(serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "after", "count": 2}}));
-        let it = update_item(&c, &it).unwrap();
-        let mut done = it.clone();
-        done.done_at = Some(now_ms());
-        let (saved, next, _) = update_item_full(&c, &done).unwrap();
-        let next = next.expect("next occurrence");
-        assert_eq!(next.text, "Weekly");
-        assert!(next.due_at.unwrap() > due);
-        assert!(next.done_at.is_none());
-        assert!(saved.repeat.is_none());
-        assert_eq!(next.repeat.as_ref().unwrap()["done"], 1);
-        // The repeat keeps its own time of day, from the time it was given.
-        assert_eq!(next.repeat.as_ref().unwrap()["at"], "10:00");
-        // Saved again with the same time but a rule without it (the page made the rule afresh):
-        // still its own; with another time, that one.
-        let again = update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "after", "count": 2}, "done": 1})), ..next.clone() }).unwrap();
-        assert_eq!(again.repeat.as_ref().unwrap()["at"], "10:00");
-        let other = crate::clock::today_at(now_ms(), "11:45").unwrap();
-        let moved = update_item(&c, &Item { due_at: Some(other), ..again.clone() }).unwrap();
-        assert_eq!(moved.repeat.as_ref().unwrap()["at"], "11:45");
-        let next = update_item(&c, &Item { due_at: next.due_at, ..moved }).unwrap();
-        // The second one is the last ("after 2").
-        let mut done2 = next.clone();
-        done2.done_at = Some(now_ms());
-        assert!(update_item_full(&c, &done2).unwrap().1.is_none());
+        // Every day at 10:00, Wednesday 18 November's ticked at 10:30.
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let (saved, log, _) = update_item_at(&c, &Item { done_at: Some(wed + 30 * 60_000), ..it.clone() }, wed + 30 * 60_000).unwrap();
+        // One line, ticked, already at Thursday's time; its history has Wednesday's.
+        assert_eq!(load_all(&c).unwrap().items.len(), 1);
+        assert_eq!(saved.done_at, Some(wed + 30 * 60_000));
+        assert_eq!(saved.due_at, Some(local(2026, 11, 19, 10, 0)));
+        assert_eq!(saved.repeat.as_ref().unwrap()["done"], 1);
+        assert_eq!(saved.repeat.as_ref().unwrap()["at"], "10:00");
+        assert_eq!(ticked_of(&saved), Some(crate::repeat::Ticked { due: wed, done: 0 }));
+        let log = log.expect("its history");
+        assert_eq!((log.len(), log[0].item_id, log[0].due_at, log[0].done_at), (1, it.id, Some(wed), wed + 30 * 60_000));
+        // Not ringing while ticked; open again at the start of Thursday (08:00 by default).
+        assert!(timed_items(&c).unwrap().is_empty());
+        assert!(!opens_at(&c, &it, local(2026, 11, 19, 7, 59)));
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 8, 0)));
+        let open = get_item(&c, it.id).unwrap();
+        assert_eq!((open.due_at, ticked_of(&open), open.ring_state.as_str()), (Some(local(2026, 11, 19, 10, 0)), None, ""));
+        assert_eq!(timed_items(&c).unwrap().len(), 1, "its reminder rings again for Thursday's");
+        // Ticked again: two times in its history, still one line.
+        tick(&c, &it, local(2026, 11, 19, 10, 5));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 2);
+        assert_eq!(get_item(&c, it.id).unwrap().due_at, Some(local(2026, 11, 20, 10, 0)));
+    }
+
+    #[test]
+    fn it_opens_again_on_the_next_day_of_its_own_rule() {
+        let c = temp_db();
+        // Every weekday at 09:00: Friday's ticked, back on Monday (never over the weekend).
+        let fri = local(2026, 11, 20, 9, 0);
+        let wd = repeating(&c, "Standup", fri, serde_json::json!({"freq": "weekday", "interval": 1, "ends": {"kind": "never"}}));
+        assert_eq!(tick(&c, &wd, fri + 60_000).due_at, Some(local(2026, 11, 23, 9, 0)));
+        assert!(!opens_at(&c, &wd, local(2026, 11, 21, 12, 0)) && !opens_at(&c, &wd, local(2026, 11, 22, 20, 0)));
+        assert!(opens_at(&c, &wd, local(2026, 11, 23, 8, 0)));
+        // Every Friday at 18:00, this Friday's ticked early on Wednesday: back next Friday.
+        let wk = repeating(&c, "Invoices", local(2026, 11, 20, 18, 0), serde_json::json!({"freq": "week", "interval": 1, "days": [5], "ends": {"kind": "never"}}));
+        assert_eq!(tick(&c, &wk, local(2026, 11, 18, 12, 0)).due_at, Some(local(2026, 11, 27, 18, 0)));
+        assert!(!opens_at(&c, &wk, local(2026, 11, 20, 12, 0)));
+        assert!(!opens_at(&c, &wk, local(2026, 11, 27, 7, 59)));
+        assert!(opens_at(&c, &wk, local(2026, 11, 27, 8, 0)));
+        // Every 2 weeks on Monday: two weeks later.
+        let two = repeating(&c, "Plants", local(2026, 11, 16, 9, 0), serde_json::json!({"freq": "week", "interval": 2, "days": [1], "ends": {"kind": "never"}}));
+        assert_eq!(tick(&c, &two, local(2026, 11, 16, 9, 30)).due_at, Some(local(2026, 11, 30, 9, 0)));
+        assert!(!opens_at(&c, &two, local(2026, 11, 23, 12, 0)));
+        assert!(opens_at(&c, &two, local(2026, 11, 30, 8, 0)));
+        // Every month on the 31st: the 28th in February, the 31st in March.
+        let mo = repeating(&c, "Rent", local(2027, 1, 31, 8, 30), serde_json::json!({"freq": "month", "interval": 1, "monthday": 31, "ends": {"kind": "never"}}));
+        assert_eq!(tick(&c, &mo, local(2027, 1, 31, 9, 0)).due_at, Some(local(2027, 2, 28, 8, 30)));
+        assert!(!opens_at(&c, &mo, local(2027, 2, 27, 12, 0)));
+        assert!(opens_at(&c, &mo, local(2027, 2, 28, 8, 0)));
+        assert_eq!(tick(&c, &mo, local(2027, 2, 28, 9, 0)).due_at, Some(local(2027, 3, 31, 8, 30)));
+    }
+
+    #[test]
+    fn a_task_before_the_day_starts_opens_by_its_own_time() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 7, 0);
+        let it = repeating(&c, "Pills", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        tick(&c, &it, wed + 10 * 60_000);
+        // The day starts at 08:00, the task is at 07:00: open by 07:00.
+        assert!(!opens_at(&c, &it, local(2026, 11, 19, 6, 59)));
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 7, 0)));
+        // A day that starts at 06:00: then.
+        set_setting(&c, "day", &serde_json::json!({"start": "06:00", "end": "22:00"})).unwrap();
+        tick(&c, &it, local(2026, 11, 19, 7, 10));
+        assert!(!opens_at(&c, &it, local(2026, 11, 20, 5, 59)));
+        assert!(opens_at(&c, &it, local(2026, 11, 20, 6, 0)));
+    }
+
+    #[test]
+    fn ticked_once_its_next_day_has_come_it_is_open_again_at_once() {
+        let c = temp_db();
+        // Every day at 22:00: yesterday's ticked at 09:00 this morning.
+        let it = repeating(&c, "Journal", local(2026, 11, 17, 22, 0), serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let now = local(2026, 11, 18, 9, 0);
+        let (saved, log, _) = update_item_at(&c, &Item { done_at: Some(now), ..it.clone() }, now).unwrap();
+        assert_eq!((saved.done_at, saved.due_at, ticked_of(&saved)), (None, Some(local(2026, 11, 18, 22, 0)), None));
+        assert_eq!(log.unwrap()[0].due_at, Some(local(2026, 11, 17, 22, 0)));
+        // The notification's Done does the same.
+        let it2 = repeating(&c, "Journal 2", local(2026, 11, 17, 22, 0), serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let (_, log, _) = crate::reminders::save_answer(&c, it2.id, "done", now, None).unwrap();
+        let after = get_item(&c, it2.id).unwrap();
+        assert_eq!((after.done_at, after.due_at, log.map(|l| l.len())), (None, Some(local(2026, 11, 18, 22, 0)), Some(1)));
+    }
+
+    #[test]
+    fn unticking_gives_back_the_occurrence_ticked() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let before = get_item(&c, it.id).unwrap();
+        let ticked = tick(&c, &it, wed + 60_000);
+        // The box clicked again: the line as the board has it, unticked.
+        let (back, log, _) = update_item_at(&c, &Item { done_at: None, ..ticked.clone() }, wed + 2 * 60_000).unwrap();
+        assert_eq!((back.done_at, back.due_at, rule_of(&back)), (None, Some(wed), rule_of(&before)));
+        assert_eq!(log, Some(vec![]));
+        // Undo of "Done" (the board puts back its "done" alone, onto the line as it is): the same.
+        let ticked = tick(&c, &it, wed + 3 * 60_000);
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        let back = update_item_at(&c, &Item { done_at: None, ..ticked }, wed + 4 * 60_000).unwrap().0;
+        assert_eq!((back.done_at, back.due_at, rule_of(&back)), (None, Some(wed), rule_of(&before)));
+        assert!(done_log_of(&c, it.id).unwrap().is_empty());
+    }
+
+    /// The board puts a line in place before the backend answers: a tick sent shows at once as the
+    /// occurrence ticked, done, without what unticking gives back. A change saved on that copy
+    /// meanwhile (its words), or a tick of the board's open copy after a notification's Done, never
+    /// puts it back on the occurrence just ticked nor stops its series: it stays ticked at its
+    /// next one, its history once.
+    #[test]
+    fn a_copy_from_before_the_tick_never_unticks_it_nor_stops_it() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let t = wed + 30 * 60_000;
+        let shown = Item { done_at: Some(t), ..it.clone() };
+        let ticked = update_item_at(&c, &shown, t).unwrap().0;
+        let (saved, log, _) = update_item_at(&c, &Item { text: "Stretch!".into(), ..shown.clone() }, t + 100).unwrap();
+        assert_eq!((saved.text.as_str(), saved.done_at, saved.due_at, ticked_of(&saved)), ("Stretch!", Some(t), ticked.due_at, ticked_of(&ticked)));
+        assert_eq!(log.map(|l| l.len()), Some(1), "the board is sent its history");
+        assert!(!opens_at(&c, &it, t + 5_000), "never Wednesday's again");
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 8, 0)));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        // The open copy from before it, saved (its words) while it waits: the same.
+        let c = temp_db();
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let ticked = tick(&c, &it, t);
+        let saved = update_item_at(&c, &Item { text: "Stretch, 10 min".into(), ..it.clone() }, t + 100).unwrap().0;
+        assert_eq!((saved.text.as_str(), saved.done_at, saved.due_at, ticked_of(&saved)), ("Stretch, 10 min", Some(t), ticked.due_at, ticked_of(&ticked)));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        // Ticked from its notification, then on the board from its open copy: one tick.
+        let c = temp_db();
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        crate::reminders::save_answer(&c, it.id, "done", t, Some(wed)).unwrap();
+        let saved = update_item_at(&c, &Item { done_at: Some(t + 2_000), ..it.clone() }, t + 2_000).unwrap().0;
+        assert_eq!((saved.done_at, saved.due_at, ticked_of(&saved).map(|b| b.due)), (Some(t), Some(local(2026, 11, 19, 10, 0)), Some(wed)));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        assert!(opens_at(&c, &it, local(2026, 11, 20, 9, 0)), "its series goes on");
+        // A rule made afresh by the page (no `ticked`, at its next time) is still a new rule.
+        let c = temp_db();
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let ticked = tick(&c, &it, t);
+        let rule = serde_json::json!({"freq": "week", "interval": 1, "days": [1], "ends": {"kind": "never"}, "done": 1});
+        let weekly = update_item_at(&c, &Item { repeat: Some(rule), ..ticked }, t + 100).unwrap().0;
+        assert_eq!(weekly.due_at, Some(local(2026, 11, 23, 10, 0)));
+    }
+
+    /// A repeating task unticked by 1.2.0 (started meanwhile) is open with what unticking gives
+    /// back still on it: tidied at the start, and a tick of it works even when one is left.
+    #[test]
+    fn an_open_line_left_with_a_tick_on_it_ticks_again() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let mut rule = it.repeat.clone().unwrap();
+        rule["ticked"] = serde_json::json!({"due": wed - 86_400_000, "done": 0});
+        c.execute("UPDATE items SET repeat = ?2 WHERE id = ?1", params![it.id, rule.to_string()]).unwrap();
+        let open = get_item(&c, it.id).unwrap();
+        assert!(ticked_of(&open).is_some());
+        let (s, _, _) = update_item_at(&c, &Item { done_at: Some(wed + 60_000), ..open.clone() }, wed + 60_000).unwrap();
+        assert_eq!((s.done_at, s.due_at, ticked_of(&s).map(|b| b.due)), (Some(wed + 60_000), Some(local(2026, 11, 19, 10, 0)), Some(wed)));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        // At the next start, an open one is tidied (a ticked one keeps its own); a rule that isn't
+        // JSON is left as it is.
+        let other = repeating(&c, "Plants", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        c.execute("UPDATE items SET repeat = ?2 WHERE id = ?1", params![other.id, rule.to_string()]).unwrap();
+        let broken = create_item(&c, new_item(other.note_id, "Odd", None)).unwrap();
+        c.execute("UPDATE items SET repeat = '{\"ticked\": oops' WHERE id = ?1", [broken.id]).unwrap();
+        migrate(&c).unwrap();
+        assert!(ticked_of(&get_item(&c, other.id).unwrap()).is_none());
+        assert_eq!(get_item(&c, other.id).unwrap().repeat.unwrap()["freq"], "day");
+        assert_eq!(ticked_of(&get_item(&c, it.id).unwrap()).map(|b| b.due), Some(wed));
+        let raw: String = c.query_row("SELECT repeat FROM items WHERE id = ?1", [broken.id], |r| r.get(0)).unwrap();
+        assert_eq!(raw, "{\"ticked\": oops");
+    }
+
+    /// One repeating task that can't open again never holds back the others.
+    #[test]
+    fn one_that_cant_open_again_never_holds_back_the_others() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let rule = serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}});
+        let a = repeating(&c, "Stretch", wed, rule.clone());
+        let b = repeating(&c, "Plants", wed, rule);
+        tick(&c, &a, wed + 60_000);
+        tick(&c, &b, wed + 60_000);
+        c.execute_batch(&format!("CREATE TRIGGER stuck BEFORE UPDATE OF done_at ON items WHEN OLD.id = {} BEGIN SELECT RAISE(ABORT, 'stuck'); END;", a.id)).unwrap();
+        let opened = reopen_due(&c, local(2026, 11, 19, 8, 0)).unwrap();
+        assert_eq!(opened.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b.id]);
+        assert!(get_item(&c, a.id).unwrap().done_at.is_some(), "still waiting, as it was");
+        assert_eq!(rule_of(&get_item(&c, a.id).unwrap()).and_then(|r| r.ticked).map(|t| t.due), Some(wed));
+    }
+
+    /// Undo of "Done" once it opened again, in one go: back at the occurrence ticked, that time out
+    /// of its history, and never ringing at once for a time past (it waits a minute).
+    #[test]
+    fn undo_of_done_once_open_again_never_rings_at_once() {
+        use crate::reminders::{Rhythm, due_ring};
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let prev = get_item(&c, it.id).unwrap();
+        tick(&c, &it, wed + 60_000);
+        reopen_due(&c, local(2026, 11, 19, 8, 0)).unwrap();
+        let now = get_item(&c, it.id).unwrap();
+        let thu = local(2026, 11, 19, 8, 15);
+        let back = Item { done_at: prev.done_at, due_at: prev.due_at, repeat: prev.repeat.clone(), ..now };
+        let (s, log, _) = undo_tick(&c, &back, Some(wed + 60_000), &[], thu).unwrap();
+        assert_eq!((s.done_at, s.due_at, rule_of(&s)), (None, Some(wed), rule_of(&prev)));
+        assert_eq!(log, Some(vec![]));
+        assert_eq!(s.snooze_until, Some(thu + UNDONE_WAIT));
+        let std = Rhythm::standard();
+        assert_eq!(due_ring(&s, &std, thu + 5_000), None, "never at once");
+        assert!(due_ring(&s, &std, thu + UNDONE_WAIT).is_some());
+        // Done again since (a notification's Done, saved first): left as it is.
+        c.execute("UPDATE items SET done_at = ?2 WHERE id = ?1", params![it.id, thu + 2 * 60_000]).unwrap();
+        c.execute("INSERT INTO done_log (item_id, due_at, done_at) VALUES (?1, ?2, ?3)", params![it.id, wed, thu + 2 * 60_000]).unwrap();
+        let (s, log, _) = undo_tick(&c, &Item { done_at: None, ..back }, Some(thu + 2 * 60_000), &[], thu + 3 * 60_000).unwrap();
+        assert_eq!((s.done_at, s.due_at), (Some(thu + 2 * 60_000), Some(wed)));
+        assert_eq!(log.map(|l| l.len()), Some(1));
+    }
+
+    /// A change that opens a ticked task at once (its time set to an hour from now, today) opens
+    /// it; its Undo puts it back exactly: ticked, waiting for its next day, its steps as they were,
+    /// never a second time in its history.
+    #[test]
+    fn undo_of_a_change_that_opened_it_puts_it_back_ticked() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let task = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let step = create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, "Mat", Some(local(2026, 11, 18, 9, 0))) }).unwrap();
+        update_item_at(&c, &Item { done_at: Some(local(2026, 11, 18, 9, 10)), ..step.clone() }, local(2026, 11, 18, 9, 10)).unwrap();
+        let waiting = tick(&c, &task, wed + 30 * 60_000);
+        let steps = vec![get_item(&c, step.id).unwrap()];
+        // Its time set to 13:00 today: open at once (the clock's next look).
+        let now = local(2026, 11, 18, 12, 0);
+        update_item_at(&c, &Item { due_at: Some(local(2026, 11, 18, 13, 0)), ..waiting.clone() }, now).unwrap();
+        assert!(opens_at(&c, &task, now + 5_000));
+        let open = get_item(&c, task.id).unwrap();
+        assert_eq!(get_item(&c, step.id).unwrap().done_at, None, "its step fresh");
+        // Undo: the line as it was (its time too), its step back, one time in its history.
+        let back = Item { done_at: waiting.done_at, due_at: waiting.due_at, repeat: waiting.repeat.clone(), ..open };
+        let (s, log, given) = undo_tick(&c, &back, None, &steps, now + 60_000).unwrap();
+        assert_eq!((s.done_at, s.due_at, ticked_of(&s), rule_of(&s).map(|r| r.done)), (waiting.done_at, waiting.due_at, ticked_of(&waiting), Some(1)));
+        assert_eq!(log.map(|l| l.len()), Some(1));
+        assert_eq!(given.iter().map(|x| (x.id, x.done_at)).collect::<Vec<_>>(), vec![(step.id, steps[0].done_at)]);
+        assert!(done_log_of(&c, step.id).unwrap().is_empty());
+        assert!(!opens_at(&c, &task, now + 2 * 60_000), "waiting for Thursday again");
+        assert!(opens_at(&c, &task, local(2026, 11, 19, 8, 0)));
+    }
+
+    #[test]
+    fn changed_while_ticked_it_keeps_what_unticking_gives_back() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let ticked = tick(&c, &it, wed + 60_000);
+        // Renamed: still waiting for Thursday, with what it gives back.
+        let renamed = update_item_at(&c, &Item { text: "Stretch, 10 min".into(), ..ticked.clone() }, wed + 2 * 60_000).unwrap().0;
+        assert_eq!((renamed.due_at, ticked_of(&renamed)), (ticked.due_at, ticked_of(&ticked)));
+        // Its rule made afresh by the page (every Monday): the next Monday after the one ticked.
+        let rule = serde_json::json!({"freq": "week", "interval": 1, "days": [1], "ends": {"kind": "never"}, "done": 1});
+        let weekly = update_item_at(&c, &Item { repeat: Some(rule), ..renamed }, wed + 3 * 60_000).unwrap().0;
+        assert_eq!((weekly.due_at, ticked_of(&weekly).map(|t| t.due)), (Some(local(2026, 11, 23, 10, 0)), Some(wed)));
+        let back = update_item_at(&c, &Item { done_at: None, ..weekly }, wed + 4 * 60_000).unwrap().0;
+        assert_eq!((back.due_at, back.repeat.as_ref().unwrap()["done"].as_i64()), (Some(wed), Some(0)));
+    }
+
+    #[test]
+    fn a_repeat_that_is_over_stays_done() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        // "After 2 times", one done already: this is the last.
+        let it = repeating(&c, "Course", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "after", "count": 2}, "done": 1}));
+        let done = tick(&c, &it, wed + 60_000);
+        assert_eq!((done.done_at, done.due_at, ticked_of(&done)), (Some(wed + 60_000), Some(wed), None));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        assert!(!opens_at(&c, &it, local(2027, 1, 1, 12, 0)));
+    }
+
+    #[test]
+    fn a_deleted_repeating_task_brought_back_has_its_history() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        tick(&c, &it, wed + 60_000);
+        let kept = get_item(&c, it.id).unwrap();
+        delete_item(&c, it.id).unwrap();
+        // Undo: the line back as it was, its history with it.
+        restore_rows(&c, &[], std::slice::from_ref(&kept), &[]).unwrap();
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        assert_eq!(load_all(&c).unwrap().done_log.len(), 1);
+        // Deleted for good: its history goes at the next start.
+        delete_item(&c, it.id).unwrap();
+        migrate(&c).unwrap();
+        assert!(load_all(&c).unwrap().done_log.is_empty());
+        // A new line never gets someone else's (even in a file that gave ids again).
+        c.execute("INSERT INTO done_log (item_id, due_at, done_at) VALUES (9999, NULL, 1)", []).unwrap();
+        c.execute("UPDATE sqlite_sequence SET seq = 9998 WHERE name = 'items'", []).unwrap();
+        let n = create_note(&c, "Other", "work", "soft", "Sky").unwrap();
+        let fresh = create_item(&c, new_item(n.id, "New", None)).unwrap();
+        assert_eq!(fresh.id, 9999);
+        assert!(done_log_of(&c, fresh.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_older_notes_file_gets_the_history_table() {
+        let dir = std::env::temp_dir().join(format!("dobo-test-log-{}-{:?}", now_ms(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.sqlite");
+        {
+            let c = open(&path).unwrap();
+            let n = create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
+            create_item(&c, new_item(n.id, "Old copy", Some(1))).unwrap();
+            c.execute_batch("DROP INDEX done_log_item; DROP TABLE done_log;").unwrap();
+        }
+        let c = open(&path).unwrap();
+        let all = load_all(&c).unwrap();
+        assert_eq!((all.items.len(), all.done_log.len()), (1, 0));
+        // And it works there.
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = Item { due_at: Some(wed), repeat: Some(serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}})), ..all.items[0].clone() };
+        update_item(&c, &it).unwrap();
+        tick(&c, &it, wed + 60_000);
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stale_ticked_copy_never_ticks_it_a_second_time() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let ticked = tick(&c, &it, wed + 30 * 60_000);
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 8, 0)));
+        // The board still has the ticked copy and saves it, renamed: the words are kept, the line
+        // stays open at Thursday's, and its history keeps Wednesday's alone.
+        let now = local(2026, 11, 19, 8, 5);
+        let (saved, log, _) = update_item_at(&c, &Item { text: "Stretch, 10 min".into(), ..ticked.clone() }, now).unwrap();
+        assert_eq!((saved.text.as_str(), saved.done_at, saved.due_at, ticked_of(&saved)), ("Stretch, 10 min", None, Some(local(2026, 11, 19, 10, 0)), None));
+        assert_eq!(saved.repeat.as_ref().unwrap()["done"], 1);
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+        assert_eq!(log.map(|l| l.len()), Some(1), "the board is sent its history");
+        // Its box clicked on that copy ("Not done"): still open, never with a `ticked`.
+        let (saved, _, _) = update_item_at(&c, &Item { done_at: None, ..ticked.clone() }, now).unwrap();
+        assert_eq!((saved.done_at, saved.due_at, ticked_of(&saved)), (None, Some(local(2026, 11, 19, 10, 0)), None));
+        assert!(saved.repeat.as_ref().unwrap().get("ticked").is_none());
+        // A real tick, from the open line, still works.
+        tick(&c, &it, local(2026, 11, 19, 10, 5));
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 2);
+        assert_eq!(get_item(&c, it.id).unwrap().due_at, Some(local(2026, 11, 20, 10, 0)));
+    }
+
+    /// Without its `ticked` (the board's Undo onto an open line, store `revertItem`), the copy as
+    /// it waited.
+    fn as_open(waiting: &Item) -> Option<serde_json::Value> {
+        let mut r = waiting.repeat.clone();
+        if let Some(obj) = r.as_mut().and_then(|r| r.as_object_mut()) {
+            obj.remove("ticked");
+        }
+        r
+    }
+
+    #[test]
+    fn undo_of_time_change_after_reopen() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let waiting = tick(&c, &it, wed + 60_000);
+        // Its time moved to 11:00 on Thursday while it waits, then it opens again.
+        let edited = update_item_at(&c, &Item { due_at: Some(local(2026, 11, 19, 11, 0)), ..waiting.clone() }, wed + 2 * 60_000).unwrap().0;
+        assert_eq!((edited.done_at, edited.due_at), (waiting.done_at, Some(local(2026, 11, 19, 11, 0))));
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 8, 0)));
+        let open = get_item(&c, it.id).unwrap();
+        let now = local(2026, 11, 19, 8, 5);
+        // The Undo as it waited (with `ticked`) is a stale copy: the open line stays as it is.
+        let kept = update_item_at(&c, &Item { due_at: waiting.due_at, repeat: waiting.repeat.clone(), ..open.clone() }, now).unwrap().0;
+        assert_eq!(kept.due_at, Some(local(2026, 11, 19, 11, 0)));
+        // As the board sends it on an open line (without `ticked`): its time and rule back.
+        let undone = update_item_at(&c, &Item { due_at: waiting.due_at, repeat: as_open(&waiting), ..open.clone() }, now).unwrap().0;
+        assert_eq!((undone.done_at, undone.due_at, ticked_of(&undone)), (None, waiting.due_at, None));
+        assert_eq!(undone.repeat.as_ref().unwrap()["at"], "10:00");
+        assert_eq!(undone.repeat.as_ref().unwrap()["done"], waiting.repeat.as_ref().unwrap()["done"]);
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn undo_of_a_change_that_opened_it_at_once_after_its_own_reopen_time() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let it = repeating(&c, "Stretch", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let waiting = tick(&c, &it, wed + 60_000);
+        // Its time set to 15:00 today: open at once (the clock's next look).
+        update_item_at(&c, &Item { due_at: Some(local(2026, 11, 18, 15, 0)), ..waiting.clone() }, wed + 2 * 60_000).unwrap();
+        assert!(opens_at(&c, &it, wed + 2 * 60_000 + 5_000));
+        let opened = get_item(&c, it.id).unwrap();
+        assert_eq!((opened.done_at, opened.due_at, ticked_of(&opened)), (None, Some(local(2026, 11, 18, 15, 0)), None));
+        // Undone on Thursday, after it would have opened anyway: its time and rule back, open,
+        // never ticked a second time.
+        let now = local(2026, 11, 19, 8, 5);
+        let undone = update_item_at(&c, &Item { due_at: waiting.due_at, repeat: as_open(&waiting), ..get_item(&c, it.id).unwrap() }, now).unwrap().0;
+        assert_eq!((undone.done_at, undone.due_at, ticked_of(&undone)), (None, waiting.due_at, None));
+        assert_eq!(undone.repeat.as_ref().unwrap()["at"], "10:00");
+        assert_eq!(undone.repeat.as_ref().unwrap()["done"], waiting.repeat.as_ref().unwrap()["done"]);
+        assert_eq!(done_log_of(&c, it.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_night_shift_task_opens_the_evening_before() {
+        let c = temp_db();
+        // "My day" 22:00–06:00, every day at 02:00: Thursday's ticked at 02:10, Friday's 02:00
+        // belongs to the night starting at 22:00 on Thursday.
+        set_setting(&c, "day", &serde_json::json!({"start": "22:00", "end": "06:00"})).unwrap();
+        let thu = local(2026, 11, 19, 2, 0);
+        let it = repeating(&c, "Rounds", thu, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        assert_eq!(tick(&c, &it, thu + 10 * 60_000).due_at, Some(local(2026, 11, 20, 2, 0)));
+        assert!(!opens_at(&c, &it, local(2026, 11, 19, 21, 59)));
+        assert!(opens_at(&c, &it, local(2026, 11, 19, 22, 0)));
+    }
+
+    #[test]
+    fn its_steps_start_fresh_when_it_opens_again() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let task = repeating(&c, "Weekly review", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let step = |text: &str, due: Option<i64>| create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, text, due) }).unwrap();
+        let timed = step("Inbox zero", Some(local(2026, 11, 18, 9, 0)));
+        let plain = step("Notes", None);
+        let snoozed = step("Call", Some(local(2026, 11, 18, 11, 0)));
+        let undone = step("Plan", None);
+        // Two steps ticked, one snoozed, then the task.
+        let done = |s: &Item, at: i64| update_item_at(&c, &Item { done_at: Some(at), ..get_item(&c, s.id).unwrap() }, at).unwrap();
+        done(&timed, local(2026, 11, 18, 9, 10));
+        done(&plain, local(2026, 11, 18, 9, 20));
+        c.execute("UPDATE items SET ring_state = 'snoozed', snooze_until = ?2, rings = 2 WHERE id = ?1", params![snoozed.id, local(2026, 11, 18, 12, 0)]).unwrap();
+        tick(&c, &task, local(2026, 11, 18, 10, 30));
+        // Unticked while it waits: its steps as they were.
+        let before = load_all(&c).unwrap().items;
+        update_item_at(&c, &Item { done_at: None, ..get_item(&c, task.id).unwrap() }, local(2026, 11, 18, 10, 40)).unwrap();
+        tick(&c, &task, local(2026, 11, 18, 10, 45));
+        let same = |id: i64| before.iter().find(|x| x.id == id).map(|x| (x.done_at, x.due_at)) == Some((get_item(&c, id).unwrap().done_at, get_item(&c, id).unwrap().due_at));
+        assert!(same(timed.id) && same(plain.id) && same(snoozed.id));
+        // Open again on Thursday: each step unticked, its time a day on, its reminder fresh.
+        let changed = reopen_due(&c, local(2026, 11, 19, 8, 0)).unwrap();
+        for s in [&timed, &plain, &snoozed] {
+            assert!(changed.iter().any(|x| x.id == s.id), "{} is sent to the board", s.text);
+        }
+        assert!(!changed.iter().any(|x| x.id == undone.id), "nothing to change");
+        let t = get_item(&c, timed.id).unwrap();
+        assert_eq!((t.done_at, t.due_at, t.ring_state.as_str(), t.last_ring_at), (None, Some(local(2026, 11, 19, 9, 0)), "", None));
+        assert_eq!(get_item(&c, plain.id).unwrap().done_at, None);
+        let s = get_item(&c, snoozed.id).unwrap();
+        assert_eq!((s.due_at, s.ring_state.as_str(), s.snooze_until, s.rings), (Some(local(2026, 11, 19, 11, 0)), "", None, 0));
+        // They ring at their new times.
+        let ids: Vec<i64> = timed_items(&c).unwrap().iter().map(|x| x.id).collect();
+        assert!(ids.contains(&timed.id) && ids.contains(&snoozed.id));
+        // The times they were done stay in the history (the look back counts them on Wednesday),
+        // once each; the task's own history is only its own.
+        let row = |id: i64| done_log_of(&c, id).unwrap().iter().map(|r| (r.due_at, r.done_at)).collect::<Vec<_>>();
+        assert_eq!(row(timed.id), vec![(Some(local(2026, 11, 18, 9, 0)), local(2026, 11, 18, 9, 10))]);
+        assert_eq!(row(plain.id), vec![(None, local(2026, 11, 18, 9, 20))]);
+        assert!(row(snoozed.id).is_empty() && row(undone.id).is_empty());
+        assert_eq!(row(task.id).len(), 1);
+        assert_eq!(steps_logs(&c, &changed).unwrap().iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![timed.id, plain.id]);
+    }
+
+    #[test]
+    fn undo_gives_the_fresh_steps_back_exactly_with_their_history() {
+        let c = temp_db();
+        let wed = local(2026, 11, 18, 10, 0);
+        let task = repeating(&c, "Weekly review", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let step = create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, "Inbox zero", Some(local(2026, 11, 18, 9, 0))) }).unwrap();
+        let snoozed = create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, "Call", Some(local(2026, 11, 18, 11, 0))) }).unwrap();
+        update_item_at(&c, &Item { done_at: Some(local(2026, 11, 18, 9, 10)), ..step.clone() }, local(2026, 11, 18, 9, 10)).unwrap();
+        c.execute("UPDATE items SET ring_state = 'snoozed', snooze_until = ?2, rings = 2, last_ring_at = ?3 WHERE id = ?1", params![snoozed.id, local(2026, 11, 18, 12, 0), local(2026, 11, 18, 11, 0)]).unwrap();
+        let was = [get_item(&c, step.id).unwrap(), get_item(&c, snoozed.id).unwrap()];
+        tick(&c, &task, local(2026, 11, 18, 10, 30));
+        reopen_due(&c, local(2026, 11, 19, 8, 0)).unwrap();
+        assert_eq!(done_log_of(&c, step.id).unwrap().len(), 1);
+        // Undo (still on Wednesday, before its snooze ends): each step as it was, its reminder
+        // too, and its time done out of the history.
+        let back = steps_back(&c, &was, local(2026, 11, 18, 11, 30)).unwrap();
+        assert_eq!(back.len(), 2);
+        let s = get_item(&c, step.id).unwrap();
+        assert_eq!((s.done_at, s.due_at), (was[0].done_at, was[0].due_at));
+        assert!(done_log_of(&c, step.id).unwrap().is_empty());
+        let z = get_item(&c, snoozed.id).unwrap();
+        assert_eq!((z.due_at, z.ring_state.as_str(), z.snooze_until, z.rings, z.last_ring_at), (was[1].due_at, "snoozed", was[1].snooze_until, 2, was[1].last_ring_at));
+        // A step deleted since is left out (the other one fresh again).
+        c.execute("UPDATE items SET done_at = NULL WHERE id = ?1", [step.id]).unwrap();
+        delete_item(&c, snoozed.id).unwrap();
+        assert_eq!(steps_back(&c, &was, local(2026, 11, 18, 11, 30)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn undo_never_rings_a_step_at_once_nor_rewrites_one_changed_since() {
+        use crate::reminders::{Rhythm, due_ring};
+        let c = temp_db();
+        let std = Rhythm::standard();
+        let wed = local(2026, 11, 18, 10, 0);
+        let task = repeating(&c, "Weekly review", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let other = create_item(&c, new_item(task.note_id, "Errands", None)).unwrap();
+        let step = |text: &str, due: i64| create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, text, Some(due)) }).unwrap();
+        let snoozed = step("Call", local(2026, 11, 18, 11, 0));
+        let timed = step("Post", local(2026, 11, 18, 10, 45));
+        let ticked = step("Bins", local(2026, 11, 18, 9, 0));
+        let moved = step("Plants", local(2026, 11, 18, 9, 30));
+        c.execute("UPDATE items SET ring_state = 'snoozed', snooze_until = ?2, rings = 1, last_ring_at = ?3 WHERE id = ?1", params![snoozed.id, local(2026, 11, 18, 12, 0), local(2026, 11, 18, 11, 0)]).unwrap();
+        let was: Vec<Item> = [&snoozed, &timed, &ticked, &moved].iter().map(|s| get_item(&c, s.id).unwrap()).collect();
+        tick(&c, &task, local(2026, 11, 18, 10, 30));
+        reopen_due(&c, local(2026, 11, 19, 8, 0)).unwrap();
+        // Since: one ticked, one moved under another task.
+        update_item_at(&c, &Item { done_at: Some(local(2026, 11, 19, 8, 10)), ..get_item(&c, ticked.id).unwrap() }, local(2026, 11, 19, 8, 10)).unwrap();
+        c.execute("UPDATE items SET parent_id = ?2 WHERE id = ?1", params![moved.id, other.id]).unwrap();
+        let moved_now = get_item(&c, moved.id).unwrap();
+        // Undo on Thursday at 08:20: the snooze and the time given back are past.
+        let now = local(2026, 11, 19, 8, 20);
+        let back = steps_back(&c, &was, now).unwrap();
+        assert_eq!(back.iter().map(|s| s.id).collect::<Vec<_>>(), vec![snoozed.id, timed.id]);
+        for id in [snoozed.id, timed.id] {
+            let s = get_item(&c, id).unwrap();
+            assert_eq!(s.snooze_until, Some(now + UNDONE_WAIT), "{} waits a minute", s.text);
+            assert_eq!(due_ring(&s, &std, now), None, "{} never rings at once", s.text);
+            assert_eq!(due_ring(&s, &std, now + UNDONE_WAIT).map(|(t, _)| t), Some(now + UNDONE_WAIT));
+        }
+        // The one ticked since stays ticked; the one moved stays where it went, as it is.
+        assert_eq!(get_item(&c, ticked.id).unwrap().done_at, Some(local(2026, 11, 19, 8, 10)));
+        let m = get_item(&c, moved.id).unwrap();
+        assert_eq!((m.parent_id, m.due_at, m.done_at), (Some(other.id), moved_now.due_at, None));
+    }
+
+    #[test]
+    fn opened_late_its_steps_never_ring_at_once() {
+        use crate::reminders::{Rhythm, due_ring};
+        let c = temp_db();
+        let std = Rhythm::standard();
+        // Every day at 10:00, a step at 09:00 and one at 11:00, and a step with a daily repeat of
+        // its own at 09:15. Ticked on Wednesday; the computer asleep from Thursday 08:00 to 09:30.
+        let wed = local(2026, 11, 18, 10, 0);
+        let task = repeating(&c, "Weekly review", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let step = |text: &str, due: i64| create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, text, Some(due)) }).unwrap();
+        let early = step("Inbox zero", local(2026, 11, 18, 9, 0));
+        let later = step("Call", local(2026, 11, 18, 11, 0));
+        let own = step("Water", local(2026, 11, 19, 9, 15));
+        let own = update_item(&c, &Item { repeat: Some(serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}})), ..own }).unwrap();
+        tick(&c, &task, local(2026, 11, 18, 10, 30));
+        let now = local(2026, 11, 19, 9, 30);
+        let changed = reopen_due(&c, now).unwrap();
+        assert!(changed.iter().any(|x| x.id == own.id), "the step with its own repeat is sent to the board too");
+        // The one at 09:00 (moved to Thursday's, past): a minute's wait, as the task; never at once.
+        let e = get_item(&c, early.id).unwrap();
+        assert_eq!(e.due_at, Some(local(2026, 11, 19, 9, 0)));
+        assert!(due_ring(&e, &std, now).is_none());
+        assert_eq!(due_ring(&e, &std, now + UNDONE_WAIT).map(|(t, _)| t), Some(now + UNDONE_WAIT));
+        // The one at 11:00 rings at its time.
+        let l = get_item(&c, later.id).unwrap();
+        assert_eq!(l.snooze_until, None);
+        assert_eq!(due_ring(&l, &std, local(2026, 11, 19, 11, 0)).map(|(t, _)| t), Some(local(2026, 11, 19, 11, 0)));
+        // The one with its own repeat, its 09:15 come while the task waited: quiet ("passed"),
+        // its own time and rhythm kept.
+        let o = get_item(&c, own.id).unwrap();
+        assert_eq!((o.due_at, o.ring_state.as_str()), (Some(local(2026, 11, 19, 9, 15)), "passed"));
+        assert!(due_ring(&o, &std, now).is_none() && due_ring(&o, &std, now + 30 * 60_000).is_none());
+        // Opened on time (08:00), the step at 09:00 rings at 09:00, no wait.
+        let c2 = temp_db();
+        let task2 = repeating(&c2, "Weekly review", wed, serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let s2 = create_item(&c2, NewItem { parent_id: Some(task2.id), ..new_item(task2.note_id, "Inbox zero", Some(local(2026, 11, 18, 9, 0))) }).unwrap();
+        tick(&c2, &task2, local(2026, 11, 18, 10, 30));
+        reopen_due(&c2, local(2026, 11, 19, 8, 0)).unwrap();
+        let s2 = get_item(&c2, s2.id).unwrap();
+        assert_eq!(s2.snooze_until, None);
+        assert_eq!(due_ring(&s2, &std, local(2026, 11, 19, 9, 0)).map(|(t, _)| t), Some(local(2026, 11, 19, 9, 0)));
+    }
+
+    #[test]
+    fn open_again_at_once_its_steps_start_fresh_too() {
+        let c = temp_db();
+        // Every day at 22:00: yesterday's ticked this morning, with its step done.
+        let task = repeating(&c, "Journal", local(2026, 11, 17, 22, 0), serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let s = create_item(&c, NewItem { parent_id: Some(task.id), ..new_item(task.note_id, "Three lines", Some(local(2026, 11, 17, 21, 30))) }).unwrap();
+        update_item_at(&c, &Item { done_at: Some(local(2026, 11, 17, 21, 40)), ..s.clone() }, local(2026, 11, 17, 21, 40)).unwrap();
+        let now = local(2026, 11, 18, 9, 0);
+        let (saved, _, steps) = update_item_at(&c, &Item { done_at: Some(now), ..get_item(&c, task.id).unwrap() }, now).unwrap();
+        assert_eq!((saved.done_at, saved.due_at), (None, Some(local(2026, 11, 18, 22, 0))));
+        assert_eq!(steps.iter().map(|x| (x.id, x.done_at, x.due_at)).collect::<Vec<_>>(), vec![(s.id, None, Some(local(2026, 11, 18, 21, 30)))]);
+        // The same from a notification's Done.
+        let task2 = repeating(&c, "Journal 2", local(2026, 11, 17, 22, 0), serde_json::json!({"freq": "day", "interval": 1, "ends": {"kind": "never"}}));
+        let s2 = create_item(&c, NewItem { parent_id: Some(task2.id), ..new_item(task2.note_id, "Lines", None) }).unwrap();
+        update_item_at(&c, &Item { done_at: Some(local(2026, 11, 17, 21, 40)), ..s2.clone() }, local(2026, 11, 17, 21, 40)).unwrap();
+        let (_, _, steps) = crate::reminders::save_answer(&c, task2.id, "done", now, None).unwrap();
+        assert_eq!(steps.iter().map(|x| (x.id, x.done_at)).collect::<Vec<_>>(), vec![(s2.id, None)]);
     }
 
     #[test]

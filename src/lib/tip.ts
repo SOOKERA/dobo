@@ -308,7 +308,10 @@ export function startTips() {
       if (!t || !(e.target as Element).matches(":focus-visible") || typing(e.target as Element)) return;
       if (performance.now() - keyAt > 600) return;
       clearTimeout(timer);
-      timer = window.setTimeout(() => show(t), current ? 0 : 120);
+      // (Still there by then: focus only passing through, given back on its way elsewhere,
+      // shows nothing.)
+      const el = e.target as Element;
+      timer = window.setTimeout(() => document.activeElement === el && show(t), current ? 0 : 120);
     },
     true,
   );

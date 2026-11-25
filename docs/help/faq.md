@@ -21,7 +21,7 @@ A line without a **#note** goes to the Inbox, the strip at the top of the board.
 Click **+ Add** at the end of the note (or its empty space), or type the line with **#** and the note's name in the entry line.
 
 **I archived a note. How do I get it back?**
-Open the Archive (**Archive (2)** at the bottom of the board, or the **?** menu) and click **Restore**. See [Archive](archive.md).
+Open the Archive (**Archive (2)** at the bottom right of the board, or the **?** menu) and click **Restore**. See [Archive](archive.md).
 
 **How do I see the tour again?**
 **Take the tour** in the **?** menu at the board's corner (**F1**), the header's **⋯** menu, the board's right-click menu, or **Settings › Help**.
