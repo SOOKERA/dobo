@@ -7,7 +7,8 @@ Paper, cork, kraft, felt, terrazzo, watercolour, blueprint or a picture of your 
 Click **Style** in the header (**Ctrl+Shift+S**), or right-click an empty spot of the board › **Change background…**. The panel opens beside the board. Click outside it (or press **Ctrl+Shift+S** again, or **Esc**) to close it.
 
 - **Our styles**: **Plain**, **Paper day**, **Dotted journal**, **Cork board**, **Kraft workshop**, **Terrazzo**, **Watercolour**, **Blueprint**, **Felt night**.
-- **Background**: pick a texture, then one of its colours, or any colour you like. **Your picture** uses a picture of yours, softened and dimmed so your notes stay easy to read.
+- **Background**: pick a texture. What that background offers then shows in a card just below the tiles, named after it: **Paper · colours** (one of ours, or **Custom** for any colour you like), **Watercolour · mixes**, and so on.
+- **Import a picture**: the last tile, dashed until you've imported one, opens your pictures straight away. The one you choose is softened and dimmed so your notes stay easy to read. From then on the tile shows it and is called **Your picture**; its card has **Another picture…** to change it. If your picture can't be shown (its file is gone, or isn't in Dobo's own folders), the board turns plain, light or dark like the rest of Dobo, and the tile is back to **Import a picture**. Dobo tries your picture again when you come back to its window, or after a restore.
 - **Notes held by**: **Auto** (what suits the background), **Pins**, **Tape** or **None**.
 - **Note size**, and **New notes start in**: one colour, or **Turns** (each new note takes the next colour).
 
@@ -20,7 +21,7 @@ Change anything and the panel says "Changed from Cork board". Give it a name and
 Pick **Watercolour** to see our five paintings. **Repaint** makes a fresh painting in the same colours.
 
 - **More mixes**: more colour mixes, grouped by mood.
-- **Customise**: choose the pattern (**Scattered**, **Sweep**, **Corners**, **One patch**), 1 to 3 colours from the watercolour paints or your own, and white or dark paper. **Save as my mix** keeps it under **Watercolour · yours**.
+- **Customise**: choose the pattern (**Scattered**, **Sweep**, **Corners**, **One patch**), 1 to 3 colours from the watercolour paints or your own, and white or dark paper. **Save as my mix** keeps it under **Yours**, in the watercolour card.
 
 ## Light and dark
 

@@ -40,7 +40,7 @@ const SOFT_DOTS: [&str; 10] = ["#B5B0A5", "#D9A928", "#E08A55", "#C9727A", "#8D7
 pub fn migrate(conn: &Connection) -> Result<(), String> {
     let version = db::get_setting(conn, "look_version").and_then(|v| v.as_i64()).unwrap_or(0);
     // Damaged values (not the shape they should have) go back to their default.
-    for (key, want_array) in [("look_styles", true), ("look_themes", true), ("look_mixes", true), ("your_colours", true), ("look_board", false), ("dark_mode", false)] {
+    for (key, want_array) in [("look_styles", true), ("look_themes", true), ("look_mixes", true), ("your_colours", true), ("look_board", false), ("dark_mode", false), ("look_last_picture", false)] {
         if let Some(v) = db::get_setting(conn, key) {
             let ok = if want_array { v.is_array() } else { v.is_object() };
             if !ok {
@@ -433,16 +433,101 @@ pub async fn pick_background_picture(app: AppHandle) -> Result<Option<String>, S
     }
     let dir = crate::paths::sub("backgrounds")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let dest = dir.join(format!("{}.{}", db::now_ms(), if ext == "jpeg" { "jpg" } else { &ext }));
+    let dest = background_dest(&dir, &ext);
     std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
     Ok(Some(dest.to_string_lossy().into_owned()))
 }
 
-/// The background pictures the looks use (the board's, saved styles' and themes'): each file's
-/// name, for the clean-up at start (lib.rs), which keeps the others a day. (Never cleaned when a
-/// picture is picked: Undo may still bring back the look that used the one before.) A setting
-/// that can't be read is an error, never "no picture used".
-pub fn background_pictures(conn: &Connection) -> Result<Vec<String>, String> {
+/// Where a picture picked for the board is copied: right in `dir` (the data folder's
+/// backgrounds), named by the time.
+pub(crate) fn background_dest(dir: &std::path::Path, ext: &str) -> std::path::PathBuf {
+    dir.join(format!("{}.{}", db::now_ms(), if ext == "jpeg" { "jpg" } else { ext }))
+}
+
+/// The settings that name background pictures (a `"picture"` inside them): the board's look,
+/// saved styles and themes, and your last picture (the picture tile's, `{ "picture": … }`,
+/// kept when you switch to another background or Undo). The clean-up keeps those files; a
+/// moved data folder or a restore points them at their copy (backup.rs).
+pub const PICTURE_KEYS: [&str; 4] = ["look_board", "look_styles", "look_themes", "look_last_picture"];
+
+/// A background picture's path this long or longer is never used (as looks.ts reads them: its
+/// length in UTF-16 units, as the page counts).
+pub const PICTURE_PATH_MAX: usize = 1000;
+
+/// Whether `path` names a file right inside `backgrounds` (the data folder's, where every picture
+/// picked is copied: `pick_background_picture`), read from the text alone: a path anywhere else
+/// (a backup from another computer, a moved portable folder, a crafted backup naming a network
+/// share) is never looked at on the disk. Letter case, slashes either way and a `\\?\` prefix
+/// don't matter. The same rule as the notes' pictures and the board's (`thumbs::directly_in`).
+pub fn in_backgrounds(path: &str, backgrounds: &std::path::Path) -> bool {
+    crate::thumbs::directly_in(path, backgrounds)
+}
+
+/// The file name a background picture's path ends with, to look for its copy in `backgrounds`
+/// (`thumbs::own_name`; never for a path of `PICTURE_PATH_MAX` or more).
+fn picture_name(path: &str) -> Option<&str> {
+    crate::thumbs::own_name(path).filter(|_| path.encode_utf16().count() < PICTURE_PATH_MAX)
+}
+
+/// Whether a file in `backgrounds` is known to be gone: nothing there (or a folder of that name)
+/// while `backgrounds` itself is a folder that's there. A read that fails otherwise (a USB stick
+/// or network drive slow to answer at start, a denied read) isn't "gone", nor is a file not
+/// found because its folder can't be reached (Windows says "not found" for a linked
+/// `backgrounds` on an unplugged drive or an absent share): forgetting the picture then would
+/// let the clean-up delete it once the drive is back.
+fn known_gone(p: &std::path::Path, backgrounds: &std::path::Path) -> bool {
+    match std::fs::metadata(p) {
+        Ok(m) => !m.is_file(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let there = std::fs::metadata(backgrounds).is_ok_and(|m| m.is_dir());
+            if !there {
+                eprintln!("Your last picture's folder can't be reached: kept for now.");
+            }
+            there
+        }
+        Err(e) => {
+            eprintln!("Your last picture couldn't be checked ({e}): kept for now.");
+            false
+        }
+    }
+}
+
+/// A setting as text, `None` when not set (a failed read is an error).
+fn raw_setting(conn: &Connection, key: &str) -> Result<Option<String>, String> {
+    db::get_setting_text(conn, key).map_err(|e| e.to_string())
+}
+
+/// Your last picture checked at start and after a restore, once the pictures were found again (a
+/// moved portable folder, a restore): kept while its file is there in `backgrounds` (the data
+/// folder's); pointed at its copy of the same name there when it names another folder; forgotten
+/// when there is none (a backup restored from before it, a file deleted by hand), and when the
+/// setting is damaged (not JSON, not `{ "picture": … }`, too long): the picture tile then imports
+/// one again instead of showing nothing. A path outside `backgrounds` is never looked at.
+pub fn forget_missing_picture(conn: &Connection, backgrounds: &std::path::Path) -> Result<(), String> {
+    let forget = || conn.execute("DELETE FROM settings WHERE key = 'look_last_picture'", []).map(|_| ()).map_err(|e| e.to_string());
+    let Some(raw) = raw_setting(conn, "look_last_picture")? else { return Ok(()) };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return forget() };
+    let Some(p) = v.get("picture").and_then(|p| p.as_str()).filter(|p| !p.is_empty() && p.encode_utf16().count() < PICTURE_PATH_MAX) else {
+        return forget();
+    };
+    if in_backgrounds(p, backgrounds) {
+        return if known_gone(std::path::Path::new(p), backgrounds) { forget() } else { Ok(()) };
+    }
+    let Some(here) = picture_name(p).map(|name| backgrounds.join(name)) else { return forget() };
+    if known_gone(&here, backgrounds) {
+        return forget();
+    }
+    // (Its copy there, or one that can't be read just now: pointed at it either way, the same
+    // file by its name in this folder.)
+    db::set_setting(conn, "look_last_picture", &serde_json::json!({ "picture": here.to_string_lossy() })).map_err(|e| e.to_string())
+}
+
+/// The background pictures the looks use (`PICTURE_KEYS`): each file's name, for the clean-up
+/// at start (lib.rs), which keeps the others a day. (Never cleaned when a picture is picked:
+/// Undo may still bring back the look that used the one before.) A failed read is an error; a
+/// setting that isn't JSON is said and gives `None`: which pictures it names isn't known, so the
+/// clean-up leaves the backgrounds alone (never "no picture used"), and cleans the rest.
+pub fn background_pictures(conn: &Connection) -> Result<Option<Vec<String>>, String> {
     fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
         match v {
             serde_json::Value::Object(m) => {
@@ -458,12 +543,18 @@ pub fn background_pictures(conn: &Connection) -> Result<Vec<String>, String> {
         }
     }
     let mut out = vec![];
-    for key in ["look_board", "look_styles", "look_themes"] {
-        if let Some(v) = db::get_setting_strict(conn, key)? {
-            walk(&v, &mut out);
+    let mut known = true;
+    for key in PICTURE_KEYS {
+        let Some(raw) = raw_setting(conn, key)? else { continue };
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(v) => walk(&v, &mut out),
+            Err(e) => {
+                eprintln!("The setting {key} can’t be read ({e}): the board’s background pictures aren’t cleaned up.");
+                known = false;
+            }
         }
     }
-    Ok(out)
+    Ok(known.then_some(out))
 }
 
 #[cfg(test)]
@@ -536,9 +627,166 @@ mod tests {
         db::set_setting(&c, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": "C:/d/backgrounds/1.jpg" }, "dark": { "bg": "cork" } })).unwrap();
         db::set_setting(&c, "look_styles", &serde_json::json!([{ "id": "s1", "look": { "bg": "picture", "picture": "C:/d/backgrounds/2.png" } }, { "id": "s2", "look": { "picture": "" } }])).unwrap();
         db::set_setting(&c, "look_themes", &serde_json::json!([{ "id": "t1", "light": { "bg": "cork" }, "dark": { "bg": "picture", "picture": "C:/d/backgrounds/3.webp" } }])).unwrap();
-        let mut found = background_pictures(&c).unwrap();
+        // Your last picture (the tile's), used by no look now: kept too.
+        db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": "C:/d/backgrounds/4.jpg" })).unwrap();
+        let mut found = background_pictures(&c).unwrap().unwrap();
         found.sort();
-        assert_eq!(found, vec!["C:/d/backgrounds/1.jpg", "C:/d/backgrounds/2.png", "C:/d/backgrounds/3.webp"]);
+        assert_eq!(found, vec!["C:/d/backgrounds/1.jpg", "C:/d/backgrounds/2.png", "C:/d/backgrounds/3.webp", "C:/d/backgrounds/4.jpg"]);
+    }
+
+    #[test]
+    fn a_damaged_look_setting_leaves_the_backgrounds_alone() {
+        for key in PICTURE_KEYS {
+            let c = conn();
+            db::set_setting(&c, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": "C:/d/backgrounds/1.jpg" } })).unwrap();
+            c.execute("INSERT INTO settings (key, value) VALUES (?1, '{not json') ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key]).unwrap();
+            assert_eq!(background_pictures(&c).unwrap(), None, "{key}: which pictures it names isn't known");
+        }
+    }
+
+    #[test]
+    fn only_a_file_right_in_the_backgrounds_folder_is_in_it() {
+        let bg = std::path::Path::new(r"D:\Dobo\data\backgrounds");
+        for yes in [r"D:\Dobo\data\backgrounds\1.jpg", "d:/dobo/DATA/Backgrounds/1.jpg", r"\\?\D:\Dobo\data\backgrounds\1.jpg"] {
+            assert!(in_backgrounds(yes, bg), "{yes}");
+        }
+        for no in [
+            r"\\host\share\backgrounds\1.jpg",
+            r"\\host\share\x.jpg",
+            r"E:\Dobo\data\backgrounds\1.jpg",
+            r"D:\Dobo\data\backgrounds\sub\1.jpg",
+            r"D:\Dobo\data\backgrounds\..\..\x.jpg",
+            r"D:\Dobo\data\backgrounds\..",
+            r"D:\Dobo\data\backgrounds\",
+            // (As the board reads them, thumbs::directly_in: no empty part, no name of dots or
+            // spaces, no other stream, no device.)
+            r"D:\Dobo\data\backgrounds\\1.jpg",
+            r"D:\Dobo\data\backgrounds\ . ",
+            r"D:\Dobo\data\backgrounds\1.jpg:hidden",
+            r"D:\Dobo\data\backgrounds\NUL.jpg",
+            "1.jpg",
+            "",
+        ] {
+            assert!(!in_backgrounds(no, bg), "{no}");
+        }
+        let long = format!(r"D:\Dobo\data\backgrounds\{}.jpg", "x".repeat(1000));
+        assert!(!in_backgrounds(&long, bg));
+        assert_eq!(picture_name(&long), None);
+        assert_eq!(picture_name(r"\\host\share\x.jpg"), Some("x.jpg"));
+        assert_eq!(picture_name("C:/a/.."), None);
+        // A portable data folder on a network share is still its own.
+        assert!(in_backgrounds(r"\\nas\usb\Dobo\data\backgrounds\1.jpg", std::path::Path::new(r"\\?\UNC\nas\usb\Dobo\data\backgrounds")));
+    }
+
+    #[test]
+    fn your_last_picture_elsewhere_finds_its_copy_or_is_forgotten_unlooked_at() {
+        let dir = std::env::temp_dir().join(format!("dobo-lastpic-away-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        let backgrounds = dir.join("backgrounds");
+        std::fs::create_dir_all(&backgrounds).unwrap();
+        std::fs::write(backgrounds.join("9.jpg"), b"jpg").unwrap();
+        let c = db::open(&dir.join("t.sqlite")).unwrap();
+        // Another folder (a moved portable one whose repointing stopped early, a network share in
+        // a crafted backup): its copy here, by name, without the other place being looked at.
+        for away in [r"\\host\share\9.jpg", r"Z:\old\data\backgrounds\9.jpg"] {
+            db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": away })).unwrap();
+            forget_missing_picture(&c, &backgrounds).unwrap();
+            assert_eq!(db::get_setting(&c, "look_last_picture").unwrap()["picture"], serde_json::json!(backgrounds.join("9.jpg").to_string_lossy()));
+        }
+        // No copy here: forgotten.
+        db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": r"\\host\share\8.jpg" })).unwrap();
+        forget_missing_picture(&c, &backgrounds).unwrap();
+        assert_eq!(db::get_setting(&c, "look_last_picture"), None);
+        // Damaged (not JSON, too long): forgotten, so the clean-up isn't stopped by it.
+        c.execute("INSERT INTO settings (key, value) VALUES ('look_last_picture', '{not json')", []).unwrap();
+        forget_missing_picture(&c, &backgrounds).unwrap();
+        assert!(raw_setting(&c, "look_last_picture").unwrap().is_none());
+        assert_eq!(background_pictures(&c).unwrap(), Some(vec![]));
+        let long = backgrounds.join(format!("{}.jpg", "x".repeat(1000)));
+        db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": long.to_string_lossy() })).unwrap();
+        forget_missing_picture(&c, &backgrounds).unwrap();
+        assert_eq!(db::get_setting(&c, "look_last_picture"), None);
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn your_last_picture_is_forgotten_only_when_its_file_is_gone() {
+        let dir = std::env::temp_dir().join(format!("dobo-lastpic-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = db::open(&dir.join("t.sqlite")).unwrap();
+        let file = dir.join("1.jpg");
+        std::fs::write(&file, b"jpg").unwrap();
+        let last = serde_json::json!({ "picture": file.to_string_lossy() });
+        db::set_setting(&c, "look_last_picture", &last).unwrap();
+        // Kept across a restart while its file is there.
+        migrate(&c).unwrap();
+        forget_missing_picture(&c, &dir).unwrap();
+        assert_eq!(db::get_setting(&c, "look_last_picture"), Some(last));
+        // Its file gone (a backup from before it): forgotten, the tile imports again.
+        std::fs::remove_file(&file).unwrap();
+        forget_missing_picture(&c, &dir).unwrap();
+        assert_eq!(db::get_setting(&c, "look_last_picture"), None);
+        // A file that can't be read just now (here a name Windows refuses; at start, a USB stick
+        // or network drive slow to answer, a denied read): kept, never forgotten (the clean-up
+        // would then delete it). Only a file that isn't there is.
+        #[cfg(windows)]
+        {
+            let odd = serde_json::json!({ "picture": dir.join("a<b.jpg").to_string_lossy() });
+            db::set_setting(&c, "look_last_picture", &odd).unwrap();
+            forget_missing_picture(&c, &dir).unwrap();
+            assert_eq!(db::get_setting(&c, "look_last_picture"), Some(odd.clone()));
+            // (Named in another folder: pointed at the one here, which the clean-up then keeps.)
+            db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": r"Z:\old\backgrounds\a<b.jpg" })).unwrap();
+            forget_missing_picture(&c, &dir).unwrap();
+            assert_eq!(db::get_setting(&c, "look_last_picture"), Some(odd));
+            c.execute("DELETE FROM settings WHERE key = 'look_last_picture'", []).unwrap();
+        }
+        // Nothing there: nothing to do. A damaged value goes at start.
+        forget_missing_picture(&c, &dir).unwrap();
+        db::set_setting(&c, "look_last_picture", &serde_json::json!("C:/x.jpg")).unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(db::get_setting(&c, "look_last_picture"), None);
+        drop(c);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `backgrounds` folder that can't be reached (not there at all, or a link to an unplugged
+    /// drive: Windows then says "not found" for the file too): your last picture is kept, so the
+    /// clean-up never deletes it once the drive is back.
+    #[test]
+    fn your_last_picture_is_kept_while_its_folder_cant_be_reached() {
+        let dir = std::env::temp_dir().join(format!("dobo-lastpic-reach-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = db::open(&dir.join("t.sqlite")).unwrap();
+        let check = |backgrounds: &std::path::Path| {
+            for named in [backgrounds.join("1.jpg"), std::path::PathBuf::from(r"Z:\old\data\backgrounds\1.jpg")] {
+                let last = serde_json::json!({ "picture": named.to_string_lossy() });
+                db::set_setting(&c, "look_last_picture", &last).unwrap();
+                forget_missing_picture(&c, backgrounds).unwrap();
+                assert!(db::get_setting(&c, "look_last_picture").is_some(), "{}: kept", named.display());
+            }
+        };
+        check(&dir.join("nowhere"));
+        // A linked folder whose drive is gone (here a junction to a folder since removed).
+        let away = dir.join("away");
+        std::fs::create_dir_all(&away).unwrap();
+        let linked = dir.join("backgrounds");
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&linked).arg(&away).output().is_ok_and(|o| o.status.success());
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&away, &linked).is_ok();
+        if made {
+            std::fs::remove_dir_all(&away).unwrap();
+            check(&linked);
+            // Once it's back, a file that truly isn't there is forgotten.
+            std::fs::create_dir_all(&away).unwrap();
+            db::set_setting(&c, "look_last_picture", &serde_json::json!({ "picture": linked.join("1.jpg").to_string_lossy() })).unwrap();
+            forget_missing_picture(&c, &linked).unwrap();
+            assert_eq!(db::get_setting(&c, "look_last_picture"), None);
+        }
+        drop(c);
+        let _ = std::fs::remove_dir(&linked);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

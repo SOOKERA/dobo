@@ -77,17 +77,23 @@ pub fn folder(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// The files right in `from` copied into `to` (none already there is replaced). Only files: the
 /// pictures' thumbs, in a folder of their own (thumbs.rs), are never in a backup, nor put back
-/// from one; they are made again from the pictures.
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<u64> {
+/// from one; they are made again from the pictures. `from_backup`: a backup's own folder that is
+/// itself a link (a junction or symlink pointing elsewhere, e.g. at a network share) is left out,
+/// never followed. (The data folder's own may be a link the owner made, a pictures folder moved
+/// to another drive: it is followed.)
+fn copy_dir(from: &Path, to: &Path, from_backup: bool) -> std::io::Result<u64> {
     let mut total = 0;
-    if !from.is_dir() {
+    let is_dir = if from_backup { std::fs::symlink_metadata(from).is_ok_and(|m| m.file_type().is_dir()) } else { from.is_dir() };
+    if !is_dir {
         return Ok(0);
     }
     std::fs::create_dir_all(to)?;
     for e in std::fs::read_dir(from)? {
         let e = e?;
         let p = e.path();
-        if p.is_file() {
+        // (The entry's own kind, never followed: a link in a backup folder pointing elsewhere,
+        // e.g. at a network share, is left out rather than reached and copied.)
+        if e.file_type()?.is_file() {
             let dest = to.join(e.file_name());
             if !dest.exists() {
                 total += std::fs::copy(&p, &dest)?;
@@ -97,13 +103,16 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<u64> {
     Ok(total)
 }
 
+/// The size of a backup's files. Each entry by its own kind, never followed: a link in it (a
+/// junction pointing back up, or at a share) is neither reached nor walked round in a loop.
 fn dir_size(p: &Path) -> u64 {
     std::fs::read_dir(p)
         .map(|it| {
             it.flatten()
-                .map(|e| {
-                    let p = e.path();
-                    if p.is_dir() { dir_size(&p) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }
+                .map(|e| match e.file_type() {
+                    Ok(t) if t.is_dir() => dir_size(&e.path()),
+                    Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+                    _ => 0,
                 })
                 .sum()
         })
@@ -477,13 +486,24 @@ pub fn whole(file: &Path) -> Result<(), String> {
     open_checked(file).map(|_| ())
 }
 
+/// Where a picture named by `path` is now, when it should be pointed elsewhere: its copy of the
+/// same name in `dir` (one of the data folder's own folders, where every picture and link
+/// preview's picture is copied), when `path` names another folder and that copy is there. Read
+/// from the path's text alone: the other place is never looked at on the disk, so a backup from
+/// another computer, a moved portable folder or a crafted backup naming a network share
+/// (`\\host\share\x.jpg`) never makes Dobo reach it.
+fn copy_here(path: &str, dir: &Path) -> Option<std::path::PathBuf> {
+    if crate::thumbs::directly_in(path, dir) {
+        return None;
+    }
+    let here = dir.join(crate::thumbs::own_name(path)?);
+    here.is_file().then_some(here)
+}
+
 /// The same for link previews' pictures.
 fn repoint_previews(conn: &rusqlite::Connection, previews: &Path) -> Result<(), String> {
     for (id, path) in db::preview_images(conn)? {
-        let old = Path::new(&path);
-        let Some(name) = old.file_name() else { continue };
-        let here = previews.join(name);
-        if !old.is_file() && here.is_file() {
+        if let Some(here) = copy_here(&path, previews) {
             db::set_preview_image(conn, id, &here.to_string_lossy())?;
         }
     }
@@ -491,17 +511,14 @@ fn repoint_previews(conn: &rusqlite::Connection, previews: &Path) -> Result<(), 
 }
 
 /// Pictures saved on another computer (or under another user folder) point at a folder that
-/// isn't here: they are pointed at the copies just put back next to the notes.
+/// isn't here: they are pointed at the copies just put back next to the notes (`copy_here`).
 fn repoint_pictures(conn: &rusqlite::Connection, pictures: &Path) -> Result<(), String> {
     let rows: Vec<(i64, String)> = conn
         .prepare("SELECT id, path FROM pictures")
         .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
         .map_err(|e| e.to_string())?;
     for (id, path) in rows {
-        let old = Path::new(&path);
-        let Some(name) = old.file_name() else { continue };
-        let here = pictures.join(name);
-        if !old.is_file() && here.is_file() {
+        if let Some(here) = copy_here(&path, pictures) {
             conn.execute("UPDATE pictures SET path = ?2 WHERE id = ?1", rusqlite::params![id, here.to_string_lossy().to_string()])
                 .map_err(|e| e.to_string())?;
         }
@@ -509,8 +526,11 @@ fn repoint_pictures(conn: &rusqlite::Connection, pictures: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Board backgrounds ("picture" in the looks) that point at a file that isn't there any more:
-/// pointed at the copy of the same name in `backgrounds`, when there is one.
+/// Board backgrounds ("picture" in the looks and your last picture: `look::PICTURE_KEYS`) that
+/// name another folder than `backgrounds` (another computer's, the folder before a portable one
+/// moved): pointed at the copy of the same name in `backgrounds`, when there is one. Only paths
+/// in `backgrounds` are used (every picture picked is copied there), so the other place is never
+/// looked at on the disk: a crafted backup naming a network share never makes Dobo reach it.
 fn repoint_backgrounds(conn: &rusqlite::Connection, backgrounds: &Path) -> Result<(), String> {
     fn walk(v: &mut serde_json::Value, dir: &Path) -> bool {
         match v {
@@ -520,10 +540,12 @@ fn repoint_backgrounds(conn: &rusqlite::Connection, backgrounds: &Path) -> Resul
                     if k == "picture"
                         && let Some(s) = x.as_str()
                     {
-                        let old = Path::new(s);
-                        let Some(name) = old.file_name() else { continue };
+                        if s.is_empty() || crate::look::in_backgrounds(s, dir) {
+                            continue;
+                        }
+                        let Some(name) = crate::thumbs::own_name(s).filter(|_| s.encode_utf16().count() < crate::look::PICTURE_PATH_MAX) else { continue };
                         let here = dir.join(name);
-                        if !old.is_file() && here.is_file() {
+                        if here.is_file() {
                             *x = serde_json::json!(here.to_string_lossy());
                             changed = true;
                         }
@@ -537,7 +559,7 @@ fn repoint_backgrounds(conn: &rusqlite::Connection, backgrounds: &Path) -> Resul
             _ => false,
         }
     }
-    for key in ["look_board", "look_styles", "look_themes"] {
+    for key in crate::look::PICTURE_KEYS {
         if let Some(mut v) = db::get_setting(conn, key)
             && walk(&mut v, backgrounds)
         {
@@ -547,14 +569,54 @@ fn repoint_backgrounds(conn: &rusqlite::Connection, backgrounds: &Path) -> Resul
     Ok(())
 }
 
-/// A portable data folder that was moved (another drive letter on a USB stick, another folder):
-/// the pictures, link previews' pictures and board backgrounds still name where they were. Each
-/// one whose file is gone is pointed at its copy in this data folder. (Only for a data folder of
-/// its own: the usual folder never moves.)
+/// A data folder that was moved (a portable one under another drive letter on a USB stick,
+/// another folder) or is named another way (the usual one through a junction left by a moved
+/// profile, a short 8.3 name): the pictures, link previews' pictures and board backgrounds still
+/// name where they were. Each one naming another folder is pointed at its copy of the same name
+/// in this data folder, from the paths' text alone (`copy_here`), at every start and after a
+/// restore. Each kind is done whatever became of the others (a
+/// failure is said, and given back once all were tried): backgrounds aren't left out because the
+/// pictures couldn't be.
+///
+/// All of it in one transaction, written to the disk once at the end (not once per picture: a
+/// few thousand on a USB stick or a network drive would hold the board back for a minute), each
+/// kind in a savepoint of its own: a kind that fails midway is left whole as it was, and a stop
+/// midway (the computer turned off) leaves nothing half pointed.
 pub fn repoint_moved(conn: &rusqlite::Connection, data: &Path) -> Result<(), String> {
-    repoint_pictures(conn, &data.join("pictures"))?;
-    repoint_previews(conn, &data.join("previews"))?;
-    repoint_backgrounds(conn, &data.join("backgrounds"))
+    type Kind = fn(&rusqlite::Connection, &Path) -> Result<(), String>;
+    let kinds: [(&str, Kind, &str); 3] = [
+        ("pictures", repoint_pictures, "pictures"),
+        ("link previews' pictures", repoint_previews, "previews"),
+        ("backgrounds", repoint_backgrounds, "backgrounds"),
+    ];
+    let mut tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut failed = vec![];
+    // (A step of the transaction failing after a kind already failed gives back every error, not
+    // only its own.)
+    fn with_failed(failed: &mut Vec<String>, e: rusqlite::Error) -> String {
+        failed.push(e.to_string());
+        failed.join("; ")
+    }
+    for (what, run, folder) in kinds {
+        let sp = tx.savepoint().map_err(|e| with_failed(&mut failed, e))?;
+        match run(&sp, &data.join(folder)) {
+            Ok(()) => sp.commit().map_err(|e| with_failed(&mut failed, e))?,
+            Err(e) => {
+                // (A savepoint dropped without its commit is rolled back: this kind as it was.)
+                drop(sp);
+                eprintln!("The {what} weren't pointed at this data folder: {e}");
+                failed.push(e);
+                // Some errors (a full disk, an I/O error) take back the whole transaction, not
+                // only the savepoint: nothing is left to go on with (the next savepoint would
+                // start a transaction of its own), so the errors are given back as they are.
+                if conn.is_autocommit() {
+                    return Err(failed.join("; "));
+                }
+            }
+        }
+    }
+    tx.commit().map_err(|e| with_failed(&mut failed, e))?;
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
 }
 
 /// The folders of files a backup keeps with the notes: pictures, link previews' pictures and
@@ -564,7 +626,7 @@ const FILE_FOLDERS: [&str; 3] = ["pictures", "previews", "backgrounds"];
 /// The data folder's files, into a backup being made.
 fn copy_files(data: &Path, backup: &Path) -> Result<(), String> {
     for folder in FILE_FOLDERS {
-        copy_dir(&data.join(folder), &backup.join(folder)).map_err(|e| e.to_string())?;
+        copy_dir(&data.join(folder), &backup.join(folder), false).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -581,7 +643,7 @@ fn put_back(conn: &mut rusqlite::Connection, src: &rusqlite::Connection, backup:
 /// the backup may be on a slow drive).
 fn put_back_files(backup: &Path, data: &Path) -> Result<(), String> {
     for folder in FILE_FOLDERS {
-        copy_dir(&backup.join(folder), &data.join(folder)).map_err(|e| e.to_string())?;
+        copy_dir(&backup.join(folder), &data.join(folder), true).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1670,6 +1732,7 @@ mod tests {
         crate::db::add_picture(&old, n.id, None, &elsewhere.join("pictures").join("1-0.png").to_string_lossy()).unwrap();
         let bg = elsewhere.join("backgrounds").join("9.jpg").to_string_lossy().to_string();
         crate::db::set_setting(&old, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": bg } })).unwrap();
+        crate::db::set_setting(&old, "look_last_picture", &serde_json::json!({ "picture": bg })).unwrap();
         let backup = temp_dir("bg-backup").join("dobo-2026-11-21_090000-manual");
         std::fs::create_dir_all(&backup).unwrap();
         old.execute("VACUUM INTO ?1", [backup.join(crate::paths::DB_FILE).to_string_lossy().to_string()]).unwrap();
@@ -1688,6 +1751,8 @@ mod tests {
         assert!(here_pic.is_file() && here_bg.is_file());
         assert_eq!(crate::db::picture_paths(&conn).unwrap(), vec![here_pic.to_string_lossy().to_string()]);
         assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], serde_json::json!(here_bg.to_string_lossy()));
+        // Your last picture (the picture tile's) rides along, pointed here too.
+        assert_eq!(crate::db::get_setting(&conn, "look_last_picture").unwrap()["picture"], serde_json::json!(here_bg.to_string_lossy()));
         assert_eq!(crate::db::load_all(&conn).unwrap().notes.len(), 1);
     }
 
@@ -1946,6 +2011,7 @@ mod tests {
         let bg = old.join("backgrounds").join("9.jpg").to_string_lossy().to_string();
         crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "bg": "picture", "picture": bg })).unwrap();
         crate::db::set_setting(&conn, "look_styles", &serde_json::json!([{ "id": "s1", "look": { "bg": "picture", "picture": bg } }, { "id": "s2", "look": { "picture": "" } }])).unwrap();
+        crate::db::set_setting(&conn, "look_last_picture", &serde_json::json!({ "picture": bg })).unwrap();
         repoint_moved(&conn, &new).unwrap();
         assert_eq!(crate::db::picture_paths(&conn).unwrap(), vec![new.join("pictures").join("1-0.png").to_string_lossy().to_string()]);
         assert_eq!(crate::db::preview_images(&conn).unwrap()[0].1, new.join("previews").join("p.jpg").to_string_lossy());
@@ -1954,9 +2020,240 @@ mod tests {
         let styles = crate::db::get_setting(&conn, "look_styles").unwrap();
         assert_eq!(styles[0]["look"]["picture"], serde_json::json!(here));
         assert_eq!(styles[1]["look"]["picture"], serde_json::json!(""));
+        assert_eq!(crate::db::get_setting(&conn, "look_last_picture").unwrap()["picture"], serde_json::json!(here));
         // Run again (every start): nothing changes.
         repoint_moved(&conn, &new).unwrap();
         assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["picture"], serde_json::json!(here));
+    }
+
+    /// The backgrounds are found again even when the notes' pictures can't be (each kind on its
+    /// own), and your last picture then stays.
+    #[test]
+    fn backgrounds_are_found_again_whatever_became_of_the_pictures() {
+        let old = temp_dir("moved-alone-old").join("data");
+        let new = temp_dir("moved-alone-new").join("data");
+        std::fs::create_dir_all(new.join("backgrounds")).unwrap();
+        std::fs::write(new.join("backgrounds").join("9.jpg"), b"jpg").unwrap();
+        let conn = crate::db::open(&new.join("ztodo.sqlite")).unwrap();
+        let bg = old.join("backgrounds").join("9.jpg").to_string_lossy().to_string();
+        crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": bg } })).unwrap();
+        crate::db::set_setting(&conn, "look_last_picture", &serde_json::json!({ "picture": bg })).unwrap();
+        // The pictures can't be read (a damaged table): that one fails, the others are still done.
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE pictures;").unwrap();
+        assert!(repoint_moved(&conn, &new).unwrap_err().contains("pictures"));
+        let here = serde_json::json!(new.join("backgrounds").join("9.jpg").to_string_lossy());
+        assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], here);
+        crate::look::forget_missing_picture(&conn, &new.join("backgrounds")).unwrap();
+        assert_eq!(crate::db::get_setting(&conn, "look_last_picture").unwrap()["picture"], here);
+    }
+
+    /// A crafted backup's backgrounds on a network share: never looked at, left as they are when
+    /// there is no copy of the same name here (the board shows none of them), and your last
+    /// picture forgotten.
+    #[test]
+    fn backgrounds_elsewhere_are_never_looked_at() {
+        let data = temp_dir("bg-share").join("data");
+        std::fs::create_dir_all(data.join("backgrounds")).unwrap();
+        let conn = crate::db::open(&data.join("ztodo.sqlite")).unwrap();
+        let share = r"\\dobo-test-host.invalid\share\x.jpg";
+        crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": share } })).unwrap();
+        crate::db::set_setting(&conn, "look_last_picture", &serde_json::json!({ "picture": share })).unwrap();
+        let t = std::time::Instant::now();
+        repoint_moved(&conn, &data).unwrap();
+        crate::look::forget_missing_picture(&conn, &data.join("backgrounds")).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "no network lookup");
+        assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], serde_json::json!(share));
+        assert_eq!(crate::db::get_setting(&conn, "look_last_picture"), None);
+    }
+
+    /// The notes' pictures and link previews' pictures the same way: one naming a network share is
+    /// never looked at (left as it is, the board shows only its own folders' files), one naming
+    /// another folder is pointed at its copy here even while the other folder still has it (a
+    /// portable folder copied, not moved), and devices or other streams are never looked for.
+    #[test]
+    fn pictures_and_previews_elsewhere_are_never_looked_at() {
+        let data = temp_dir("pic-share").join("data");
+        let before = temp_dir("pic-before").join("data");
+        for d in ["pictures", "previews"] {
+            std::fs::create_dir_all(data.join(d)).unwrap();
+            std::fs::create_dir_all(before.join(d)).unwrap();
+            std::fs::write(data.join(d).join("2-0.png"), b"png").unwrap();
+            std::fs::write(before.join(d).join("2-0.png"), b"png").unwrap();
+        }
+        let conn = crate::db::open(&data.join("ztodo.sqlite")).unwrap();
+        let n = crate::db::create_note(&conn, "Hub", "work", "soft", "Sage").unwrap();
+        let share = r"\\dobo-test-host.invalid\share\1-0.png";
+        let copied = before.join("pictures").join("2-0.png").to_string_lossy().to_string();
+        let device = r"D:\elsewhere\NUL.png";
+        for p in [share, copied.as_str(), device] {
+            crate::db::add_picture(&conn, n.id, None, p).unwrap();
+        }
+        let link = |image: &str| serde_json::json!({ "url": "https://example.com", "image": image });
+        let item = |text: &'static str, l: &serde_json::Value| {
+            let it = crate::db::NewItem { note_id: n.id, kind: "task", text, due_at: None, parent_id: None, alarm: "reminder", link: Some(l), file: None };
+            crate::db::create_item(&conn, it).unwrap()
+        };
+        let shared = item("A", &link(share));
+        let prev = before.join("previews").join("2-0.png").to_string_lossy().to_string();
+        let moved = item("B", &link(&prev));
+        let t = std::time::Instant::now();
+        repoint_moved(&conn, &data).unwrap();
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "no network lookup");
+        let here = data.join("pictures").join("2-0.png").to_string_lossy().to_string();
+        let mut paths = crate::db::picture_paths(&conn).unwrap();
+        paths.sort();
+        let mut want = vec![share.to_string(), here, device.to_string()];
+        want.sort();
+        assert_eq!(paths, want);
+        let image = |id: i64| crate::db::preview_images(&conn).unwrap().into_iter().find(|(i, _)| *i == id).map(|(_, p)| p);
+        assert_eq!(image(shared.id).as_deref(), Some(share));
+        assert_eq!(image(moved.id), Some(data.join("previews").join("2-0.png").to_string_lossy().to_string()));
+    }
+
+    /// The proof that the other place is never used, beyond being quick: a file of the same name
+    /// left in a folder that can be reached (a share that answers) is never taken for the picture.
+    /// The picture keeps its path (the board shows it as missing), your last picture is forgotten
+    /// rather than kept for that file, and nothing is copied from there.
+    #[test]
+    fn a_reachable_file_elsewhere_is_never_taken_for_the_picture() {
+        let data = temp_dir("reach-data").join("data");
+        let away = temp_dir("reach-away");
+        for d in ["pictures", "previews", "backgrounds"] {
+            std::fs::create_dir_all(data.join(d)).unwrap();
+            std::fs::create_dir_all(away.join(d)).unwrap();
+            std::fs::write(away.join(d).join("7-0.png"), b"png").unwrap();
+        }
+        let conn = crate::db::open(&data.join("ztodo.sqlite")).unwrap();
+        let n = crate::db::create_note(&conn, "Hub", "work", "soft", "Sage").unwrap();
+        let there = |d: &str| away.join(d).join("7-0.png").to_string_lossy().to_string();
+        crate::db::add_picture(&conn, n.id, None, &there("pictures")).unwrap();
+        let link = serde_json::json!({ "url": "https://example.com", "image": there("previews") });
+        conn.execute("INSERT INTO items (note_id, text, created_at, link) VALUES (?1, 'Read', 0, ?2)", rusqlite::params![n.id, link.to_string()]).unwrap();
+        crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": there("backgrounds") } })).unwrap();
+        crate::db::set_setting(&conn, "look_last_picture", &serde_json::json!({ "picture": there("backgrounds") })).unwrap();
+        repoint_moved(&conn, &data).unwrap();
+        crate::look::forget_missing_picture(&conn, &data.join("backgrounds")).unwrap();
+        assert_eq!(crate::db::picture_paths(&conn).unwrap(), vec![there("pictures")]);
+        assert_eq!(crate::db::preview_images(&conn).unwrap()[0].1, there("previews"));
+        assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], serde_json::json!(there("backgrounds")));
+        assert_eq!(crate::db::get_setting(&conn, "look_last_picture"), None, "not kept for the file over there");
+        for d in ["pictures", "previews", "backgrounds"] {
+            assert_eq!(std::fs::read_dir(data.join(d)).unwrap().count(), 0, "nothing copied from there");
+        }
+    }
+
+    /// A kind that fails midway (here a disk refusing the second picture's change) is left whole
+    /// as it was, never half pointed; the other kinds are still done.
+    #[test]
+    fn a_kind_that_fails_midway_is_left_as_it_was() {
+        let old = temp_dir("midway-old").join("data");
+        let new = temp_dir("midway-new").join("data");
+        for d in ["pictures", "backgrounds"] {
+            std::fs::create_dir_all(new.join(d)).unwrap();
+        }
+        for name in ["1-0.png", "2-0.png"] {
+            std::fs::write(new.join("pictures").join(name), b"png").unwrap();
+        }
+        std::fs::write(new.join("backgrounds").join("9.jpg"), b"jpg").unwrap();
+        let conn = crate::db::open(&new.join("ztodo.sqlite")).unwrap();
+        let n = crate::db::create_note(&conn, "Hub", "work", "soft", "Sage").unwrap();
+        let was: Vec<String> = ["1-0.png", "2-0.png"].iter().map(|f| old.join("pictures").join(f).to_string_lossy().to_string()).collect();
+        for p in &was {
+            crate::db::add_picture(&conn, n.id, None, p).unwrap();
+        }
+        let bg = old.join("backgrounds").join("9.jpg").to_string_lossy().to_string();
+        crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": bg } })).unwrap();
+        conn.execute_batch("CREATE TEMP TRIGGER refuse BEFORE UPDATE ON pictures WHEN NEW.path LIKE '%2-0.png' BEGIN SELECT RAISE(ABORT, 'disk refused'); END;").unwrap();
+        assert!(repoint_moved(&conn, &new).unwrap_err().contains("disk refused"));
+        let mut paths = crate::db::picture_paths(&conn).unwrap();
+        paths.sort();
+        assert_eq!(paths, was, "the first picture's change was taken back too");
+        assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], serde_json::json!(new.join("backgrounds").join("9.jpg").to_string_lossy()));
+        assert!(conn.is_autocommit(), "nothing left open");
+        // Once the disk takes it: all of them.
+        conn.execute_batch("DROP TRIGGER refuse").unwrap();
+        repoint_moved(&conn, &new).unwrap();
+        assert!(crate::db::picture_paths(&conn).unwrap().iter().all(|p| p.starts_with(&*new.join("pictures").to_string_lossy())));
+    }
+
+    /// An error that takes back the whole transaction (here a trigger's ROLLBACK, as a full disk
+    /// does): the real error is given back, never "no transaction is active", nothing half done.
+    #[test]
+    fn an_error_taking_back_the_whole_transaction_is_given_back_as_it_is() {
+        let old = temp_dir("whole-old").join("data");
+        let new = temp_dir("whole-new").join("data");
+        for d in ["pictures", "backgrounds"] {
+            std::fs::create_dir_all(new.join(d)).unwrap();
+        }
+        for name in ["1-0.png", "2-0.png"] {
+            std::fs::write(new.join("pictures").join(name), b"png").unwrap();
+        }
+        std::fs::write(new.join("backgrounds").join("9.jpg"), b"jpg").unwrap();
+        let conn = crate::db::open(&new.join("ztodo.sqlite")).unwrap();
+        let n = crate::db::create_note(&conn, "Hub", "work", "soft", "Sage").unwrap();
+        let was: Vec<String> = ["1-0.png", "2-0.png"].iter().map(|f| old.join("pictures").join(f).to_string_lossy().to_string()).collect();
+        for p in &was {
+            crate::db::add_picture(&conn, n.id, None, p).unwrap();
+        }
+        let bg = old.join("backgrounds").join("9.jpg").to_string_lossy().to_string();
+        crate::db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "picture", "picture": bg } })).unwrap();
+        conn.execute_batch("CREATE TEMP TRIGGER full BEFORE UPDATE ON pictures WHEN NEW.path LIKE '%2-0.png' BEGIN SELECT RAISE(ROLLBACK, 'disk full'); END;").unwrap();
+        let e = repoint_moved(&conn, &new).unwrap_err();
+        assert!(e.contains("disk full") && !e.contains("no transaction"), "{e}");
+        let mut paths = crate::db::picture_paths(&conn).unwrap();
+        paths.sort();
+        assert_eq!(paths, was, "nothing half pointed");
+        assert_eq!(crate::db::get_setting(&conn, "look_board").unwrap()["light"]["picture"], serde_json::json!(bg), "stopped there");
+        assert!(conn.is_autocommit(), "nothing left open");
+    }
+
+    /// A folder link (Windows' junction, made without special rights; a symlink elsewhere): false
+    /// when it can't be made here.
+    fn folder_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().is_ok_and(|o| o.status.success())
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    /// A backup whose pictures folder is a link pointing elsewhere: nothing is taken from there;
+    /// one with a link looping back up: its size is still counted, once.
+    #[test]
+    fn links_in_a_backup_are_never_followed() {
+        let backup = temp_dir("linked-backup");
+        let away = temp_dir("linked-away");
+        std::fs::write(away.join("1-0.png"), b"png").unwrap();
+        if !folder_link(&backup.join("pictures"), &away) {
+            eprintln!("No folder link could be made here: skipped.");
+            return;
+        }
+        let data = temp_dir("linked-data");
+        put_back_files(&backup, &data).unwrap();
+        assert!(!data.join("pictures").join("1-0.png").exists(), "nothing from the linked folder");
+        // A loop: the size is counted without walking round it (no stack overflow), the link's
+        // target not counted.
+        std::fs::create_dir_all(backup.join("previews")).unwrap();
+        std::fs::write(backup.join("previews").join("p.jpg"), vec![0u8; 100]).unwrap();
+        assert!(folder_link(&backup.join("previews").join("loop"), &backup));
+        assert_eq!(dir_size(&backup), 100);
+        let _ = std::fs::remove_dir_all(&backup);
+    }
+
+    #[test]
+    fn own_names_are_read_from_the_text() {
+        use crate::thumbs::own_name;
+        assert_eq!(own_name(r"\\host\share\a.jpg"), Some("a.jpg"));
+        assert_eq!(own_name("D:/x/b.png"), Some("b.png"));
+        for bad in [r"D:\x\", r"D:\x\..", r"D:\x\...", r"D:\x\ . ", r"D:\x\a.jpg:hidden", r"D:\x\CON.png", r"D:\x\com1", "."] {
+            assert_eq!(own_name(bad), None, "{bad}");
+        }
+        // A `\\?\` prefix doesn't make a file of the folder look like another folder's.
+        assert!(crate::thumbs::directly_in(r"\\?\D:\data\pictures\1-0.png", Path::new(r"D:\data\pictures")));
+        assert!(!crate::thumbs::directly_in(r"\\?\UNC\host\s\1-0.png", Path::new(r"D:\data\pictures")));
     }
 
     /// The app's connection, as the app holds it.

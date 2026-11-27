@@ -68,6 +68,7 @@
     "allow-backup-folder",
     "allow-data-info",
     "allow-open-data-folder",
+    "allow-own-folders",
     "allow-dark-mode-now",
     "allow-export-look",
     "allow-import-look",

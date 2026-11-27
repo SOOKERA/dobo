@@ -14,6 +14,7 @@
   import ViewHeader, { type Crumb } from "./ViewHeader.svelte";
   import { store } from "../lib/store.svelte";
   import { thumbs } from "../lib/thumbs.svelte";
+  import { NOT_OURS } from "../lib/ownFiles";
   import { swatchOf } from "../lib/palette";
   import { look } from "../lib/look.svelte";
   import { pushLayer } from "../lib/layers";
@@ -237,7 +238,7 @@
         {/if}
         {#if pics.length}
           <div class="pics" aria-hidden="true">
-            {#each pics.slice(0, 4) as pic (pic.id)}<img src={store.thumbSrc(pic)} alt="" loading="lazy" decoding="async" draggable="false" use:imgFade onerror={() => thumbs.failed(pic)} />{/each}
+            {#each pics.slice(0, 4) as pic (pic.id)}{@const src = store.thumbSrc(pic)}{#if src === NOT_OURS}<span class="pic-ph"><Icon name="image" size={14} stroke={1.7} /></span>{:else}<img {src} alt="" loading="lazy" decoding="async" draggable="false" use:imgFade onerror={() => thumbs.failed(pic)} />{/if}{/each}
             {#if pics.length > 4}<span class="pics-more">+{pics.length - 4}</span>{/if}
           </div>
         {/if}
@@ -522,6 +523,12 @@
     align-items: center;
     gap: 6px;
     margin: 8px 0 0 21px;
+  }
+  .pics .pic-ph {
+    width: 44px;
+    height: 34px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
   }
   .pics img {
     width: 44px;

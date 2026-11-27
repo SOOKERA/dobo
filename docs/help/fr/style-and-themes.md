@@ -7,7 +7,8 @@ Papier, liège, kraft, feutre, terrazzo, aquarelle, cyanotype ou une image à vo
 Cliquez sur **Style** dans l’en-tête (**Ctrl+Maj+S**), ou faites un clic droit sur un endroit vide du tableau › **Changer le fond…**. Le panneau s’ouvre à côté du tableau. Cliquez en dehors (ou **Ctrl+Maj+S** de nouveau, ou **Échap**) pour le fermer.
 
 - **Nos styles** : **Uni**, **Papier clair**, **Carnet**, **Panneau liège**, **Atelier kraft**, **Terrazzo**, **Aquarelle**, **Cyanotype**, **Nuit feutrée**.
-- **Fond** : choisissez une texture, puis l’une de ses couleurs, ou la couleur de votre choix. **Votre image** utilise une image à vous, adoucie et atténuée pour que vos notes restent faciles à lire.
+- **Fond** : choisissez une texture. Ce que propose ce fond s’affiche alors dans un encadré juste sous les vignettes, qui porte son nom : **Papier · couleurs** (l’une des nôtres, ou **Sur mesure** pour la couleur de votre choix), **Aquarelle · mélanges**, etc.
+- **Importer une image** : la dernière vignette, en pointillés tant que vous n’avez pas importé d’image, ouvre directement vos images. Celle que vous choisissez est adoucie et atténuée pour que vos notes restent faciles à lire. La vignette la montre ensuite et s’appelle **Votre image** ; son encadré propose **Une autre image…** pour en changer. Si votre image ne peut pas s’afficher (son fichier a disparu, ou n’est pas dans les dossiers de Dobo), le tableau devient uni, clair ou sombre comme le reste de Dobo, et la vignette redevient **Importer une image**. Dobo réessaie de l’afficher quand vous revenez à sa fenêtre, ou après une restauration.
 - **Notes fixées par** : **Auto** (ce qui va avec le fond), **Punaises**, **Ruban** ou **Rien**.
 - **Taille des notes**, et **Nouvelles notes** : une couleur, ou **Tour à tour** (chaque nouvelle note prend la couleur suivante).
 
@@ -20,7 +21,7 @@ Changez n’importe quoi et le panneau affiche « Modifié d’après Panneau l
 Choisissez **Aquarelle** pour voir nos cinq peintures. **Repeindre** fait une nouvelle peinture dans les mêmes couleurs.
 
 - **Plus de mélanges** : d’autres mélanges de couleurs, classés par ambiance.
-- **Personnaliser** : choisissez le motif (**Éparpillé**, **Balayé**, **Coins**, **Une tache**), de 1 à 3 couleurs parmi les peintures aquarelle ou les vôtres, et un papier blanc ou sombre. **Garder ce mélange** le range sous **Aquarelle · les vôtres**.
+- **Personnaliser** : choisissez le motif (**Éparpillé**, **Balayé**, **Coins**, **Une tache**), de 1 à 3 couleurs parmi les peintures aquarelle ou les vôtres, et un papier blanc ou sombre. **Garder ce mélange** le range sous **Les vôtres**, dans l’encadré de l’aquarelle.
 
 ## Clair et sombre
 

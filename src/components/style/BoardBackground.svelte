@@ -93,7 +93,8 @@
   }
 
   $effect(() => {
-    const l = look.active;
+    // (A picture background whose picture can't be shown: a plain board, look.svelte.ts `shown`.)
+    const l = look.shown;
     const W = size.w;
     const H = size.h;
     if (!W || !H) return;
@@ -134,6 +135,8 @@
         .catch(() => {
           const found = layers.find((x) => x.id === layer.id);
           if (found) show(found);
+          // (Gone or damaged: the board turns plain, the picture tile imports again.)
+          if (l.picture) look.pictureFailed(l.picture);
         });
       return;
     }

@@ -100,17 +100,38 @@ pub fn existing(dir: &Path) -> std::collections::HashMap<String, Thumb> {
 }
 
 /// Is `path` a file right in `folder` (any letter case, any slashes), by its name? Never another
-/// stream of a file (`1-0.jpg:hidden`) nor a device Windows opens whatever the folder (CON,
-/// NUL, COM1…, with or without an extension).
+/// stream of a file (`1-0.jpg:hidden`), a name of dots or spaces only, a device Windows opens
+/// whatever the folder (CON, NUL, COM1…, with or without an extension), nor a path of
+/// `look::PICTURE_PATH_MAX` UTF-16 units or more. The board's own rule is the same
+/// (src/lib/ownFiles.ts); both are checked against src/lib/ownFiles.cases.json.
 pub fn directly_in(path: &str, folder: &Path) -> bool {
-    let norm = |s: &str| s.replace('/', "\\").to_lowercase();
+    if path.encode_utf16().count() >= crate::look::PICTURE_PATH_MAX {
+        return false;
+    }
+    // (A `\\?\` prefix either side doesn't matter, as in look.rs `in_backgrounds`.)
+    let norm = |s: &str| {
+        let s = s.replace('/', "\\");
+        let s = match s.strip_prefix(r"\\?\UNC\") {
+            Some(rest) => format!(r"\\{rest}"),
+            None => s.strip_prefix(r"\\?\").map(String::from).unwrap_or(s),
+        };
+        s.to_lowercase()
+    };
     let dir = norm(&folder.to_string_lossy());
     let dir = dir.trim_end_matches('\\');
     let p = norm(path);
     !dir.is_empty()
         && p.strip_prefix(dir)
             .and_then(|rest| rest.strip_prefix('\\'))
-            .is_some_and(|name| !name.is_empty() && !name.contains(['\\', ':']) && name != "." && name != ".." && !is_device(name))
+            .is_some_and(|name| !name.chars().all(|c| c == '.' || c == ' ') && !name.contains(['\\', ':']) && !is_device(name))
+}
+
+/// The file name `path` ends with, read from its text alone, when a file of that name may be
+/// looked for in one of the data folder's own folders: never empty, `.`, `..`, another stream of
+/// a file (`a.jpg:hidden`) nor a device (CON, NUL, COM1…).
+pub fn own_name(path: &str) -> Option<&str> {
+    let name = path.rsplit(['\\', '/']).next()?;
+    (!name.chars().all(|c| c == '.' || c == ' ') && !name.contains(':') && !is_device(name)).then_some(name)
 }
 
 /// A name Windows takes for a device, whatever the extension: CON, PRN, AUX, NUL, CONIN$,
@@ -465,12 +486,14 @@ fn with_icc(webp: &[u8], icc: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> 
 /// `key`s of every picture file the notes and looks use) that is gone, or older than `before`
 /// (the picture itself is removed then: lib.rs `purge_unused_pictures`); and pieces of a thumb
 /// left half-written; and what a reading remembered of such a picture (`remember`). A thumb of a
-/// picture still used is never one of them.
+/// picture still used is never one of them. Nothing when the folder can't be listed whole (as
+/// lib.rs `unused_files`: a listing that fails midway cleans nothing up this time).
 pub fn unused(dir: &Path, used: &std::collections::HashSet<String>, before: std::time::SystemTime) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let Ok(entries) = entries.collect::<Result<Vec<_>, _>>() else { return vec![] };
     let pictures = dir.parent();
     entries
-        .flatten()
+        .into_iter()
         .filter(|e| e.metadata().is_ok_and(|m| m.is_file()))
         .filter(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -584,6 +607,26 @@ mod tests {
         }
     }
 
+    /// The board's rule (src/lib/ownFiles.ts `ownFile`) and this one read the same table: the
+    /// paths the board may ask for are exactly those `directly_in` one of Dobo's folders.
+    #[test]
+    fn the_board_and_directly_in_agree_on_every_path() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../src/lib/ownFiles.cases.json")).unwrap();
+        let list = |k: &str| cases[k].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let folders = list("folders");
+        let ours = |p: &str| folders.iter().any(|f| directly_in(p, Path::new(f)));
+        for p in list("own") {
+            assert!(ours(&p), "{p}");
+        }
+        for p in list("notOwn") {
+            assert!(!ours(&p), "{p}");
+        }
+        let dir = &folders[0];
+        let units = dir.encode_utf16().count();
+        assert!(ours(&format!(r"{dir}\{}.png", "x".repeat(994 - units))), "999 in all");
+        assert!(!ours(&format!(r"{dir}\{}.png", "x".repeat(995 - units))), "1000 in all");
+    }
+
     #[test]
     fn a_thumbs_name_says_its_picture_and_size() {
         assert_eq!(name_for("1716400000000-3.jpg", 1200, 900), "1716400000000-3.jpg.1200x900.webp");
@@ -602,6 +645,8 @@ mod tests {
         let t = make(&pic).unwrap().expect("a thumb");
         assert_eq!((t.w, t.h), (1200, 900));
         assert_eq!(Path::new(&t.path), dir.join(DIR).join("1-0.jpg.1200x900.webp"));
+        // (In the thumbs folder lib.rs `own_folders` gives the board: it asks for it.)
+        assert!(directly_in(&t.path, &dir.join(DIR)));
         let img = read(&t.path);
         assert_eq!(img.dimensions(), (1200, 900));
         assert!(!img.color().has_alpha(), "a photo has no transparency");
@@ -875,6 +920,7 @@ mod tests {
         for fine in ["console.jpg", "COM10.jpg", "nul-1.png", "1-0.jpg"] {
             assert!(directly_in(&format!(r"C:\Data\pictures\{fine}"), Path::new(r"C:\Data\pictures")), "{fine}");
         }
+        assert!(!directly_in(&format!(r"C:\Data\pictures\{}.jpg", "x".repeat(1000)), Path::new(r"C:\Data\pictures")), "too long");
         // A thumb is made only of a file that is there.
         std::fs::write(pics.join("5-0.jpg"), b"x").unwrap();
         std::fs::create_dir_all(pics.join("6-0.jpg")).unwrap();

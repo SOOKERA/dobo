@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
-  // One of your watercolour mixes (the "Watercolour · yours" row): the real painting, its name on
+  // One of your watercolour mixes (the watercolour card’s "Yours" row): the real painting, its name on
   // up to two lines, a ⋯ menu to use, rename or delete it.
   import { composing } from "../../../lib/compose";
   import { focusSelect } from "../../../lib/modal";

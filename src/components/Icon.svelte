@@ -89,8 +89,8 @@
     <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" />
   {:else if name === "download"}
     <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
-  {:else if name === "upload"}
-    <path d="M12 20V9M7 14l5-5 5 5M5 4h14" />
+  {:else if name === "import"}
+    <path d="M12 15V4" /><path d="M7.5 8.5L12 4l4.5 4.5" /><path d="M4 14.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5" />
   {:else if name === "rename"}
     <path d="M4 20h4L19 9l-4-4L4 16z" />
   {:else if name === "lines"}

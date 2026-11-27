@@ -5,7 +5,8 @@
   // with the system viewer, remove. Left/Right browse, Esc closes.
   import Icon from "./Icon.svelte";
   import ViewHeader from "./ViewHeader.svelte";
-  import { fadeQuick, veil } from "../lib/motion";
+  import { fadeQuick, reduced, veil } from "../lib/motion";
+  import { NOT_OURS } from "../lib/ownFiles";
   import { store } from "../lib/store.svelte";
   import { thumbs } from "../lib/thumbs.svelte";
   import { viewer } from "../lib/viewer.svelte";
@@ -18,8 +19,18 @@
   let note = $derived(pic ? store.notes.find((n) => n.id === pic.note_id) : undefined);
   let name = $derived(pic ? (pic.path.startsWith("data:") ? t("Picture") : pic.path.split(/[\\/]/).pop()) : "");
   let msg = $state<Words>("");
+  // A picture outside Dobo's own folders (a backup from elsewhere naming a network share): never
+  // asked for (ownFiles.ts), so it can't be copied, nor opened in Photos (Windows would reach
+  // that place); its place shows calmly.
+  let away = $derived(pic ? store.src(pic.path) === NOT_OURS : false);
+  // One of Dobo's own whose file can't be shown (gone, damaged): the same calm place; nothing to
+  // copy, nor to open in Photos.
+  let gone = $derived(pic ? thumbs.unreadable(pic) : false);
+  let off = $derived(away || gone);
+  let offTip = $derived(away ? t("This picture isn’t in Dobo’s folders") : t("This picture can’t be read"));
   let confirm = $state(false);
   let viewerEl = $state<HTMLElement>();
+  let stripEl = $state<HTMLElement>();
 
   function go(d: number) {
     const n = viewer.pictures.length;
@@ -46,9 +57,23 @@
     };
   });
 
+  // The shown picture's thumb kept in sight in the strip (a long strip in a narrow window): at
+  // once when the viewer opens, gliding when it changes. (Nothing while rehearsed off the page.)
+  let glide = false;
+  $effect(() => {
+    const on = stripEl?.children[viewer.index] as HTMLElement | undefined;
+    if (!on?.isConnected) return;
+    on.scrollIntoView({ inline: "nearest", block: "nearest", behavior: glide && !reduced() ? "smooth" : "auto" });
+    glide = true;
+  });
+
   async function copy() {
+    if (off) return;
     try {
-      const blob = await (await fetch(store.src(pic.path))).blob();
+      // (A picture outside Dobo's own folders is never asked for: nothing to copy.)
+      const src = store.src(pic.path);
+      if (src === NOT_OURS) throw new Error("not ours");
+      const blob = await (await fetch(src)).blob();
       const png = blob.type === "image/png" ? blob : await toPng(blob);
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
       msg = () => t("Copied");
@@ -79,9 +104,9 @@
   <div class="viewer" role="dialog" aria-label={t("Picture viewer")} tabindex="-1" bind:this={viewerEl} transition:veil|global={{ duration: 240 }} use:modal={{ initial: "self" }}>
     <div class="bar" data-drag-area={store.win.mode === "floating" || undefined}>
       <ViewHeader crumbs={[{ label: note ? noteTitle(note) : t("Note"), go: close }, { label: name ?? t("Picture") }]} sub={t("{a} of {b}", { a: viewer.index + 1, b: viewer.pictures.length }) + (msg ? ` · ${words(msg)}` : "")} big={17} onBack={close} onClose={close}>
-        <button class="tool" aria-label={t("Copy picture")} data-tip={t("Copy picture")} onclick={copy}><Icon name="copy" /></button>
+        <button class="tool" aria-label={t("Copy picture")} aria-disabled={off || undefined} data-tip={off ? offTip : t("Copy picture")} onclick={copy}><Icon name="copy" /></button>
         {#if !pic.path.startsWith("data:")}
-          <button class="tool" aria-label={t("Open with the system viewer")} data-tip={t("Open in Photos")} onclick={() => store.backend.openPath(pic.path)}><Icon name="external" /></button>
+          <button class="tool" aria-label={t("Open with the system viewer")} aria-disabled={off || undefined} data-tip={off ? offTip : t("Open in Photos")} onclick={() => !off && store.backend.openPath(pic.path)}><Icon name="external" /></button>
         {/if}
         {#if confirm}
           <button class="tool danger" use:takeFocus in:fadeQuick={{ duration: 180 }} onclick={remove}>{t("Remove")}</button>
@@ -92,17 +117,27 @@
     </div>
     <div class="stage">
       {#key pic.id}
-        <img src={store.src(pic.path)} alt="" draggable="false" />
+        {#if off}
+          <span class="pic-ph away"><Icon name="image" size={34} stroke={1.5} /></span>
+        {:else}
+          {@const p = pic}
+          <img src={store.src(p.path)} alt="" draggable="false" onerror={() => thumbs.failed(p, p.path)} />
+        {/if}
       {/key}
       {#if viewer.pictures.length > 1}
         <button class="nav prev" aria-label={t("Previous picture")} data-tip={t("Previous picture")} data-tip-keys="Left" onclick={() => go(-1)}><Icon name="chev-left" stroke={2.2} /></button>
         <button class="nav next" aria-label={t("Next picture")} data-tip={t("Next picture")} data-tip-keys="Right" onclick={() => go(1)}><Icon name="chev-right" stroke={2.2} /></button>
       {/if}
     </div>
-    <div class="strip">
+    <div class="strip" bind:this={stripEl}>
       {#each viewer.pictures as p, k (p.id)}
+        {@const src = store.thumbSrc(p)}
         <button class="thumb" class:on={k === viewer.index} aria-label={t("Picture {n}", { n: k + 1 })} onclick={() => (viewer.index = k)}>
-          <img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
+          {#if src === NOT_OURS}
+            <span class="pic-ph"><Icon name="image" size={16} stroke={1.7} /></span>
+          {:else}
+            <img {src} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
+          {/if}
         </button>
       {/each}
       <span class="hint">{t("Left / Right to browse · Esc to close")}</span>
@@ -151,6 +186,14 @@
   .tool:hover {
     background: #2a2622;
   }
+  /* (Can't be used for this picture: dimmed, its tooltip says why.) */
+  .tool[aria-disabled="true"] {
+    opacity: 0.38;
+    cursor: default;
+  }
+  .tool[aria-disabled="true"]:hover {
+    background: transparent;
+  }
   .tool.danger {
     background: var(--danger-fill);
     color: #fff;
@@ -170,6 +213,16 @@
     max-height: 100%;
     border-radius: 6px;
     object-fit: contain;
+    animation: pic-in 0.28s var(--ease-out);
+  }
+  /* The viewer's own dark chip, a picture's usual shape. */
+  .away {
+    width: min(100%, 420px);
+    max-height: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 6px;
+    background: #2a2622;
+    color: #8f877c;
     animation: pic-in 0.28s var(--ease-out);
   }
   @keyframes pic-in {
@@ -206,10 +259,13 @@
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
+    /* (Centred while it fits; a longer strip starts at its first thumb, all of it reachable.) */
+    justify-content: safe center;
     gap: 10px;
     padding: 0 var(--s4);
     overflow-x: auto;
+    /* (A thumb scrolled into sight keeps the strip's own margin from its edge.) */
+    scroll-padding-inline: var(--s4);
   }
   .thumb {
     width: 64px;
@@ -227,11 +283,17 @@
     border-color: #f3efe8;
     opacity: 1;
   }
-  .thumb img {
+  .thumb img,
+  .thumb .pic-ph {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .thumb .pic-ph {
+    display: grid;
+    background: #3a342e;
+    color: #b5ada2;
   }
   .hint {
     margin-left: var(--s4);
@@ -239,9 +301,16 @@
     color: #b5ada2;
     white-space: nowrap;
   }
+  /* A narrow window: the strip keeps its room for the thumbs (the arrows say the same). */
+  @container shell (max-width: 560px) {
+    .hint {
+      display: none;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .viewer,
-    .stage img {
+    .stage img,
+    .away {
       animation: none;
     }
   }

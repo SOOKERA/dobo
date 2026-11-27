@@ -2,8 +2,9 @@
 <!-- Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms. -->
 <script lang="ts">
   // The Style panel's main page: the theme (Light + Dark style), the dark-mode switch, our
-  // styles and yours, the background and its own colours (watercolour: our five, yours, More
-  // mixes, Customise), what holds the notes, note size and the new notes' colour.
+  // styles and yours, the background, then the chosen background's own options in a card under
+  // the tiles (colours; watercolour: our five, yours, More mixes, Customise; your picture), and,
+  // outside it (they're the board's), what holds the notes, note size and the new notes' colour.
   import Icon from "../../Icon.svelte";
   import LookSwatch from "../LookSwatch.svelte";
   import StyleCard from "../parts/StyleCard.svelte";
@@ -15,12 +16,13 @@
   import { look, type PanelPage } from "../../../lib/look.svelte";
   import { store, SIZES, type NoteSize } from "../../../lib/store.svelte";
   import { BACKGROUNDS, background, OUR_STYLES, WC_OURS, WC_MOODS, sameLook, type BgKind, type Held, type Look, type SavedMix } from "../../../lib/looks";
-  import { arrive, deal, easeFollowers, easeHeight, fadeQuick, fold, glideRing, leave, sink, titleIn, titleOut } from "../../../lib/motion";
+  import { arrive, deal, easeHeight, fadeQuick, fold, glideRing, leave, sink, titleIn, titleOut } from "../../../lib/motion";
   import { swatchesFor } from "../../../lib/palette";
   import type { PaletteName } from "../../../lib/types";
   import { t, tMaybe } from "../../../lib/i18n.svelte";
 
   let { go }: { go: (p: PanelPage) => void } = $props();
+  const uid = $props.id();
 
   let a = $derived(look.active);
   let bg = $derived(background(a.bg));
@@ -48,13 +50,24 @@
   function chipLook(k: BgKind): Look {
     if (k === a.bg) return a;
     if (k === "watercolour") return { bg: k, colour: "", held: "auto", wc: look.wc };
-    if (k === "picture") return { bg: k, colour: "", held: "auto", picture: findPicture() };
+    if (k === "picture") return { bg: k, colour: "", held: "auto", picture: picture ?? undefined };
     return { bg: k, colour: background(k).palette[0].name, held: "auto" };
   }
-  function findPicture(): string | undefined {
-    const all = [look.board.light, look.board.dark, ...look.styles.map((s) => s.look)];
-    return all.find((l) => l?.bg === "picture" && l.picture)?.picture;
-  }
+  // Your picture: the tile shows it (with a small import mark); without one that can be shown
+  // (none yet, one outside Dobo's folders, one gone), the tile is a dashed "Import a picture"
+  // that opens the picker straight away.
+  let usable = $derived(look.usable(a.picture));
+  let picture = $derived(a.bg === "picture" ? (usable ? a.picture! : null) : look.ownPicture);
+  const pickBg = (k: BgKind) => (k === "picture" && !picture ? look.pickPicture() : look.setBg(k));
+  /** The card's title: the background's own ("Cork · colours", "Your picture"); a picture
+   * background without a picture it can show (a style from a .ztheme comes without its picture)
+   * says what to do. */
+  let cardTitle = $derived(bg.key === "picture" && !usable ? t("Import a picture") : tMaybe(bg.colourLabel));
+  // The picture tile's two names. ("Import a picture" never leaves "picture" alone on a line.)
+  let importName = $derived(t("Import a picture").replace(/ (\S+)$/, " $1"));
+  let yourName = $derived(t("Your picture"));
+  /** The tiles' names: the picture's says what clicking it does until you have one. */
+  const tileName = (k: BgKind) => (k === "picture" ? (picture ? yourName : importName) : tMaybe(background(k).name));
 
   // ---- Colours of the background ----
   let customInput = $state<HTMLInputElement>();
@@ -175,109 +188,135 @@
     {/if}
   </section>
 
-  <!-- Background, then its own colours. -->
+  <!-- Background: the tiles, then the chosen one's own options in a card below them, titled
+       with its name (the tile keeps its ring). -->
   <section class="sec">
     <span class="lbl">{t("Background")}</span>
+    <!-- (When a name takes one line fewer, your first picture's "Your picture", the card below
+         glides up instead of jumping.) -->
+    <div use:easeHeight={{ clip: false }}>
     <div class="bgs" use:glideRing={a.bg}>
       {#each BACKGROUNDS as b (b.key)}
-        <button class="bgc" data-sel={a.bg === b.key} aria-pressed={a.bg === b.key} data-tip={tMaybe(b.name)} onclick={() => look.setBg(b.key)}>
-          <span class="bgsw" data-ring><LookSwatch look={chipLook(b.key)} w={76} h={30} /></span>
-          <span class="bgn" class:on={a.bg === b.key}>{tMaybe(b.name)}</span>
-        </button>
+        {@const on = a.bg === b.key}
+        {@const name = tileName(b.key)}
+        {#if b.key === "picture"}
+          <button class="bgc" data-sel={on} aria-pressed={on} data-tip={picture ? t("Your picture") : t("Import a picture…")} onclick={() => pickBg(b.key)}>
+            {#if picture}
+              <span class="bgsw" data-ring><LookSwatch look={chipLook(b.key)} w={76} h={30} /><span class="badge"><Icon name="import" size={10} stroke={2.4} /></span></span>
+            {:else}
+              <span class="bgsw imp" data-ring><Icon name="import" size={15} stroke={2} /></span>
+            {/if}
+            <!-- (Room for both names, "Your picture" in bold: the first import changes only the
+                 card below, never this row.) -->
+            <span class="bgn" class:on={on && !!picture}><span>{name}</span><span class="ghost" aria-hidden="true">{importName}</span><span class="ghost b" aria-hidden="true">{yourName}</span></span>
+          </button>
+        {:else}
+          <button class="bgc" data-sel={on} aria-pressed={on} data-tip={tMaybe(b.name)} onclick={() => pickBg(b.key)}>
+            <span class="bgsw" data-ring><LookSwatch look={chipLook(b.key)} w={76} h={30} /></span>
+            <span class="bgn" class:on><span>{name}</span><span class="ghost b" aria-hidden="true">{name}</span></span>
+          </button>
+        {/if}
       {/each}
     </div>
-  </section>
-
-  <section class="sec colours" use:easeFollowers>
-    <div class="row-h">
-      <span class="stack">
-        {#key bg.key}
-          <span class="lbl" in:titleIn out:titleOut>{tMaybe(bg.colourLabel)}</span>
-        {/key}
-      </span>
-      {#if bg.custom}
-        <span class="muted which" transition:fadeQuick={{ duration: 180 }}>
-          <button class:on={a.colour !== "Custom"} onclick={() => a.colour === "Custom" && look.setColour(bg.palette[0].name)}>{t("Ours")}</button>
-          ·
-          <button class:on={a.colour === "Custom"} onclick={() => customInput?.click()}>{t("Custom")}</button>
-          <input class="visually-hidden" type="color" bind:this={customInput} value={a.colour === "Custom" ? (a.custom ?? "#888888").toLowerCase() : bg.palette[0].hex.toLowerCase()} onchange={(e) => look.setCustom(e.currentTarget.value)} tabindex="-1" aria-label={t("Custom colour")} />
-        </span>
-      {/if}
     </div>
-    <div class="stack">
-      {#key bg.key}
-        <div class="rowbox" out:sink>
-          {#if bg.key === "watercolour"}
-            <div class="wc">
-              <div class="defs" use:glideRing={wc.colours.join("|")}>
-                {#each WC_OURS as m, i (m.name)}
-                  <button class="def" data-sel={sameMix(m.colours)} aria-pressed={sameMix(m.colours)} data-tip={tMaybe(m.name)} onclick={() => look.pickMix(m.colours, m.name, "Scattered")} in:deal={{ i }}>
-                    <span class="dsw" data-ring><LookSwatch look={{ bg: "watercolour", colour: "", held: "auto", wc: { ...wc, colours: m.colours, pattern: "Scattered" } }} w={58} h={46} /></span>
-                    <span class="dn">{tMaybe(m.name)}</span>
-                  </button>
-                {/each}
-              </div>
-              <div class="row-h">
-                <span class="lbl">{t("Watercolour · yours")}</span>
-                <Paging page={yoursPage} pages={yoursPages} label={t("of yours")} onPage={(p) => (yoursPage = p)} />
-              </div>
-              <div class="defs" use:glideRing={wc.colours.join("|") + yoursPage}>
-                {#each yoursShown as m, i (m?.id ?? "make")}
-                  {#if m}
-                    <MixCard mix={m} selected={sameMix(m.colours)} {i} />
-                  {:else}
-                    <button class="def" data-tip={t("Make your own in Customise")} onclick={() => go("customise")} in:deal={{ i }}>
-                      <span class="newmix"><Icon name="plus" size={14} stroke={2.2} /></span>
-                      <span class="dn">{t("Make one")}</span>
-                    </button>
-                  {/if}
-                {/each}
-              </div>
-              <div class="nowon">
-                <LookSwatch look={a} w={46} h={28} />
-                <span><b>{nowOn.name}</b> <span class="muted">{t("is on your board · {from}", { from: nowOn.from })}</span></span>
-              </div>
-              <div class="repaint">
-                <button class="btn2" onclick={() => look.repaint()}><Icon name="brush" size={14} stroke={1.9} />{t("Repaint")}</button>
-                <span class="muted">{t("Same colours, a fresh painting.")}</span>
-              </div>
-              <button class="go" onclick={() => go("more")}>
-                <Icon name="grid" size={20} />
-                <span style="flex: 1"><b>{t("More mixes")}</b><span class="sub">{t("14 mixes, grouped by mood")}</span></span>
-                <Icon name="chev-right" size={16} stroke={2} />
-              </button>
-              <button class="go" onclick={() => go("customise")}>
-                <Icon name="settings" size={20} />
-                <span style="flex: 1"><b>{t("Customise")}</b><span class="sub">{t("Another pattern, your own colours")}</span></span>
-                <Icon name="chev-right" size={16} stroke={2} />
-              </button>
-            </div>
-          {:else if bg.key === "picture"}
-            <div class="pic">
-              <span class="picsw"><LookSwatch look={a} w={120} h={68} /></span>
-              <div class="pict">
-                <button class="btn2" onclick={() => look.pickPicture()}><Icon name="image" size={14} />{a.picture ? t("Another picture…") : t("Choose a picture…")}</button>
-                <span class="muted">{t("Softened and dimmed so your notes stay easy to read.")}</span>
-              </div>
-            </div>
-          {:else}
-            <div class="sws" style:grid-template-columns="repeat({swatchCols}, minmax(0, 1fr))" use:glideRing={a.colour + (a.custom ?? "")}>
-              {#each bg.palette as c, i (c.name)}
-                {@const l = { bg: bg.key, colour: c.name, held: "auto" } as Look}
-                <button class="sw" data-sel={a.colour === c.name} aria-pressed={a.colour === c.name} data-tip={tMaybe(c.name)} aria-label={tMaybe(c.name)} onclick={() => look.setColour(c.name)} in:deal={{ i }} data-ring>
-                  <LookSwatch look={l} w={70} h={30} />
-                </button>
-              {/each}
-              {#if a.colour === "Custom"}
-                <button class="sw" data-sel="true" aria-pressed="true" data-tip={t("Your colour · click to change it")} aria-label={t("Custom colour")} onclick={() => customInput?.click()} in:deal={{ i: bg.palette.length }} data-ring>
-                  <LookSwatch look={a} w={70} h={30} />
-                </button>
-              {/if}
-            </div>
-            <span class="cname muted">{a.colour === "Custom" ? t("Custom · {hex}", { hex: a.custom ?? "" }) : tMaybe(a.colour)}</span>
+
+    <div class="opts" role="group" aria-labelledby="{uid}-opts" use:easeHeight>
+      <div class="opts-in">
+        <div class="row-h">
+          <span class="stack" id="{uid}-opts">
+            {#key cardTitle}
+              <span class="lbl" in:titleIn out:titleOut>{cardTitle}</span>
+            {/key}
+          </span>
+          {#if bg.custom}
+            <span class="muted which" transition:fadeQuick={{ duration: 180 }}>
+              <button class:on={a.colour !== "Custom"} onclick={() => a.colour === "Custom" && look.setColour(bg.palette[0].name)}>{t("Ours")}</button>
+              ·
+              <button class:on={a.colour === "Custom"} onclick={() => customInput?.click()}>{t("Custom")}</button>
+              <input class="visually-hidden" type="color" bind:this={customInput} value={a.colour === "Custom" ? (a.custom ?? "#888888").toLowerCase() : bg.palette[0].hex.toLowerCase()} onchange={(e) => look.setCustom(e.currentTarget.value)} tabindex="-1" aria-label={t("Custom colour")} />
+            </span>
           {/if}
         </div>
-      {/key}
+        <div class="stack">
+          {#key bg.key}
+            <div class="rowbox" out:sink>
+              {#if bg.key === "watercolour"}
+                <div class="wc">
+                  <div class="defs" use:glideRing={wc.colours.join("|")}>
+                    {#each WC_OURS as m, i (m.name)}
+                      <button class="def" data-sel={sameMix(m.colours)} aria-pressed={sameMix(m.colours)} data-tip={tMaybe(m.name)} onclick={() => look.pickMix(m.colours, m.name, "Scattered")} in:deal={{ i }}>
+                        <span class="dsw" data-ring><LookSwatch look={{ bg: "watercolour", colour: "", held: "auto", wc: { ...wc, colours: m.colours, pattern: "Scattered" } }} w={58} h={46} /></span>
+                        <span class="dn">{tMaybe(m.name)}</span>
+                      </button>
+                    {/each}
+                  </div>
+                  <div class="row-h">
+                    <span class="lbl">{t("Yours")}</span>
+                    <Paging page={yoursPage} pages={yoursPages} label={t("of yours")} onPage={(p) => (yoursPage = p)} />
+                  </div>
+                  <div class="defs" use:glideRing={wc.colours.join("|") + yoursPage}>
+                    {#each yoursShown as m, i (m?.id ?? "make")}
+                      {#if m}
+                        <MixCard mix={m} selected={sameMix(m.colours)} {i} />
+                      {:else}
+                        <button class="def" data-tip={t("Make your own in Customise")} onclick={() => go("customise")} in:deal={{ i }}>
+                          <span class="newmix"><Icon name="plus" size={14} stroke={2.2} /></span>
+                          <span class="dn">{t("Make one")}</span>
+                        </button>
+                      {/if}
+                    {/each}
+                  </div>
+                  <div class="nowon">
+                    <LookSwatch look={a} w={46} h={28} />
+                    <span><b>{nowOn.name}</b> <span class="muted">{t("is on your board · {from}", { from: nowOn.from })}</span></span>
+                  </div>
+                  <div class="repaint">
+                    <button class="btn2" onclick={() => look.repaint()}><Icon name="brush" size={14} stroke={1.9} />{t("Repaint")}</button>
+                    <span class="muted">{t("Same colours, a fresh painting.")}</span>
+                  </div>
+                  <button class="go" onclick={() => go("more")}>
+                    <Icon name="grid" size={20} />
+                    <span style="flex: 1"><b>{t("More mixes")}</b><span class="sub">{t("14 mixes, grouped by mood")}</span></span>
+                    <Icon name="chev-right" size={16} stroke={2} />
+                  </button>
+                  <button class="go" onclick={() => go("customise")}>
+                    <Icon name="settings" size={20} />
+                    <span style="flex: 1"><b>{t("Customise")}</b><span class="sub">{t("Another pattern, your own colours")}</span></span>
+                    <Icon name="chev-right" size={16} stroke={2} />
+                  </button>
+                </div>
+              {:else if bg.key === "picture"}
+                <div class="pic">
+                  {#if usable}
+                    <span class="picsw"><LookSwatch look={a} w={120} h={68} /></span>
+                  {:else}
+                    <button class="picsw none" tabindex="-1" aria-hidden="true" onclick={() => look.pickPicture()}><Icon name="import" size={20} stroke={1.9} /></button>
+                  {/if}
+                  <div class="pict">
+                    <button class="btn2" onclick={() => look.pickPicture()}><Icon name="import" size={14} />{usable ? t("Another picture…") : t("Import a picture…")}</button>
+                    <span class="muted">{t("Softened and dimmed so your notes stay easy to read.")}</span>
+                  </div>
+                </div>
+              {:else}
+                <div class="sws" style:grid-template-columns="repeat({swatchCols}, minmax(0, 1fr))" use:glideRing={a.colour + (a.custom ?? "")}>
+                  {#each bg.palette as c, i (c.name)}
+                    {@const l = { bg: bg.key, colour: c.name, held: "auto" } as Look}
+                    <button class="sw" data-sel={a.colour === c.name} aria-pressed={a.colour === c.name} data-tip={tMaybe(c.name)} aria-label={tMaybe(c.name)} onclick={() => look.setColour(c.name)} in:deal={{ i }} data-ring>
+                      <LookSwatch look={l} w={70} h={30} />
+                    </button>
+                  {/each}
+                  {#if a.colour === "Custom"}
+                    <button class="sw" data-sel="true" aria-pressed="true" data-tip={t("Your colour · click to change it")} aria-label={t("Custom colour")} onclick={() => customInput?.click()} in:deal={{ i: bg.palette.length }} data-ring>
+                      <LookSwatch look={a} w={70} h={30} />
+                    </button>
+                  {/if}
+                </div>
+                <span class="cname muted">{a.colour === "Custom" ? t("Custom · {hex}", { hex: a.custom ?? "" }) : tMaybe(a.colour)}</span>
+              {/if}
+            </div>
+          {/key}
+        </div>
+      </div>
     </div>
   </section>
 
@@ -443,6 +482,7 @@
     cursor: pointer;
   }
   .bgsw {
+    position: relative;
     display: block;
     width: 100%;
     border-radius: 8px;
@@ -453,11 +493,76 @@
   .bgc:hover .bgsw {
     transform: translateY(-1px);
   }
-  .bgn {
-    font-size: 11px;
+  /* No picture yet: a dashed tile to import one (the same dashes as "Make one"). */
+  .bgsw.imp {
+    box-sizing: border-box;
+    height: 30px;
+    border: 1.5px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+    box-shadow: none;
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    transition: transform 0.15s var(--ease-out), border-color 0.15s, color 0.15s;
   }
-  .bgn.on {
+  .bgc:hover .bgsw.imp {
+    border-color: color-mix(in srgb, var(--ink) 40%, transparent);
+    color: var(--ink);
+  }
+  /* Your picture: its own thumbnail, with a small import mark in the corner. */
+  .badge {
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--card);
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+  /* (A long name, "Import a picture", takes two balanced lines; the swatches stay in line.)
+     The name in bold is laid out under it, unseen: picked, a name never takes another line nor
+     moves (the box is the bold one's). Never wider than its tile: nothing pokes past the grid's
+     edge, and a focus ring never covers a letter. */
+  .bgn {
+    display: grid;
+    width: max-content;
+    max-width: 100%;
+    font-size: 11px;
+    line-height: 1.25;
+    text-align: center;
+    text-wrap: balance;
+  }
+  .bgn > span {
+    grid-area: 1 / 1;
+  }
+  .bgn > .ghost {
+    visibility: hidden;
+  }
+  .bgn > .ghost.b,
+  .bgn.on > span {
     font-weight: 600;
+  }
+  /* The chosen background's own options: a soft card under the tiles, titled with its name.
+     Notes held by and the rest stay outside (they're the board's). */
+  .opts {
+    margin-top: 6px;
+    border-radius: 12px;
+    background: var(--chip);
+  }
+  .opts-in {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 10px;
+  }
+  .opts .go {
+    background: var(--card);
+  }
+  .opts .go:hover {
+    background: color-mix(in srgb, var(--chip) 45%, var(--card));
   }
   .stack {
     display: grid;
@@ -522,7 +627,7 @@
     position: relative;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
     align-items: start;
   }
   .def {
@@ -547,6 +652,11 @@
     overflow: hidden;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
   }
+  /* Our mixes' names and "Make one" on one line, centred under their painting (a long one may
+     take the gap beside it). */
+  .dn {
+    white-space: nowrap;
+  }
   .newmix {
     width: 100%;
     height: 46px;
@@ -562,7 +672,7 @@
     gap: 10px;
     padding: 8px 10px;
     border-radius: 10px;
-    background: color-mix(in srgb, var(--chip) 55%, var(--card));
+    background: var(--card);
     font-size: 12.5px;
   }
   .nowon > :global(.sw) {
@@ -582,16 +692,44 @@
     gap: 12px;
     align-items: center;
   }
+  /* (Narrow, the picture gives way so the button stays on one line, inside the card: French
+     "Importer une image…" at 380 px.) */
   .picsw {
+    flex: 0 1 120px;
+    min-width: 64px;
     border-radius: 9px;
     overflow: hidden;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
   }
+  .picsw > :global(.sw) {
+    width: 100% !important;
+  }
+  .picsw.none {
+    box-sizing: border-box;
+    height: 68px;
+    padding: 0;
+    border: 1.5px dashed color-mix(in srgb, var(--ink) 22%, transparent);
+    background: none;
+    box-shadow: none;
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .picsw.none:hover {
+    border-color: color-mix(in srgb, var(--ink) 40%, transparent);
+    color: var(--ink);
+  }
   .pict {
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
+  }
+  .pict .btn2 {
+    white-space: nowrap;
   }
   .nn {
     display: grid;

@@ -1271,8 +1271,8 @@
         data-carry-scroll
         data-drop-empty
         class:file-over={fileDrop.over && fileDrop.note == null}
-        class:textured={!["plain", "paper", "dotted"].includes(look.active.bg)}
-        class:dark-board={lookIsDark(look.active)}
+        class:textured={!["plain", "paper", "dotted"].includes(look.shown.bg)}
+        class:dark-board={lookIsDark(look.shown)}
         class:held={heldBy(look.active) !== "none"}
         oncontextmenu={boardMenu}
       >

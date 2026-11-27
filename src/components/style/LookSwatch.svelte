@@ -8,6 +8,7 @@
   import { store } from "../../lib/store.svelte";
   import { swatchPaint, textureCss } from "../../lib/paint.svelte";
   import { baseHex, type Look } from "../../lib/looks";
+  import Icon from "../Icon.svelte";
 
   let {
     look: l,
@@ -61,8 +62,12 @@
 <span class="sw" style:width="{w}px" style:height="{h}px" style:background={l.bg === "watercolour" ? baseHex(l) : textureCss(l)} aria-hidden="true">
   {#if l.bg === "watercolour"}
     <canvas bind:this={canvas} class:ready></canvas>
+  {:else if l.bg === "picture" && lookState.usable(l.picture)}
+    {@const path = l.picture}
+    <img src={store.src(path)} alt="" onerror={() => lookState.pictureFailed(path)} />
   {:else if l.bg === "picture" && l.picture}
-    <img src={store.src(l.picture)} alt="" />
+    <!-- (Outside Dobo's folders, or gone: its place, never a broken picture.) -->
+    <span class="pic-ph ph"><Icon name="image" size={Math.round(Math.min(18, Math.max(10, h * 0.42)))} stroke={1.8} /></span>
   {:else if l.bg === "picture"}
     <span class="pic-empty"></span>
   {/if}
@@ -98,6 +103,10 @@
     object-fit: cover;
     filter: blur(1.5px) saturate(0.85);
     opacity: 0.85;
+  }
+  .ph {
+    position: absolute;
+    inset: 0;
   }
   .pic-empty {
     position: absolute;

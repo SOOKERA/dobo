@@ -1,5 +1,15 @@
 # Nouveautés
 
+## 1.2.2
+
+Dobo 1.2.2 rend votre propre image de fond plus facile à trouver, montre plus clairement ce que propose chaque fond, et s’en tient à ses propres dossiers.
+
+### L’essentiel
+
+- **Importer une image.** La dernière vignette des fonds affiche désormais **Importer une image**, avec une icône d’import : cliquez dessus pour choisir une image à vous. Ensuite, la vignette montre votre image et affiche **Votre image**, et Dobo s’en souvient, même après un redémarrage. Voir [Style et thèmes](style-and-themes.md).
+- **Les choix d’un fond, réunis.** Ce que propose le fond choisi tient désormais dans un encadré juste sous les vignettes, qui porte son nom : **Papier · couleurs**, **Aquarelle · mélanges**, **Votre image**. Choisissez un autre fond et l’encadré change avec lui. Voir [Style et thèmes](style-and-themes.md).
+- **Dobo s’en tient à ses propres dossiers.** Vos images, les aperçus de liens et les fonds ne sont lus que dans le dossier de données de Dobo. Une image venue d’ailleurs (par exemple dans une sauvegarde faite sur un autre ordinateur) s’affiche comme un emplacement discret et n’est jamais chargée : Dobo ne contacte jamais un autre ordinateur de lui-même.
+
 ## 1.2.1
 
 Dobo 1.2.1 garde une tâche qui se répète sur une seule ligne, avec son historique, laisse les tâches faites à leur place et rend les heures plus lisibles.

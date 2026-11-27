@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "dobo"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "auto-launch",
  "base64 0.22.1",

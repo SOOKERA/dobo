@@ -11,6 +11,7 @@
 //   data-tip-keys="Esc|Alt+Left"     …shown as "Esc  or  Alt Left"
 //   data-tip-side="left"             beside the control, on its left (where below would leave
 //                                    the window's visible part, like the quick dump bar's)
+//   data-tip-cut                     only while its own words are cut short (…): the whole of them
 //
 // Timing like a desktop app: after ~400 ms resting on a control; when moving on to a neighbour
 // while one is showing it glides there (or shows at once if one just was); gone on leaving,
@@ -79,6 +80,7 @@ export function splitKeys(keys: string | null | undefined): string[][] {
 export function tipOf(el: Element): { label: string; keys: string[][] } | null {
   const label = el.getAttribute("data-tip") ?? (iconOnly(el) ? el.getAttribute("aria-label") : null);
   if (!label) return null;
+  if (el.hasAttribute("data-tip-cut") && el.scrollWidth <= el.clientWidth) return null;
   return { label, keys: splitKeys(el.getAttribute("data-tip-keys")) };
 }
 

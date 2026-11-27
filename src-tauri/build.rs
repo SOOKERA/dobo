@@ -67,6 +67,7 @@ const COMMANDS: &[&str] = &[
     "backup_folder",
     "data_info",
     "open_data_folder",
+    "own_folders",
     "dark_mode_now",
     "export_look",
     "import_look",

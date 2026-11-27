@@ -1,5 +1,15 @@
 # What's new
 
+## 1.2.2
+
+Dobo 1.2.2 makes your own background picture easier to find, shows more clearly what each background offers, and keeps Dobo to its own folders.
+
+### Highlights
+
+- **Import a picture.** The last background tile now says **Import a picture**, with an import icon: click it to choose a picture of your own. Once you have, the tile shows your picture and reads **Your picture**, and Dobo remembers it, also after a restart. See [Style and themes](style-and-themes.md).
+- **A background’s own choices, together.** What the chosen background offers now sits in a soft card right under the tiles, named after it: **Paper · colours**, **Watercolour · mixes**, **Your picture**. Pick another background and the card changes with it. See [Style and themes](style-and-themes.md).
+- **Dobo stays in its own folders.** Your pictures, link previews and backgrounds are only ever read from Dobo’s own data folder. A picture from anywhere else (for example in a backup from another computer) shows as a quiet placeholder and is never fetched, so Dobo never reaches another computer on its own.
+
 ## 1.2.1
 
 Dobo 1.2.1 keeps a repeating task on one line with its history, leaves done tasks where they are, and makes the hours easier to read.

@@ -8,9 +8,10 @@
 // thumb is made at once when it is added, else in calm moments, a few at a time; it replaces the
 // picture once it is loaded and decoded, so the swap is never seen (same shape, same place).
 // A box bigger than the thumb (a wide note on a 200% screen) shows the picture itself.
-import { SvelteMap } from "svelte/reactivity";
+import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { calmMoment } from "./calm";
 import type { Picture, Thumb } from "./types";
+import { NOT_OURS } from "./ownFiles";
 
 export interface ThumbMaker {
   makeThumb(path: string): Promise<Thumb | null>;
@@ -29,6 +30,35 @@ function preload(url: string): Promise<void> {
   img.decoding = "async";
   img.src = url;
   return img.decode();
+}
+
+/** Whether a picture's file shows now (loaded and decoded, out of sight): a picture seen failing
+ * is tried again with it, never shown broken meanwhile. */
+export async function canShow(url: string): Promise<boolean> {
+  try {
+    await preload(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** How long a picture tried again may take to show (`inTime`). */
+export const PROBE_LIMIT = 10_000;
+
+/** A picture tried again (`probe`), given up after `PROBE_LIMIT`: one load that hangs (a drive
+ * half there) counts as not back, so the next try is never held up by it. */
+export function inTime(probe: () => Promise<boolean>, ms = PROBE_LIMIT): Promise<boolean> {
+  return new Promise((resolve) => {
+    const late = setTimeout(() => resolve(false), ms);
+    const done = (ok: boolean) => {
+      clearTimeout(late);
+      resolve(ok);
+    };
+    Promise.resolve()
+      .then(probe)
+      .then(done, () => done(false));
+  });
 }
 
 class Thumbs {
@@ -55,19 +85,52 @@ class Thumbs {
     return t && (!box || (t.w + 0.5 >= box.w && t.h + 0.5 >= box.h)) ? t : null;
   }
 
-  /** What an `<img>` shows for a small box (a strip, a row): the thumb, else the picture. */
+  /** What an `<img>` shows for a small box (a strip, a row): the thumb, else the picture; for a
+   * picture that can't be shown (`unreadable`), `NOT_OURS`: its calm place (`.pic-ph`), never a
+   * broken picture. */
   src(p: Picture, fileSrc: (path: string) => string): string {
-    return fileSrc(this.of(p)?.path ?? p.path);
+    return this.broken.has(p.path) ? NOT_OURS : fileSrc(this.of(p)?.path ?? p.path);
   }
 
-  /** The thumb couldn't be shown (its file gone): the picture itself from now on. */
-  failed(p: Picture) {
-    if (this.of(p)) this.made.set(p.path, null);
+  /** Pictures whose own file couldn't be shown (gone, damaged), by picture file. */
+  private broken = new SvelteSet<string>();
+  /** The picture's own file couldn't be shown: its place shows instead, and the viewer can't copy
+   * it nor open it in Photos. */
+  unreadable(p: Picture): boolean {
+    return this.broken.has(p.path);
+  }
+
+  /** A file shown for `p` couldn't be (`path`: the one shown, by default as `src` picks it): its
+   * thumb (gone) → the picture itself from now on; the picture itself → `unreadable`. */
+  failed(p: Picture, path: string = this.of(p)?.path ?? p.path) {
+    if (path !== p.path) {
+      if (this.of(p)) this.made.set(p.path, null);
+    } else if (!this.broken.has(p.path)) this.broken.add(p.path);
+  }
+
+  /** The pictures seen failing tried again, calmly (a restore brought them back, a drive is back):
+   * each once, out of sight; those that show again are shown, the others stay as they are. */
+  private retrying = false;
+  async retry(fileSrc: (path: string) => string, probe: (url: string) => Promise<boolean> = canShow) {
+    if (this.retrying || !this.broken.size) return;
+    this.retrying = true;
+    try {
+      const paths = [...this.broken];
+      const back = await Promise.all(paths.map((path) => inTime(() => probe(fileSrc(path)))));
+      paths.forEach((path, k) => back[k] && this.broken.delete(path));
+    } finally {
+      this.retrying = false;
+    }
   }
 
   /** The notes' pictures: those without a thumb get one, in calm moments, a few at a time. */
   fill(api: ThumbMaker, pictures: Picture[]) {
     this.api = api;
+    // (Pictures seen failing that the notes no longer have, after a restore: forgotten.)
+    if (this.broken.size) {
+      const now = new Set(pictures.map((p) => p.path));
+      for (const path of [...this.broken]) if (!now.has(path)) this.broken.delete(path);
+    }
     for (const p of pictures) {
       if (p.thumb || this.asked.has(p.path) || !ownFile(p.path)) continue;
       this.asked.add(p.path);

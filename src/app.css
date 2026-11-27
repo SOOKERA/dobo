@@ -259,6 +259,17 @@ button {
   white-space: nowrap;
 }
 
+/* A picture outside Dobo's own folders (never asked for: ownFiles.ts) takes its place calmly,
+   the picture icon on the chip colour, never the browser's broken picture. Each place gives it
+   the picture's size and corners. */
+.pic-ph {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  background: var(--chip);
+  color: var(--muted);
+}
+
 /* Words found by the Settings search (CSS Custom Highlight API). */
 ::highlight(settings-find) {
   background-color: rgba(233, 196, 106, 0.55);

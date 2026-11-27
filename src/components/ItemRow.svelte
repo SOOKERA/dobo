@@ -14,6 +14,7 @@
   import StepTrace from "./StepTrace.svelte";
   import { store, NO_ITEMS, NO_PICTURES } from "../lib/store.svelte";
   import { thumbs } from "../lib/thumbs.svelte";
+  import { NOT_OURS } from "../lib/ownFiles";
   import { itemDrag } from "../lib/itemdrag.svelte";
   import { openViewer } from "../lib/viewer.svelte";
   import { formatDue, formatDueLong } from "../lib/time";
@@ -297,8 +298,13 @@
       {#if pics.length}
         <div class="thumbs">
           {#each pics as p, i (p.id)}
+            {@const src = store.thumbSrc(p)}
             <button class="thumb" in:blip aria-label={t("Open picture")} ondblclick={() => openViewer(pics, i)} onclick={() => openViewer(pics, i)}>
-              <img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
+              {#if src === NOT_OURS}
+                <span class="pic-ph"><Icon name="image" size={16} stroke={1.7} /></span>
+              {:else}
+                <img {src} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => thumbs.failed(p)} />
+              {/if}
             </button>
           {/each}
         </div>
@@ -698,11 +704,15 @@
     box-shadow: inset 0 0 0 1px var(--line);
     cursor: zoom-in;
   }
-  .thumb img {
+  .thumb img,
+  .thumb .pic-ph {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .thumb .pic-ph {
+    display: grid;
   }
   .steps {
     margin: -2px 0 2px 26px;

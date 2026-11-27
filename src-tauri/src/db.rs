@@ -1311,10 +1311,10 @@ pub fn get_setting(conn: &Connection, key: &str) -> Option<serde_json::Value> {
         .and_then(|v| serde_json::from_str(&v).ok())
 }
 
-/// A setting, where a failed read (or a value that isn't JSON) is an error, not "not set".
-pub fn get_setting_strict(conn: &Connection, key: &str) -> Result<Option<serde_json::Value>> {
-    let raw = conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get::<_, String>(0)).optional().map_err(err)?;
-    raw.map(|v| serde_json::from_str(&v).map_err(err)).transpose()
+/// A setting as it is stored (its JSON text, read by the caller: one that isn't JSON is the
+/// caller's to handle), where a failed read is an error, not "not set".
+pub fn get_setting_text(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get::<_, String>(0)).optional().map_err(err)
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &serde_json::Value) -> Result<()> {

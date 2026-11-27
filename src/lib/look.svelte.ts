@@ -9,6 +9,7 @@ import { list, t, tMaybe } from "./i18n.svelte";
 import {
   addYourColour,
   background,
+  bgToast,
   coloursInUse,
   darkBySwitch,
   newId,
@@ -19,10 +20,12 @@ import {
   readBoard,
   readColours,
   readDarkMode,
+  readLastPicture,
   readMixes,
   readStyles,
   readThemes,
   sameLook,
+  shownLook,
   uniqueName,
   WC_OURS,
   WC_PAINTS,
@@ -48,6 +51,8 @@ import {
 } from "./looks";
 import { buildExport, exportFileName, mergeImport, parseZtheme, type ExportScope, type ZTheme } from "./ztheme";
 import type { PaletteName } from "./types";
+import { NOT_OURS } from "./ownFiles";
+import { canShow, inTime } from "./thumbs.svelte";
 
 /** An undo label: its words worked out when shown (in the language of that moment). */
 type Label = string | (() => string);
@@ -87,12 +92,48 @@ class LookState {
   active = $derived<Look>(this.editingDark ? this.board.dark! : this.board.light);
   activeFrom = $derived<Ref | null>(this.editingDark ? this.board.darkFrom : this.board.lightFrom);
 
+  /** Background pictures seen failing to show this session (a file gone, damaged): replaced, as
+   * one outside Dobo's folders is, by the import tile and a plain board. Never mutated in place. */
+  private missing = $state.raw<ReadonlySet<string>>(new Set());
+  /** A background picture failed to show (`<img>` or the board's own reading of it). */
+  pictureFailed(path: string) {
+    if (!this.missing.has(path)) this.missing = new Set([...this.missing, path]);
+  }
+  /** The background pictures seen failing tried again, calmly (a restore brought one back, a
+   * drive is back): each once, out of sight; one that shows again is shown (its tile, the board),
+   * the others stay as they are: no flicker, no word. */
+  private retrying = false;
+  async retryPictures(probe: (url: string) => Promise<boolean> = canShow) {
+    if (this.retrying || !this.missing.size) return;
+    this.retrying = true;
+    try {
+      const paths = [...this.missing];
+      const back = await Promise.all(paths.map((p) => inTime(() => probe(store.src(p)))));
+      const again = new Set(paths.filter((_, k) => back[k]));
+      if (again.size) this.missing = new Set([...this.missing].filter((p) => !again.has(p)));
+    } finally {
+      this.retrying = false;
+    }
+  }
+  /** Whether a background picture can be shown: one of Dobo's own folders' files (ownFiles.ts:
+   * one elsewhere is never asked for), not seen failing. */
+  usable(path: string | null | undefined): path is string {
+    return !!path && store.src(path) !== NOT_OURS && !this.missing.has(path);
+  }
+  /** The look the board shows: the active one, but a picture background whose picture can't be
+   * shown is a plain board in the mode's own colour (`shownLook`). */
+  shown = $derived<Look>(shownLook(this.active, this.usable(this.active.picture), this.dark));
+
   init() {
     const q = window.matchMedia("(prefers-color-scheme: dark)");
     this.systemDark = q.matches;
     q.addEventListener("change", () => (this.systemDark = q.matches));
     // The clock (Rust) says when the hours cross a boundary, even while the window is hidden.
     store.backend.onEvent("dark-mode", () => (store.now = new Date()));
+    // Pictures seen failing are tried again after a restore (the notes read again) and when the
+    // window shows again (a drive plugged back meanwhile).
+    store.backend.onEvent("reload", () => void this.retryPictures());
+    document.addEventListener("visibilitychange", () => !document.hidden && void this.retryPictures());
     $effect.root(() => {
       $effect(() => applyMode(this.dark));
     });
@@ -172,33 +213,47 @@ class LookState {
     if (l) await this.setActive(l, this.activeFrom, () => t("Reset"));
   }
 
-  /** The last picture and painting chosen, so switching background and back keeps them. */
+  /** The last painting and picture chosen, so switching background and back keeps them. The
+   * picture is a setting (look.rs keeps its file): it stays over a restart, and Undo of the
+   * change of background never forgets it. */
   private lastWc: WcLook | null = null;
-  private lastPicture: string | null = null;
+  private lastPicture = $derived(readLastPicture(store.settings.look_last_picture));
+  private rememberPicture(p: string) {
+    // (A failed save is told as every one is, backend.ts `guardWrites`: the usual toast, and the
+    // board shows what is really saved. Only said here, never left unhandled.)
+    if (p !== this.lastPicture) void store.setSetting("look_last_picture", { picture: p }).catch((e) => console.error("Your last picture wasn't saved:", e));
+  }
+  /** Your picture, if you have imported one: the last one chosen, or one a style or theme of
+   * yours uses (the picture tile shows it; without one, the tile imports). */
+  get ownPicture(): string | null {
+    const last = this.lastPicture;
+    return this.usable(last) ? last : this.knownPicture();
+  }
 
   async setBg(bg: BgKind) {
     const a = this.active;
     if (a.bg === bg) return;
     if (a.wc) this.lastWc = clone(a.wc);
-    if (a.picture) this.lastPicture = a.picture;
+    if (this.usable(a.picture)) this.rememberPicture(a.picture);
     const next: Look = { bg, colour: "", held: a.held };
     if (bg === "watercolour") next.wc = this.lastWc ?? { colours: WC_OURS[0].colours, pattern: "Scattered", seed: OUR_SEED, paper: "white", name: WC_OURS[0].name };
     else if (bg === "picture") {
-      const pic = this.lastPicture ?? this.knownPicture();
+      const pic = this.ownPicture;
       if (!pic) return this.pickPicture();
       next.picture = pic;
     } else next.colour = background(bg).palette[0].name;
-    await this.setActive(next, undefined, () => t("{name} background", { name: tMaybe(background(bg).name) }));
+    await this.setActive(next, undefined, () => bgToast(bg));
   }
   private knownPicture(): string | null {
     const all = [this.board.light, this.board.dark, ...this.styles.map((s) => s.look), ...this.themes.flatMap((t) => [t.light, t.dark])];
-    return all.find((l) => l?.bg === "picture" && l.picture)?.picture ?? null;
+    // (One that can be shown: one outside Dobo's folders, or gone, makes the tile import again.)
+    return all.find((l) => l?.bg === "picture" && this.usable(l.picture))?.picture ?? null;
   }
   async pickPicture() {
     try {
       const p = await store.backend.pickBackgroundPicture();
       if (!p) return;
-      this.lastPicture = p;
+      this.rememberPicture(p);
       await this.setActive({ bg: "picture", colour: "", held: this.active.held, picture: p }, undefined, () => t("Your picture"));
     } catch (e) {
       store.showToast(String(e));

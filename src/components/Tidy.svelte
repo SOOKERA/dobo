@@ -12,6 +12,8 @@
   import FileCard from "./FileCard.svelte";
   import { store } from "../lib/store.svelte";
   import { thumbs } from "../lib/thumbs.svelte";
+  import { NOT_OURS } from "../lib/ownFiles";
+  import Icon from "./Icon.svelte";
   import { normalize, parseCapture } from "../lib/capture";
   import { formatDueLong, hhmm } from "../lib/time";
   import { pushLayer } from "../lib/layers";
@@ -282,7 +284,7 @@
             {#if item.file}<FileCard path={item.file} />{/if}
             {#if store.picturesByItem.get(item.id)?.length}
               <div class="pics">
-                {#each store.picturesByItem.get(item.id) ?? [] as p (p.id)}<img src={store.thumbSrc(p)} alt="" loading="lazy" decoding="async" onerror={() => thumbs.failed(p)} />{/each}
+                {#each store.picturesByItem.get(item.id) ?? [] as p (p.id)}{@const src = store.thumbSrc(p)}{#if src === NOT_OURS}<span class="pic-ph"><Icon name="image" size={20} stroke={1.6} /></span>{:else}<img {src} alt="" loading="lazy" decoding="async" onerror={() => thumbs.failed(p)} />{/if}{/each}
               </div>
             {/if}
             <span class="age">{ageText}</span>
@@ -531,7 +533,8 @@
     display: flex;
     gap: 6px;
   }
-  .pics img {
+  .pics img,
+  .pics .pic-ph {
     width: 96px;
     height: 64px;
     object-fit: cover;

@@ -290,19 +290,25 @@ fn save_image(a: &ureq::Agent, src: &str, dir: &Path) -> Result<String, String> 
         return Err("too big".into());
     }
     let ext = picture_kind(&bytes).ok_or("not a picture")?;
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("preview-{:016x}.{ext}", h.finish()));
+    let path = image_path(dir, src, ext);
     // (Written beside, then renamed over: a file of the same name is replaced, never changed in
     // place, so a backup made before an update that links to it keeps its own, backup.rs
     // `link_files`.)
-    let part = dir.join(format!("preview-{:016x}.{ext}.part", h.finish()));
+    let part = path.with_file_name(format!("{}.part", path.file_name().unwrap_or_default().to_string_lossy()));
     std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &path)).map_err(|e| {
         let _ = std::fs::remove_file(&part);
         e.to_string()
     })?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Where the picture at `src` is kept: right in `dir` (the data folder's previews), named by its
+/// address.
+pub(crate) fn image_path(dir: &Path, src: &str, ext: &str) -> std::path::PathBuf {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    dir.join(format!("preview-{:016x}.{ext}", h.finish()))
 }
 
 #[cfg(test)]

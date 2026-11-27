@@ -675,6 +675,11 @@ class Store {
     });
     this.api.onEvent("ring", (p) => this.onRing(p as RingEvent));
     this.api.onEvent("reload", () => void this.reload());
+    // Notes' pictures seen failing are tried again after a restore and when the window shows
+    // again (a drive plugged back meanwhile): calmly, each once (thumbs.svelte.ts).
+    const retry = () => void thumbs.retry((path) => this.api.fileSrc(path));
+    this.api.onEvent("reload", retry);
+    document.addEventListener("visibilitychange", () => !document.hidden && retry());
     // The automatic backup didn't work (once, until one works again): never a silent failure.
     this.api.onEvent("backup-failed", (e) => this.showToast(() => tr("Today’s backup didn’t work: {error}. Settings › Backups", { error: String(e) }), undefined, 12_000));
     setInterval(() => {

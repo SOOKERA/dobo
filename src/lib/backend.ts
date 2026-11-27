@@ -11,6 +11,7 @@
 // command before the next call that reads or writes the same rows (undo awaits restore; the dump
 // bar awaits dumpItem before setting the link): a "send, then edit" without awaiting may land on
 // a row that isn't written yet.
+import { NOT_OURS, ownFile } from "./ownFiles";
 import { daysApart, reopensAt, shiftDays, tickRepeat, untickedRule, waitsUntil, type MyDay } from "./doneLog";
 import { dockWidth, widthForScreen } from "./dock";
 import type { ReportInfo, ReportProblem } from "./report";
@@ -297,7 +298,7 @@ export interface Backend {
   recoveryContinue(): Promise<string | null>;
   /** A folder picked in the system dialog (null: cancelled). */
   pickFolder(): Promise<string | null>;
-  /** A file's address for <img src>. */
+  /** A file's address for <img src> (only for a file of Dobo's own folders: `ownFiles.ts`). */
   fileSrc(path: string): string;
   darkModeNow(): Promise<DarkNow>;
   /** The language setting ("system", "en", "fr") and the language Windows shows its own words in
@@ -322,6 +323,16 @@ async function tauriBackend(): Promise<Backend> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   const win = getCurrentWindow();
+  // Dobo's own folders: the board asks only for their files (ownFiles.ts; none when unknown).
+  // (The quick dump bar shows only pictures not yet saved, never a file: it doesn't ask.)
+  // (Unknown, every picture shows as missing: said in the log, as there are no words for it.)
+  const folders: string[] =
+    win.label === "dump"
+      ? []
+      : await invoke<string[]>("own_folders").catch((e) => {
+          console.error("Dobo's own folders aren't known: no picture is shown.", e);
+          return [];
+        });
   return {
     label: win.label,
     loadAll: () => invoke("load_all"),
@@ -409,7 +420,7 @@ async function tauriBackend(): Promise<Backend> {
       const r = await open({ directory: true, multiple: false, title: t("Folder for the backups") });
       return typeof r === "string" ? r : null;
     },
-    fileSrc: (path) => convertFileSrc(path),
+    fileSrc: (path) => (ownFile(path, folders) ? convertFileSrc(path) : NOT_OURS),
     darkModeNow: () => invoke("dark_mode_now"),
     languageNow: () => invoke("language_now"),
     exportLook: (content, name) => invoke("export_look", { content, name }),
@@ -613,6 +624,11 @@ function mockBackend(): Backend {
   }
   data.pictures ??= [];
   data.done_log ??= [];
+  // (As at the app's start, look.rs `forget_missing_picture`: your last picture whose file is
+  // gone is forgotten, and the picture tile imports again. A preview's picture is a blob:
+  // address, gone with the page that made it.)
+  const last = data.settings?.look_last_picture as { picture?: unknown } | undefined;
+  if (last && (typeof last.picture !== "string" || last.picture.startsWith("blob:"))) delete data.settings.look_last_picture;
   // (As at the app's start: the history of lines gone for good goes, and an open line keeps
   // nothing of a tick, db.rs `migrate`.)
   const ids = new Set(data.items.map((i) => i.id));
@@ -1370,7 +1386,9 @@ function mockBackend(): Backend {
         ? ((previewContinueFailed = true), Promise.reject("The notes couldn’t be opened (disk I/O error)."))
         : Promise.resolve(previewChosen === "restore" || previewChosen === "empty" || previewChosen === "repair" ? (recover === "damaged" || recover === "failed" ? previewKept : null) : null),
     pickFolder: () => Promise.resolve(window.prompt("Folder for the backups", String(data.settings.backup_dir || "D:\\Backups\\Dobo"))),
-    fileSrc: (path) => path,
+    // (Preview only: a path on a network share, `\\host\…`, stands for one outside Dobo's
+    // folders, which the real board never asks for, ownFiles.ts.)
+    fileSrc: (path) => (path.startsWith("\\\\") ? NOT_OURS : path),
     languageNow: () =>
       Promise.resolve({
         choice: String(data.settings.language ?? "system"),
@@ -1416,10 +1434,9 @@ function mockBackend(): Backend {
         input.accept = "image/*";
         input.onchange = () => {
           const f = input.files?.[0];
-          if (!f) return resolve(null);
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result));
-          r.readAsDataURL(f);
+          // (A short blob: address, as the app's own file path is: a data: one is too long for a
+          // look to keep. It lasts while the page is open.)
+          resolve(f ? URL.createObjectURL(f) : null);
         };
         input.click();
       }),

@@ -82,4 +82,58 @@ describe("thumbs", () => {
     for (let i = 0; i < 5; i++) await tick();
     expect(thumbs.of(q)).toBeNull();
   });
+
+  it("a picture whose own file can't be shown shows its place, and is tried again calmly", async () => {
+    const { NOT_OURS } = await import("./ownFiles");
+    const p = pic(30, "C:/d/pictures/gone.jpg", T("C:/d/pictures/thumbs/gone.jpg"));
+    const src = (x: string) => "asset:" + x;
+    // Its thumb first (the picture itself still shown), then the picture: its place.
+    thumbs.failed(p);
+    expect(thumbs.unreadable(p)).toBe(false);
+    thumbs.failed(p);
+    expect(thumbs.unreadable(p)).toBe(true);
+    expect(thumbs.src(p, src)).toBe(NOT_OURS);
+    // The picture itself shown where its thumb isn't sharp enough (a note, the viewer): at once.
+    const q = pic(31, "C:/d/pictures/big.jpg", T("C:/d/pictures/thumbs/big.jpg"));
+    thumbs.failed(q, q.path);
+    expect(thumbs.unreadable(q)).toBe(true);
+    expect(thumbs.of(q)?.path).toBe("C:/d/pictures/thumbs/big.jpg.1200x900.webp");
+    // Tried again: once each, the one that shows again is shown, the other stays as it is.
+    const tried: string[] = [];
+    await thumbs.retry(src, async (url) => (tried.push(url), url.includes("big")));
+    expect(tried.sort()).toEqual(["asset:C:/d/pictures/big.jpg", "asset:C:/d/pictures/gone.jpg"]);
+    expect(thumbs.unreadable(q)).toBe(false);
+    expect(thumbs.unreadable(p)).toBe(true);
+    // Nothing seen failing: nothing tried.
+    await thumbs.retry(src, async () => true);
+    tried.length = 0;
+    await thumbs.retry(src, async (url) => (tried.push(url), true));
+    expect(tried).toEqual([]);
+  });
+
+  it("a try that hangs is given up in time, and pictures the notes no longer have are forgotten", async () => {
+    const { PROBE_LIMIT } = await import("./thumbs.svelte");
+    const api = { makeThumb: async () => null, fileSrc: (x: string) => x };
+    const a = pic(40, "C:/d/pictures/hang.jpg");
+    const b = pic(41, "C:/d/pictures/left.jpg");
+    thumbs.failed(a, a.path);
+    thumbs.failed(b, b.path);
+    vi.useFakeTimers();
+    try {
+      // One load that never ends: given up after the limit, so the next try isn't held up.
+      const first = thumbs.retry((x) => x, () => new Promise<boolean>(() => {}));
+      await vi.advanceTimersByTimeAsync(PROBE_LIMIT);
+      await first;
+      expect(thumbs.unreadable(a)).toBe(true);
+      const tried: string[] = [];
+      await thumbs.retry((x) => x, async (url) => (tried.push(url), false));
+      expect(tried.sort()).toEqual([a.path, b.path]);
+    } finally {
+      vi.useRealTimers();
+    }
+    // Read again without `b` (a restore): it's forgotten, `a` is still known as unreadable.
+    thumbs.fill(api, [a]);
+    expect(thumbs.unreadable(b)).toBe(false);
+    expect(thumbs.unreadable(a)).toBe(true);
+  });
 });

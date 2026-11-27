@@ -362,11 +362,14 @@ fn file_key(path: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_lowercase())
 }
 
-/// Files in `folder` older than `before` that nothing uses (`used`: from `file_key`).
+/// Files in `folder` older than `before` that nothing uses (`used`: from `file_key`). Nothing when
+/// the folder can't be listed whole (not there, a linked folder on a drive that's gone, a listing
+/// that fails midway): nothing is cleaned up there this time.
 fn unused_files(folder: &std::path::Path, used: &std::collections::HashSet<String>, before: std::time::SystemTime) -> Vec<std::path::PathBuf> {
     let Ok(entries) = std::fs::read_dir(folder) else { return vec![] };
+    let Ok(entries) = entries.collect::<Result<Vec<_>, _>>() else { return vec![] };
     entries
-        .flatten()
+        .into_iter()
         .filter(|e| e.metadata().is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < before)))
         .map(|e| e.path())
         .filter(|p| file_key(&p.to_string_lossy()).is_some_and(|k| !used.contains(&k)))
@@ -376,15 +379,18 @@ fn unused_files(folder: &std::path::Path, used: &std::collections::HashSet<Strin
 /// Every picture file the notes and looks use (`file_key`s): note pictures, link previews'
 /// pictures and the board's background pictures. Any read that fails is an error, and so is an
 /// empty answer while the notes do have pictures: never "nothing is used", which would delete
-/// every picture.
-fn used_files(conn: &Connection) -> R<std::collections::HashSet<String>> {
+/// every picture. With whether the background pictures are known (`false`: a look setting that
+/// can't be read, `look::background_pictures`: the backgrounds folder is then left alone).
+fn used_files(conn: &Connection) -> R<(std::collections::HashSet<String>, bool)> {
     let pictures = db::picture_paths(conn)?;
     if pictures.is_empty() && db::picture_count(conn)? > 0 {
         return Err("the pictures couldn’t be listed".into());
     }
     let previews = db::preview_images(conn)?;
     let backgrounds = look::background_pictures(conn)?;
-    Ok(pictures.into_iter().chain(previews.into_iter().map(|(_, p)| p)).chain(backgrounds).filter_map(|p| file_key(&p)).collect())
+    let known = backgrounds.is_some();
+    let used = pictures.into_iter().chain(previews.into_iter().map(|(_, p)| p)).chain(backgrounds.unwrap_or_default()).filter_map(|p| file_key(&p)).collect();
+    Ok((used, known))
 }
 
 /// Picture files in Dobo's folder that no note (nor look) uses any more and are older than a day
@@ -413,21 +419,30 @@ fn purge_at_start(dir: &std::path::Path, conn: &Connection, after_recovery: bool
 /// `purge_unused_pictures` in the data folder `dir`, whose notes are `conn`. The notes put aside
 /// there (`broken-….sqlite`, recovery.rs) still name their pictures: those are kept while the
 /// file is there, so it can still be recovered whole. One that can't be read at all: nothing is
-/// cleaned up while it is there.
+/// cleaned up while it is there. A look setting that can't be read (in either): the background
+/// pictures stay, the rest is cleaned up.
 fn purge_in(dir: &std::path::Path, conn: &Connection) -> R<()> {
-    let mut used = used_files(conn)?;
+    let (mut used, mut looks_known) = used_files(conn)?;
     for aside in recovery::put_aside_files(dir) {
         let read = Connection::open_with_flags(&aside, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)
             .map_err(|e| e.to_string())
             .and_then(|c| db::harden(&c).map(|_| c))
             .and_then(|c| used_files(&c));
         match read {
-            Ok(names) => used.extend(names),
+            Ok((names, known)) => {
+                used.extend(names);
+                looks_known &= known;
+            }
             Err(e) => return Err(format!("{} can’t be read ({e})", aside.display())),
         }
     }
     let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
     for folder in ["pictures", "previews", "backgrounds"] {
+        // (The backgrounds only while the looks are known and the folder is one that's there:
+        // your last picture is kept, not forgotten, while it can't be reached, look::known_gone.)
+        if folder == "backgrounds" && (!looks_known || !std::fs::metadata(dir.join(folder)).is_ok_and(|m| m.is_dir())) {
+            continue;
+        }
         for p in unused_files(&dir.join(folder), &used, day_ago) {
             let _ = std::fs::remove_file(&p);
         }
@@ -766,8 +781,13 @@ fn picture_ext(ext: &str) -> &'static str {
 fn new_picture_path(ext: &str) -> R<std::path::PathBuf> {
     let dir = paths::sub("pictures")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(picture_path_in(&dir, ext))
+}
+
+/// A new picture's file right in `dir` (the data folder's pictures).
+fn picture_path_in(dir: &std::path::Path, ext: &str) -> std::path::PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
-    Ok(dir.join(format!("{}-{}.{}", db::now_ms(), N.fetch_add(1, Ordering::Relaxed), picture_ext(ext))))
+    dir.join(format!("{}-{}.{}", db::now_ms(), N.fetch_add(1, Ordering::Relaxed), picture_ext(ext)))
 }
 
 /// A pasted picture (the bytes come as the request body).
@@ -988,6 +1008,21 @@ struct DataInfo {
 fn data_info(app: AppHandle) -> R<DataInfo> {
     let p = paths::place().ok_or("The data folder isn’t known yet.")?;
     Ok(DataInfo { kind: p.kind, dir: p.dir.to_string_lossy().into(), kept_existing: p.kept_existing, fallback: p.fallback, version: app.package_info().version.to_string() })
+}
+
+/// The data folder's own folders whose files the board shows (pictures and their thumbs, link
+/// previews' pictures, backgrounds): the board asks for a picture only when its path is right inside one of
+/// them (src/lib/ownFiles.ts), so a path from elsewhere (a crafted backup naming a network share)
+/// is never asked for — Tauri's asset handler would look at it on the disk before refusing it.
+#[tauri::command]
+fn own_folders() -> R<Vec<String>> {
+    Ok(own_folders_in(&paths::data_dir()?).iter().map(|f| f.to_string_lossy().into_owned()).collect())
+}
+
+/// `own_folders` of the data folder `data`.
+fn own_folders_in(data: &std::path::Path) -> [std::path::PathBuf; 4] {
+    let pictures = data.join("pictures");
+    [pictures.join(thumbs::DIR), pictures, data.join("previews"), data.join("backgrounds")]
 }
 
 /// Opens the data folder itself (Explorer / Finder / the file manager).
@@ -1513,8 +1548,14 @@ pub fn reload_settings(app: &AppHandle) {
     let state = app.state::<AppState>();
     let (edge, peek, new, language) = {
         let conn = state.db.lock().unwrap();
-        // An older backup may come from before the styles: it gets their defaults too.
+        // An older backup may come from before the styles: it gets their defaults too. Your last
+        // picture, when the backup's file of it is gone, is forgotten (the tile imports again).
         let _ = look::migrate(&conn);
+        if let Ok(backgrounds) = paths::sub("backgrounds")
+            && let Err(e) = look::forget_missing_picture(&conn, &backgrounds)
+        {
+            eprintln!("Your last picture couldn't be checked: {e}");
+        }
         look::changed(app, &conn);
         window::reload_prefs(app, &conn);
         (
@@ -1610,12 +1651,17 @@ fn open_board(app: &AppHandle, conn: Connection, after_recovery: bool) -> Result
     let dir = place.dir.clone();
     look::migrate(&conn).map_err(std::io::Error::other)?;
     // A portable data folder may have moved since the last start (a USB stick under
-    // another drive letter): its pictures are found where they are now. (Never for the
-    // usual folder, which doesn't move.)
-    if place.webview.is_some()
-        && let Err(e) = backup::repoint_moved(&conn, &dir)
-    {
+    // another drive letter), and the usual one may be named another way than when its
+    // pictures were saved (a profile moved with a junction left, a short 8.3 name): its
+    // pictures are found where they are now, by their names, so the board (which shows only
+    // its own folders' files: ownFiles.ts) shows them. Read from the paths' text: nothing
+    // elsewhere is looked at.
+    if let Err(e) = backup::repoint_moved(&conn, &dir) {
         eprintln!("Pictures couldn't be found again after the data folder moved: {e}");
+    }
+    // (Once they are found again: your last picture whose file is gone is forgotten.)
+    if let Err(e) = look::forget_missing_picture(&conn, &dir.join("backgrounds")) {
+        eprintln!("Your last picture couldn't be checked: {e}");
     }
     i18n::load(&conn);
     // The installed copy tells Dobo Setup its language once at start, when it differs (Windows'
@@ -1961,6 +2007,7 @@ pub fn run() {
             backup_folder,
             data_info,
             open_data_folder,
+            own_folders,
             dark_mode_now,
             look::export_look,
             look::import_look,
@@ -2007,6 +2054,25 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// Every file Dobo makes for the board to show is right inside one of the folders the board
+    /// asks for (`own_folders`): a pasted or dropped picture, its thumb, a link preview's picture
+    /// and a background picture, also in a portable folder on a network share.
+    #[test]
+    fn every_picture_dobo_makes_is_in_the_folders_the_board_asks_for() {
+        for data in [Path::new(r"C:\Users\Ana\AppData\Roaming\com.sookera.ztodo"), Path::new(r"\\nas\usb\Dobo\data"), Path::new(r"\\?\E:\Dobo\data")] {
+            let folders = own_folders_in(data);
+            let ours = |p: &Path| folders.iter().any(|f| thumbs::directly_in(&p.to_string_lossy(), f));
+            for ext in ["png", "jpeg", "webp", "bmp", "x"] {
+                assert!(ours(&picture_path_in(&data.join("pictures"), ext)), "{ext}");
+                assert!(ours(&look::background_dest(&data.join("backgrounds"), ext)), "{ext}");
+            }
+            assert!(ours(&preview::image_path(&data.join("previews"), "https://example.com/a.jpg?x=1", "jpg")));
+            let thumb = data.join("pictures").join(thumbs::DIR).join("1-0.jpg.1200x900.webp");
+            assert!(ours(&thumb));
+            assert!(!ours(&data.join("backups").join("x.png")), "nor any other folder");
+        }
+    }
+
     /// The clean-up at start keeps the pictures the notes put aside (recovery.rs) still name, so
     /// they can be recovered whole; one that can't be read at all: nothing is cleaned up.
     #[test]
@@ -2042,6 +2108,96 @@ mod tests {
         std::fs::write(dir.join("broken-2026-11-21.sqlite"), b"not a database, not at all, not even a little").unwrap();
         assert!(purge_in(&dir, &conn).is_err());
         assert!(left("other.png") && left("aside.png"));
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Your last picture (the picture tile's) is kept by the clean-up at start, even when no
+    /// look uses it any more (you switched to another background, or Undo); others go.
+    #[test]
+    fn the_clean_up_keeps_your_last_picture() {
+        let dir = std::env::temp_dir().join(format!("dobo-purge-bg-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        let backgrounds = dir.join("backgrounds");
+        std::fs::create_dir_all(&backgrounds).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 3600);
+        for name in ["1.jpg", "2.jpg"] {
+            std::fs::File::create(backgrounds.join(name)).unwrap().set_modified(old).unwrap();
+        }
+        let conn = db::open(&dir.join(paths::DB_FILE)).unwrap();
+        db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "cork" } })).unwrap();
+        db::set_setting(&conn, "look_last_picture", &serde_json::json!({ "picture": backgrounds.join("1.jpg").to_string_lossy() })).unwrap();
+        purge_at_start(&dir, &conn, false).unwrap();
+        assert!(backgrounds.join("1.jpg").is_file(), "your last picture stays");
+        assert!(!backgrounds.join("2.jpg").is_file(), "one nothing names goes");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A linked `backgrounds` on a drive unplugged at start (here a junction whose folder moved
+    /// away for a while): your last picture is kept, and once the drive is back the clean-up
+    /// still leaves it.
+    #[test]
+    fn your_last_picture_on_an_unplugged_drive_survives_the_clean_up() {
+        let dir = std::env::temp_dir().join(format!("dobo-purge-unplugged-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        let (away, gone) = (dir.join("drive"), dir.join("drive-unplugged"));
+        std::fs::create_dir_all(&away).unwrap();
+        let backgrounds = dir.join("data").join("backgrounds");
+        std::fs::create_dir_all(backgrounds.parent().unwrap()).unwrap();
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&backgrounds).arg(&away).output().is_ok_and(|o| o.status.success());
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&away, &backgrounds).is_ok();
+        if !made {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 3600);
+        std::fs::File::create(away.join("1.jpg")).unwrap().set_modified(old).unwrap();
+        let data = dir.join("data");
+        let conn = db::open(&data.join(paths::DB_FILE)).unwrap();
+        db::set_setting(&conn, "look_board", &serde_json::json!({ "light": { "bg": "cork" } })).unwrap();
+        let last = serde_json::json!({ "picture": backgrounds.join("1.jpg").to_string_lossy() });
+        db::set_setting(&conn, "look_last_picture", &last).unwrap();
+        std::fs::rename(&away, &gone).unwrap();
+        look::forget_missing_picture(&conn, &backgrounds).unwrap();
+        purge_at_start(&data, &conn, false).unwrap();
+        assert_eq!(db::get_setting(&conn, "look_last_picture"), Some(last.clone()), "kept while unreachable");
+        std::fs::rename(&gone, &away).unwrap();
+        look::forget_missing_picture(&conn, &backgrounds).unwrap();
+        purge_at_start(&data, &conn, false).unwrap();
+        assert_eq!(db::get_setting(&conn, "look_last_picture"), Some(last));
+        assert!(away.join("1.jpg").is_file(), "never deleted");
+        drop(conn);
+        let _ = std::fs::remove_dir(&backgrounds);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A look setting that can't be read (not JSON): the background pictures all stay (which ones
+    /// it names isn't known), the notes' unused pictures still go, and so it is at every start.
+    /// A damaged last picture is forgotten at start, so it never stops the clean-up for good.
+    #[test]
+    fn a_damaged_look_setting_keeps_every_background() {
+        let dir = std::env::temp_dir().join(format!("dobo-purge-bad-{}-{:?}", db::now_ms(), std::thread::current().id()));
+        let (backgrounds, pictures) = (dir.join("backgrounds"), dir.join("pictures"));
+        std::fs::create_dir_all(&backgrounds).unwrap();
+        std::fs::create_dir_all(&pictures).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 3600);
+        let make = |p: std::path::PathBuf| std::fs::File::create(p).unwrap().set_modified(old).unwrap();
+        let conn = db::open(&dir.join(paths::DB_FILE)).unwrap();
+        for key in ["look_styles", "look_last_picture"] {
+            make(backgrounds.join("2.jpg"));
+            make(pictures.join("nobodys.png"));
+            conn.execute("INSERT INTO settings (key, value) VALUES (?1, '[{oops') ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key]).unwrap();
+            purge_at_start(&dir, &conn, false).unwrap();
+            assert!(backgrounds.join("2.jpg").is_file(), "{key}: the backgrounds stay");
+            assert!(!pictures.join("nobodys.png").is_file(), "{key}: the rest is cleaned up");
+            conn.execute("DELETE FROM settings WHERE key = ?1", [key]).unwrap();
+        }
+        // At start: your damaged last picture goes first, then the clean-up runs whole.
+        conn.execute("INSERT INTO settings (key, value) VALUES ('look_last_picture', 'oops')", []).unwrap();
+        look::forget_missing_picture(&conn, &backgrounds).unwrap();
+        purge_at_start(&dir, &conn, false).unwrap();
+        assert!(!backgrounds.join("2.jpg").is_file());
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2328,7 +2484,7 @@ mod tests {
         let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
         db::add_picture(&c, n.id, None, &kept.to_string_lossy().to_uppercase()).unwrap();
         db::add_picture(&c, n.id, None, &upper.to_string_lossy().replace('\\', "/")).unwrap();
-        let used = used_files(&c).unwrap();
+        let (used, _) = used_files(&c).unwrap();
         let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
         let mut out = unused_files(&pics, &used, day_ago);
         out.sort();
@@ -2354,10 +2510,12 @@ mod tests {
         let c = db::open(Path::new(":memory:")).unwrap();
         let n = db::create_note(&c, "Hub", "work", "soft", "Sage").unwrap();
         db::add_picture(&c, n.id, None, "C:/d/pictures/1-0.png").unwrap();
-        assert!(used_files(&c).unwrap().contains("1-0.png"));
-        // A look that isn't JSON any more (a damaged row): its background is unknown.
+        assert!(used_files(&c).unwrap().0.contains("1-0.png"));
+        // A look that isn't JSON any more (a damaged row): its background is unknown (the
+        // backgrounds are then left alone), the notes' pictures still known.
         c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('look_board', '{not json')", []).unwrap();
-        assert!(used_files(&c).is_err());
+        let (used, known) = used_files(&c).unwrap();
+        assert!(!known && used.contains("1-0.png"));
         c.execute("DELETE FROM settings WHERE key = 'look_board'", []).unwrap();
         // A table that can't be read (here: gone).
         c.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE pictures;").unwrap();

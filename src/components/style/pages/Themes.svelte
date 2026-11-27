@@ -126,7 +126,7 @@
     <span class="muted">{t("Move your look to another PC")}</span>
     <span class="links">
       <button onclick={() => go("share")}><Icon name="download" size={12} stroke={2} />{t("Export")}</button>
-      <button onclick={() => (look.importing = null, look.importError = null, go("share"))}><Icon name="upload" size={12} stroke={2} />{t("Import")}</button>
+      <button onclick={() => (look.importing = null, look.importError = null, go("share"))}><Icon name="import" size={12} stroke={2} />{t("Import")}</button>
     </span>
   </div>
 </div>

@@ -109,7 +109,7 @@ export interface Colour {
 export interface Background {
   key: BgKind;
   name: string;
-  /** Label of its colour row ("Cork colour"). */
+  /** Title of its own options' card under the tiles ("Cork · colours"). */
   colourLabel: string;
   palette: Colour[];
   /** Custom colours allowed (all but Watercolour and Picture). */
@@ -124,7 +124,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "plain",
     name: "Plain",
-    colourLabel: "Plain colour",
+    colourLabel: "Plain · colours",
     custom: true,
     auto: "none",
     palette: [
@@ -139,7 +139,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "paper",
     name: "Paper",
-    colourLabel: "Paper colour",
+    colourLabel: "Paper · colours",
     custom: true,
     auto: "none",
     palette: [
@@ -153,7 +153,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "dotted",
     name: "Dotted",
-    colourLabel: "Dotted colour",
+    colourLabel: "Dotted · colours",
     custom: true,
     auto: "none",
     palette: [
@@ -167,7 +167,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "cork",
     name: "Cork",
-    colourLabel: "Cork colour",
+    colourLabel: "Cork · colours",
     custom: true,
     auto: "pins",
     palette: [
@@ -181,7 +181,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "kraft",
     name: "Kraft",
-    colourLabel: "Kraft colour",
+    colourLabel: "Kraft · colours",
     custom: true,
     auto: "tape",
     palette: [
@@ -195,7 +195,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "terrazzo",
     name: "Terrazzo",
-    colourLabel: "Terrazzo mix",
+    colourLabel: "Terrazzo · mixes",
     custom: true,
     auto: "tape",
     palette: [
@@ -206,11 +206,11 @@ export const BACKGROUNDS: Background[] = [
       { name: "Tone on tone", hex: "#F1ECE3", chips: ["#D9CDB8", "#C9B9A0", "#FFFFFF", "#E3D8C5"] },
     ],
   },
-  { key: "watercolour", name: "Watercolour", colourLabel: "Watercolour · ours", custom: false, auto: "none", palette: [] },
+  { key: "watercolour", name: "Watercolour", colourLabel: "Watercolour · mixes", custom: false, auto: "none", palette: [] },
   {
     key: "blueprint",
     name: "Blueprint",
-    colourLabel: "Blueprint colour",
+    colourLabel: "Blueprint · colours",
     custom: true,
     auto: "tape",
     palette: [
@@ -224,7 +224,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "felt",
     name: "Felt",
-    colourLabel: "Felt colour",
+    colourLabel: "Felt · colours",
     custom: true,
     auto: "pins",
     palette: [
@@ -238,7 +238,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "linen",
     name: "Linen",
-    colourLabel: "Linen colour",
+    colourLabel: "Linen · colours",
     custom: true,
     auto: "tape",
     palette: [
@@ -252,7 +252,7 @@ export const BACKGROUNDS: Background[] = [
   {
     key: "plaster",
     name: "Plaster",
-    colourLabel: "Plaster colour",
+    colourLabel: "Plaster · colours",
     custom: true,
     auto: "tape",
     palette: [
@@ -263,10 +263,15 @@ export const BACKGROUNDS: Background[] = [
       { name: "Ochre", hex: "#E5D2A8" },
     ],
   },
-  { key: "picture", name: "Picture", colourLabel: "Your picture", custom: false, auto: "tape", palette: [] },
+  { key: "picture", name: "Your picture", colourLabel: "Your picture", custom: false, auto: "tape", palette: [] },
 ];
 
 export const BG_KEYS = BACKGROUNDS.map((b) => b.key);
+/** "Cork background" (what a change of background is called); a picture of yours is just
+ * "Your picture". */
+export function bgToast(key: BgKind): string {
+  return key === "picture" ? t("Your picture") : t("{name} background", { name: tMaybe(background(key).name) });
+}
 export function background(key: BgKind): Background {
   return BACKGROUNDS.find((b) => b.key === key) ?? BACKGROUNDS[1];
 }
@@ -433,6 +438,14 @@ export function lookIsDark(l: Look): boolean {
   return isDarkHex(baseHex(l));
 }
 
+/** The look the board shows for `l`: a picture background whose picture can't be shown (`usable`
+ * false: outside Dobo's own folders, gone, never one imported) is a plain board in the mode's
+ * own colour (`dark`), so dark mode never shows a light board. Anything else as it is. */
+export function shownLook(l: Look, usable: boolean, dark: boolean): Look {
+  if (l.bg !== "picture" || usable) return l;
+  return { bg: "plain", colour: dark ? "Charcoal" : "Warm white", held: l.held };
+}
+
 /** What actually holds the notes: Auto follows the background. */
 export function heldBy(l: Look): "pins" | "tape" | "none" {
   if (l.held !== "auto") return l.held;
@@ -456,9 +469,10 @@ export function sameLook(a: Look, b: Look): boolean {
 /** "colour Honey", "Felt background", "Sweep · repainted" — what differs from the base. */
 export function describeChange(base: Look, now: Look): string {
   if (base.bg !== now.bg) {
-    const name = tMaybe(background(now.bg).name);
-    const bg = t("{name} background", { name });
-    return now.bg === "watercolour" || now.bg === "picture" ? bg : `${bg} · ${now.colour === "Custom" ? t("custom colour") : tMaybe(now.colour)}`;
+    // (A picture of yours is "your picture", not a "Your picture background".)
+    if (now.bg === "picture") return t("your picture");
+    const bg = bgToast(now.bg);
+    return now.bg === "watercolour" ? bg : `${bg} · ${now.colour === "Custom" ? t("custom colour") : tMaybe(now.colour)}`;
   }
   const parts: string[] = [];
   if (now.bg === "watercolour" && base.wc && now.wc) {
@@ -589,6 +603,16 @@ export function cleanName(v: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   const t = v.replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return t ? t.slice(0, 60) : null;
+}
+/** A file right inside a folder called "backgrounds" (where every picture picked is copied:
+ * look.rs `pick_background_picture`, which checks it is the data folder's own). */
+const IN_BACKGROUNDS = /[\\/]backgrounds[\\/](?!\.+$)[^\\/]+$/i;
+/** Your last picture (the picture tile's, setting `look_last_picture` = `{ picture }`): kept
+ * when you switch to another background or Undo, and over a restart. Read with care: only a
+ * picture in the backgrounds folder (look.rs `in_backgrounds`), or the preview's own (blob:). */
+export function readLastPicture(v: unknown): string | null {
+  if (!isObj(v) || typeof v.picture !== "string" || !v.picture || v.picture.length >= 1000) return null;
+  return v.picture.startsWith("blob:") || IN_BACKGROUNDS.test(v.picture) ? v.picture : null;
 }
 export function readBoard(v: unknown): BoardLook {
   if (!isObj(v)) return DEFAULT_BOARD;

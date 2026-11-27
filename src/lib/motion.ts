@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Sookera. Dobo by Sookera; see NOTICE.md for the additional terms.
 // The Style panel's motion (transform and opacity only; reduced motion = a short crossfade):
 // the selection ring glides from chip to chip, a row's title slides out and the new one in,
-// swatches are dealt left to right landing with a slight tilt, what follows a section that
-// changed height eases to its new place.
+// swatches are dealt left to right landing with a slight tilt, a box whose content changes
+// height eases to its new one (what sits below glides with it).
 import { cubicInOut, cubicOut } from "svelte/easing";
 
 export const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -95,22 +95,6 @@ export function glideRing(grid: HTMLElement, _key: unknown) {
       ring.remove();
     },
   };
-}
-
-/** When this section changes height, what follows it eases to its new place (instead of
- * jumping), so the panel seems to grow or shrink smoothly. */
-export function easeFollowers(node: HTMLElement) {
-  let last = node.getBoundingClientRect().height;
-  const ro = new ResizeObserver(() => {
-    const h = node.getBoundingClientRect().height;
-    const d = h - last;
-    last = h;
-    if (!d || reduced()) return;
-    for (let el = node.nextElementSibling; el; el = el.nextElementSibling)
-      (el as HTMLElement).animate([{ transform: `translateY(${-d}px)` }, { transform: "none" }], { duration: 280, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
-  });
-  ro.observe(node);
-  return { destroy: () => ro.disconnect() };
 }
 
 /** A cubic-bezier(0.3, 0.8, 0.25, 1) look-alike for Svelte transitions (the app's "glide"). */

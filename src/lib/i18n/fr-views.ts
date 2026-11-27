@@ -146,6 +146,9 @@ export const views = {
   "Copy picture": "Copier l’image",
   "Open with the system viewer": "Ouvrir avec la visionneuse du système",
   "Open in Photos": "Ouvrir dans Photos",
+  // (Copy and Open in Photos, dimmed for a picture outside Dobo's own folders.)
+  "This picture isn’t in Dobo’s folders": "Cette image n’est pas dans les dossiers de Dobo",
+  "This picture can’t be read": "Cette image ne peut pas être lue",
   Remove: "Retirer",
   "Remove from the note": "Retirer de la note",
   "Previous picture": "Image précédente",

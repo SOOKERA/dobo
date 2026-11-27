@@ -1,0 +1,48 @@
+{
+  "about": "Paths the board may ask for (own) and those it never asks for (notOwn), checked by both src/lib/ownFiles.test.ts (ownFile) and src-tauri/src/thumbs.rs (directly_in), so the two rules can't drift apart.",
+  "folders": [
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\thumbs",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\previews",
+    "E:\\Dobo\\data\\backgrounds",
+    "\\\\nas\\usb\\Dobo\\data\\pictures"
+  ],
+  "own": [
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\1-0.png",
+    "c:/users/ana/appdata/roaming/com.sookera.ztodo/previews/preview-00ab12cd34ef5678.jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\thumbs\\1-0.png.1200x900.webp",
+    "\\\\?\\E:\\Dobo\\data\\backgrounds\\9.jpg",
+    "E:/Dobo/data/backgrounds/1732700000000.jpg",
+    "\\\\?\\UNC\\nas\\usb\\Dobo\\data\\pictures\\2-0.jpg",
+    "\\\\nas\\usb\\Dobo\\data\\pictures\\2-0.jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\console.jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\COM10.jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\.hidden.png"
+  ],
+  "notOwn": [
+    "\\\\evil\\share\\1-0.png",
+    "\\\\?\\UNC\\evil\\share\\1-0.png",
+    "//evil/share/1-0.png",
+    "\\\\nas\\usb\\Dobo\\data\\picturesX\\2-0.jpg",
+    "D:\\elsewhere\\pictures\\1-0.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\sub\\1-0.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\..\\..\\x.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\\\1-0.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\NUL.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\con",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\Com1.gif",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\COM¹.jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\AUX .jpg",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\1-0.png:hidden",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\1-0.png::$DATA",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\picturesX\\1-0.png",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\1-0.png\\",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\...",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\..",
+    "C:\\Users\\Ana\\AppData\\Roaming\\com.sookera.ztodo\\pictures\\ . ",
+    "1-0.png",
+    ""
+  ]
+}

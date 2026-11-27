@@ -19,11 +19,13 @@
   let yours = $derived(from?.kind === "yours" && !!base);
 
   let changedFrom = $derived(around(t("Changed from {name}"), "{name}"));
+  // (The whole line, in a tooltip when it is cut short at a narrow width.)
+  let whole = $derived(baseName ? t("Changed from {name}", { name: baseName }) + (change ? ` · ${change}` : "") : t("Your own mix, not saved yet"));
   let name = $state("");
   let typed = $state(false);
   // A suggested name until you type one: "My cork", or the mix's.
   $effect(() => {
-    const suggestion = cap(mixMode ? (look.wc.name ? t("My {name}", { name: tMaybe(look.wc.name).toLowerCase() }) : t("My watercolour")) : t("My {name}", { name: tMaybe(background(look.active.bg).name).toLowerCase() }));
+    const suggestion = cap(mixMode ? (look.wc.name ? t("My {name}", { name: tMaybe(look.wc.name).toLowerCase() }) : t("My watercolour")) : look.active.bg === "picture" ? t("My picture") : t("My {name}", { name: tMaybe(background(look.active.bg).name).toLowerCase() }));
     if (!typed) name = suggestion;
   });
 
@@ -41,7 +43,7 @@
   {#if changed}
     <div class="state" in:arrive={{ delay: 90, duration: 240, y: 4 }} out:leave={{ duration: 120, y: 0 }}>
     <div class="ch">
-      <span class="what">
+      <span class="what" data-tip={whole} data-tip-cut>
         {#if baseName}{changedFrom[0]}<b>{baseName}</b>{changedFrom[1]}{#if change}{" · "}{change}{/if}{:else}{t("Your own mix, not saved yet")}{/if}
       </span>
       {#if base}<button class="link" transition:fadeQuick onclick={() => look.reset()}>{t("Reset")}</button>{/if}

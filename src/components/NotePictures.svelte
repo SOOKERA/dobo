@@ -11,6 +11,7 @@
   import { t } from "../lib/i18n.svelte";
   import { blip, fold } from "../lib/motion";
   import { inDevicePixels, thumbs } from "../lib/thumbs.svelte";
+  import { NOT_OURS } from "../lib/ownFiles";
 
   // `width`: the note's width on the board (unknown elsewhere: the box is small there).
   let { pictures, width = null }: { pictures: Picture[]; width?: number | null } = $props();
@@ -21,6 +22,9 @@
   let box = $derived(width ? inDevicePixels([width, 150], store.zoom) : null);
   let shown = $derived(pictures[index]);
   let thumb = $derived(shown ? thumbs.sharpIn(shown, box) : null);
+  // (The file shown: the thumb when sharp, else the picture; one that can't be shown, its place.)
+  let file = $derived(shown ? (thumb?.path ?? shown.path) : "");
+  let src = $derived(shown ? (thumbs.unreadable(shown) ? NOT_OURS : store.src(file)) : "");
 
   function go(d: number) {
     dir = d;
@@ -50,15 +54,21 @@
       }}
     >
       {#key pictures[index].id}
-        <img
-          src={store.src(thumb?.path ?? shown.path)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          draggable="false"
-          style:--from="{dir * 18}px"
-          onerror={() => thumb && thumbs.failed(shown)}
-        />
+        <!-- (A picture outside Dobo's folders, or whose file can't be shown: its place, never a
+             broken picture, ownFiles.ts.) -->
+        {#if src === NOT_OURS}
+          <span class="pic-ph ph" style:--from="{dir * 18}px"><Icon name="image" size={22} stroke={1.7} /></span>
+        {:else}
+          <img
+            {src}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable="false"
+            style:--from="{dir * 18}px"
+            onerror={() => thumbs.failed(shown, file)}
+          />
+        {/if}
       {/key}
       {#if pictures.length > 1}
         <button class="nav prev" aria-label={t("Previous picture")} onclick={() => go(-1)}><Icon name="chev-left" size={16} stroke={2.2} /></button>
@@ -92,7 +102,8 @@
     cursor: zoom-in;
     outline-offset: 2px;
   }
-  img {
+  img,
+  .ph {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -107,7 +118,8 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    img {
+    img,
+    .ph {
       animation: none;
     }
   }

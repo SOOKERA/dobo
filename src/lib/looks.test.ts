@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   addYourColour,
   BACKGROUNDS,
+  bgToast,
   cleanLook,
   darkBySwitch,
   DEFAULT_BOARD,
@@ -13,6 +14,7 @@ import {
   heldBy,
   inHours,
   lookIsDark,
+  shownLook,
   OUR_STYLES,
   OUR_THEMES,
   readBoard,
@@ -32,7 +34,7 @@ const cork: Look = { bg: "cork", colour: "Natural", held: "auto" };
 
 describe("backgrounds and styles", () => {
   it("has the twelve backgrounds, nine of our styles, our themes, 14 mixes and 17 paints", () => {
-    expect(BACKGROUNDS.map((b) => b.name)).toEqual(["Plain", "Paper", "Dotted", "Cork", "Kraft", "Terrazzo", "Watercolour", "Blueprint", "Felt", "Linen", "Plaster", "Picture"]);
+    expect(BACKGROUNDS.map((b) => b.name)).toEqual(["Plain", "Paper", "Dotted", "Cork", "Kraft", "Terrazzo", "Watercolour", "Blueprint", "Felt", "Linen", "Plaster", "Your picture"]);
     expect(OUR_STYLES.map((s) => s.name)).toEqual(["Plain", "Paper day", "Dotted journal", "Cork board", "Kraft workshop", "Terrazzo", "Watercolour", "Blueprint", "Felt night"]);
     expect(WC_MOODS.flatMap((m) => m.mixes)).toHaveLength(14);
     expect(WC_PAINTS).toHaveLength(17);
@@ -52,6 +54,10 @@ describe("backgrounds and styles", () => {
     expect(describeChange(cork, { ...cork, colour: "Honey" })).toBe("colour Honey");
     expect(describeChange(cork, { ...cork, held: "none" })).toBe("no fixings");
     expect(describeChange(cork, { bg: "felt", colour: "Forest", held: "auto" })).toBe("Felt background · Forest");
+    // A picture of yours is "your picture", never "Your picture background".
+    expect(describeChange(cork, { bg: "picture", colour: "", held: "auto", picture: "p.jpg" })).toBe("your picture");
+    expect(bgToast("picture")).toBe("Your picture");
+    expect(bgToast("cork")).toBe("Cork background");
     const wc = OUR_STYLES.find((s) => s.id === "watercolour")!.look;
     expect(describeChange(wc, { ...wc, wc: { ...wc.wc!, pattern: "Sweep", seed: 5 } })).toBe("Sweep · repainted");
     expect(sameLook(cork, { ...cork })).toBe(true);
@@ -284,5 +290,17 @@ describe("the docked panel's width", async () => {
   it("names the presets; a dragged width is custom", () => {
     expect(presetName(720)).toBe("Medium");
     expect(presetName(812)).toBeNull();
+  });
+});
+
+describe("a picture background that can't be shown", () => {
+  it("is a plain board in the mode's own colour, its fixings kept", () => {
+    const pic = { bg: "picture", colour: "", held: "pins", picture: "\\\\host\\x.jpg" } as const;
+    expect(shownLook(pic, false, false)).toEqual({ bg: "plain", colour: "Warm white", held: "pins" });
+    expect(shownLook(pic, false, true)).toEqual({ bg: "plain", colour: "Charcoal", held: "pins" });
+    expect(lookIsDark(shownLook(pic, false, true))).toBe(true);
+    expect(shownLook(pic, true, true)).toBe(pic);
+    const cork = { bg: "cork", colour: "Honey", held: "auto" } as const;
+    expect(shownLook(cork, false, true)).toBe(cork);
   });
 });
